@@ -1,0 +1,16 @@
+# genswarms-delegated-spend contract core. solc pinned to 0.8.20 so the package
+# compiles unchanged as a Foundry lib inside consumers that pin 0.8.20
+# (MicroMarkets does).
+[profile.default]
+src = "src"
+out = "out"
+test = "test"
+libs = ["lib"]
+solc = "0.8.20"
+optimizer = true
+optimizer_runs = 200
+remappings = ["forge-std/=lib/forge-std/src/"]
+fs_permissions = [{ access = "read", path = "./out" }]
+
+[fuzz]
+runs = 256
