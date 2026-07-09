@@ -17,7 +17,7 @@ defmodule DelegatedSpend.Keeper.Object do
 
   Because messages are one-way, the message door requires a CALLER-MINTED
   `order_ref` (64 lowercase hex chars, e.g. 32 random bytes hex-encoded):
-  the sender already knows the ref it will put in the Mini App URL and does
+  the sender already knows the ref it will put in the wallet dapp URL and does
   not need a reply to proceed. The keeper still enforces format and
   uniqueness. Every message is acknowledged with a `{:reply, json}` routed
   back to the sender; senders may ignore it (it is observability, not a

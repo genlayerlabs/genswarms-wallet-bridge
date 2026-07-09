@@ -2,7 +2,7 @@ defmodule DelegatedSpend.Intake.GrantValidation do
   @moduledoc """
   Strict grant validation (spec §6.1, §10 do-not-weaken): every submitted
   envelope is validated byte-for-byte against the app's PINNED config and
-  rejected on any mismatch. Whatever a (possibly compromised) Mini App
+  rejected on any mismatch. Whatever a (possibly compromised) wallet dapp
   served, our keeper can never store or act on a grant shaped for any other
   chain, token, or router.
   """

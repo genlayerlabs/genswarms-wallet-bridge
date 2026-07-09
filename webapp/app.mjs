@@ -1,6 +1,6 @@
-// DOM glue for the permit-lane Mini App. All decision logic lives in
-// lib/flow.mjs (tested headlessly); this file only wires Telegram WebApp
-// boot, the injected EIP-1193 provider, and the two DOM elements.
+// DOM glue for the wallet dapp. All decision logic lives in lib/flow.mjs
+// (tested headlessly); this file only wires optional Telegram initData,
+// the injected EIP-1193 provider, and the DOM elements.
 
 import { connectWallet, fetchOrder, fetchPermitNonce, runBindFlow, runUserTxFlow, signAndSubmit, walletDappLink } from "./lib/flow.mjs";
 

@@ -201,7 +201,7 @@ starts — see item 5 for options):
     expected_owner: claim_wallet # optional wallet binding (see below)
   })
 
-# The Mini App drives these two through the intake (item 5), but they are
+# The wallet dapp drives these two through the intake (item 5), but they are
 # plain keeper calls:
 {:ok, view} = Keeper.fetch_order(keeper, order_ref, user_ref)
 result      = Keeper.execute_with_permit(keeper, order_ref, user_ref, permit)
@@ -325,7 +325,7 @@ Money-lane bookkeeping should not be in-memory-only in production —
   codehashes: %{addr => hash}})` before enabling the keeper — wrong network
   or wrong contract fails closed.
 
-- **Mini App build on your domain.** `webapp/` is a static, zero-dependency
+- **Wallet dapp build on your domain.** `webapp/` is a static, zero-dependency
   build parameterized by `webapp/config.json`:
   `version, chainId, token, tokenName, tokenVersion, router, intakeUrl,
   actionLabel, dappLinkPrefix`. Serve it over HTTPS on the app's domain and
@@ -354,7 +354,7 @@ Money-lane bookkeeping should not be in-memory-only in production —
     rate: {DelegatedSpend.Intake.Rate.start(60), 30}}   # optional
   ```
 
-  The Mini App POSTs `{intakeUrl}/orders`, `{intakeUrl}/grants`,
+  The wallet dapp POSTs `{intakeUrl}/orders`, `{intakeUrl}/grants`,
   `{intakeUrl}/wallet`, and `{intakeUrl}/orders/submitted` with either
   `token` or `init_data` plus `v` in the body. A ~60-line Plug over Bandit is
   all the serving glue takes: route first, cap the body (64 kB → 413),
