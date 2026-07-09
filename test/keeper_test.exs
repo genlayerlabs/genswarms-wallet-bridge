@@ -145,7 +145,8 @@ defmodule DelegatedSpend.KeeperTest do
     {:ok, %{order_ref: ref}} = Keeper.register_order(keeper, "market_phase", order_req())
     assert {:error, :not_found} = Keeper.fetch_order(keeper, ref, "u-EVIL")
     assert {:ok, view} = Keeper.fetch_order(keeper, ref, "u-a")
-    assert Map.keys(view) |> Enum.sort() == [:amount, :expires_at, :order_ref]
+    assert Map.keys(view) |> Enum.sort() == [:amount, :display, :expires_at, :kind, :order_ref]
+    assert view.kind == "permit"
   end
 
   test "happy path: submit → sweep(mined) → credited result + spend recorded" do
@@ -442,5 +443,99 @@ defmodule DelegatedSpend.KeeperTest do
     # retry AFTER terminal settle → recorded result from the results map, no new tx
     assert {:credited, ^hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
     assert length(FakeRpc.sent(fake)) == 1
+  end
+
+  describe "order kinds" do
+    test "user_tx order registers, fetches with tx+display, and never executes" do
+      %{keeper: keeper, fake: fake} = start_stack()
+
+      req = %{
+        user_ref: "u-a",
+        amount: 0,
+        action_args: [],
+        kind: "user_tx",
+        tx: %{to: "0x" <> String.duplicate("11", 20), data: "0xdeadbeef", value: 0},
+        display: %{summary_lines: ["Sell YES", "min out 9.90 USDC"]}
+      }
+
+      assert {:ok, %{order_ref: ref}} = Keeper.register_order(keeper, "market_phase", req)
+      assert {:ok, view} = Keeper.fetch_order(keeper, ref, "u-a")
+      assert view.kind == "user_tx"
+      assert view.tx.data == "0xdeadbeef"
+      assert view.display.summary_lines == ["Sell YES", "min out 9.90 USDC"]
+
+      assert {:failed, :wrong_kind} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(0))
+      assert {:ok, _} = Keeper.fetch_order(keeper, ref, "u-a")
+      assert FakeRpc.sent(fake) == []
+    end
+
+    test "user_tx registration without tx map is refused" do
+      %{keeper: keeper} = start_stack()
+      req = %{user_ref: "u-a", amount: 0, action_args: [], kind: "user_tx"}
+      assert {:error, :bad_tx} = Keeper.register_order(keeper, "market_phase", req)
+    end
+
+    test "bind order registers and fetches; permit orders default kind" do
+      %{keeper: keeper} = start_stack()
+
+      assert {:ok, %{order_ref: bref}} =
+               Keeper.register_order(keeper, "market_phase", %{
+                 user_ref: "u-a",
+                 amount: 0,
+                 action_args: [],
+                 kind: "bind"
+               })
+
+      assert {:ok, %{kind: "bind"}} = Keeper.fetch_order(keeper, bref, "u-a")
+
+      assert {:ok, %{order_ref: pref}} = Keeper.register_order(keeper, "market_phase", order_req())
+      assert {:ok, %{kind: "permit"}} = Keeper.fetch_order(keeper, pref, "u-a")
+    end
+
+    test "per-order ttl_s overrides the keeper default" do
+      %{keeper: keeper} = start_stack()
+
+      assert {:ok, %{order_ref: ref, expires_at: exp}} =
+               Keeper.register_order(keeper, "market_phase", %{
+                 user_ref: "u-a",
+                 amount: 0,
+                 action_args: [],
+                 kind: "bind",
+                 ttl_s: 60
+               })
+
+      assert_in_delta exp, System.os_time(:second) + 60, 5
+      assert {:ok, _} = Keeper.fetch_order(keeper, ref, "u-a")
+    end
+  end
+
+  describe "registry-only boot (no permit lane)" do
+    test "keeper boots without signer/router/action; permit execute fails typed" do
+      store = MemoryStore.start()
+
+      {:ok, keeper} =
+        Keeper.start_link(%{
+          store: {MemoryStore, store},
+          source_allowlist: ["app"],
+          order_ttl_s: 900
+        })
+
+      {:ok, %{order_ref: ref}} =
+        Keeper.register_order(keeper, "app", %{
+          user_ref: "u-a",
+          amount: 0,
+          action_args: [],
+          kind: "user_tx",
+          tx: %{to: "0x" <> String.duplicate("11", 20), data: "0x", value: 0}
+        })
+
+      assert {:ok, %{kind: "user_tx"}} = Keeper.fetch_order(keeper, ref, "u-a")
+
+      {:ok, %{order_ref: pref}} =
+        Keeper.register_order(keeper, "app", %{user_ref: "u-a", amount: 5, action_args: []})
+
+      assert {:failed, :permit_lane_disabled} = Keeper.execute_with_permit(keeper, pref, "u-a", permit(5))
+      assert {:ok, _} = Keeper.fetch_order(keeper, pref, "u-a")
+    end
   end
 end

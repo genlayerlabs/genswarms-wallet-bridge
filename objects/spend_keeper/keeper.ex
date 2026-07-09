@@ -29,7 +29,7 @@ defmodule DelegatedSpend.Keeper do
 
   alias DelegatedSpend.Keeper.{PermitLane, Signer}
 
-  @enforce_opts [:signer, :store, :router, :action, :source_allowlist, :order_ttl_s]
+  @enforce_opts [:store, :source_allowlist, :order_ttl_s]
 
   # Optional :name registers the server (supervision-friendly: a restarted
   # keeper is reachable at the same name, so app ctx never holds a stale pid).
@@ -68,10 +68,10 @@ defmodule DelegatedSpend.Keeper do
   @impl true
   def init(opts) do
     state = %{
-      signer: opts.signer,
+      signer: Map.get(opts, :signer),
       store: opts.store,
-      router: opts.router,
-      action: opts.action,
+      router: Map.get(opts, :router),
+      action: Map.get(opts, :action),
       allowlist: MapSet.new(opts.source_allowlist),
       order_ttl_s: opts.order_ttl_s,
       # Fail-closed owner binding: when true, an order WITHOUT an
@@ -111,6 +111,7 @@ defmodule DelegatedSpend.Keeper do
   def handle_call({:register_order, source, req}, _from, state) do
     with true <- MapSet.member?(state.allowlist, source) || {:error, {:unknown_source, source}},
          %{user_ref: user_ref, amount: amount, action_args: args} = req,
+         {:ok, kind} <- order_kind(req),
          {:ok, order_ref} <- order_ref(state, req, user_ref) do
       order = %{
         order_id: "0x" <> hex(:crypto.strong_rand_bytes(32)),
@@ -118,12 +119,15 @@ defmodule DelegatedSpend.Keeper do
         user_ref: user_ref,
         amount: amount,
         action_args: args,
+        kind: kind,
+        tx: Map.get(req, :tx),
+        display: Map.get(req, :display, %{}),
         # Optional binding: when set, only a permit signed by exactly this
         # wallet can execute the order (apps whose credit machinery scans
         # addresses derived from a wallet-on-file NEED this — set it to
         # that wallet).
         expected_owner: Map.get(req, :expected_owner),
-        expires_at: now_s() + state.order_ttl_s
+        expires_at: now_s() + order_ttl(req, state)
       }
 
       :ok = store(state).put_order(store_ref(state), order)
@@ -140,7 +144,7 @@ defmodule DelegatedSpend.Keeper do
         {:reply, {:error, :not_found}, state}
 
       order ->
-        {:reply, {:ok, Map.take(order, [:order_ref, :amount, :expires_at])}, state}
+        {:reply, {:ok, order_view(order)}, state}
     end
   end
 
@@ -151,6 +155,12 @@ defmodule DelegatedSpend.Keeper do
 
       order ->
         cond do
+          Map.get(order, :kind, "permit") != "permit" ->
+            {:reply, {:failed, :wrong_kind}, state}
+
+          is_nil(state.signer) ->
+            {:reply, {:failed, :permit_lane_disabled}, state}
+
           # Anti-griefing (spec §5.2.1): a grant that has produced N consecutive
           # reverts is suspended until the user re-enables it via the Mini App
           # (reset_backoff/2). Bounds a griefer who keeps triggering reverting
@@ -311,6 +321,41 @@ defmodule DelegatedSpend.Keeper do
       {:failed, _} -> {:failed, :reverted}
       :unknown -> :unknown
     end
+  end
+
+  defp order_kind(req) do
+    case Map.get(req, :kind, "permit") do
+      "permit" ->
+        {:ok, "permit"}
+
+      "bind" ->
+        {:ok, "bind"}
+
+      "user_tx" ->
+        case Map.get(req, :tx) do
+          %{to: to, data: data} when is_binary(to) and is_binary(data) -> {:ok, "user_tx"}
+          _ -> {:error, :bad_tx}
+        end
+
+      _ ->
+        {:error, :bad_kind}
+    end
+  end
+
+  defp order_ttl(req, state) do
+    case Map.get(req, :ttl_s) do
+      ttl when is_integer(ttl) and ttl > 0 -> ttl
+      _ -> state.order_ttl_s
+    end
+  end
+
+  defp order_view(order) do
+    base =
+      order
+      |> Map.take([:order_ref, :amount, :expires_at])
+      |> Map.merge(%{kind: Map.get(order, :kind, "permit"), display: Map.get(order, :display, %{})})
+
+    if base.kind == "user_tx", do: Map.put(base, :tx, order.tx), else: base
   end
 
   # Fail CLOSED when the app requires a binding but the loaded order has none
