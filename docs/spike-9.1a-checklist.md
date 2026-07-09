@@ -5,14 +5,14 @@
 The known production mitigation is the universal-link form
 (`https://metamask.app.link/…`), already used by production Telegram-bot
 deposit deeplinks. Whether a relay/universal-link architecture survives the FULL
-round trip — Mini App → MetaMask → **back into the Mini App** — is
+round trip — wallet dapp → MetaMask → **back into the wallet dapp** — is
 unverified. The return leg is the fragile part. **This spike gates the M1
-Mini App ship decision on each release** (webview behavior shifts under
+wallet dapp ship decision on each release** (webview behavior shifts under
 Telegram/MetaMask app updates, so it is a recurring checklist, not a
 one-time result).
 
 **Harness:** serve `webapp/spike/telegram-webview.html` over HTTPS, attach it
-to a test bot as a WebApp button, run per device. Also open the REAL Mini App
+to a test bot as a WebApp button, run per device. Also open the REAL wallet dapp
 (`webapp/index.html`) from inside MetaMask Mobile's dapp browser (probe 7).
 
 | # | Probe | iOS Telegram | Android Telegram | Notes |
@@ -23,11 +23,11 @@ to a test bot as a WebApp button, run per device. Also open the REAL Mini App
 | 4 | Inside MetaMask dapp browser: provider injected, accounts + chain readable | ☐ | ☐ | |
 | 5 | Inside MetaMask dapp browser: `eth_signTypedData_v4` completes | ☐ | ☐ | |
 | 6 | Return leg: `t.me` link from the page reaches the bot chat | ☐ | ☐ | THE fragile step |
-| 7 | Full flow: chat button → Mini App (in MetaMask browser via universal link with `?order=` fallback since initData is absent outside Telegram) → sign → grant lands → chat card updates | ☐ | ☐ | |
+| 7 | Full flow: chat button → wallet dapp (in MetaMask browser via universal link with `?order=` fallback since initData is absent outside Telegram) → sign → grant lands → chat card updates | ☐ | ☐ | |
 
 **Decision matrix (record per release):**
 - 4–7 pass inside MetaMask's browser → ship M1 with the universal-link route
-  (chat button → `https://metamask.app.link/dapp/<miniapp-url>?order=<ref>`);
+  (chat button → `https://metamask.app.link/dapp/<wallet-dapp-url>?order=<ref>`);
   the intake must then accept order-scoped auth for the `?order=` entry
   (single-use high-entropy ref + wallet signature is the authenticator) —
   see the M2 hardening note below.
@@ -37,10 +37,11 @@ to a test bot as a WebApp button, run per device. Also open the REAL Mini App
 - Everything fails → transfer lane stays the only lane on that platform;
   typed failures already render the fallback card.
 
-**M1 status:** NOT YET RUN on device (requires human + two phones). The
-Mini App core is transport-agnostic and fully tested against a mock
-provider + the golden-vector cross-check; this checklist is the remaining
-gate before announcing the fast lane to users.
+**Current status:** the wallet dapp core is transport-agnostic and fully
+tested against a mock provider + the golden-vector cross-check. Plan 1 /
+0.3.0 proceeded on maintainer confirmation of the Telegram button →
+MetaMask dapp-browser hop below; fill the exact iPhone + Android checklist
+rows here when the full device matrix is rerun.
 
 **Plan 1 / 0.3.0 hop status:** proceeding as of 2026-07-09 on explicit
 maintainer confirmation that the Telegram chat button →

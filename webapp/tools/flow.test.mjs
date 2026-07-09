@@ -1,6 +1,6 @@
-// node --test suite for the Mini App flow logic with a mock EIP-1193
+// node --test suite for the wallet dapp flow logic with a mock EIP-1193
 // provider + mock fetch (spec §8 "mock EIP-1193 provider flows automated").
-// Run: node --test webapp/tools/flow.test.mjs
+// Run: node --test webapp/tools/
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -352,4 +352,22 @@ test("runBindFlow: connect → POST /wallet with connected address", async () =>
   assert.equal(posts[0].address, ACCOUNT);
   assert.equal(posts[0].bind_ref, "b1");
   assert.equal(posts[0].v, CONFIG.version);
+  // external dapp-browser binds have no initData — the token IS the auth
+  assert.equal(posts[0].token, "t");
+  assert.equal(posts[0].init_data, undefined);
+});
+
+test("runBindFlow: stale build 409 → version_mismatch; 410 → expired", async () => {
+  const provider = mockProvider();
+  const stale = mockFetch({ wallet: () => ({ status: 409, json: { error: "version mismatch" } }) });
+  assert.deepEqual(
+    await runBindFlow({ provider, fetchFn: stale, config: CONFIG, initData: "", token: "t" }, "b1"),
+    { ok: false, reason: "version_mismatch" }
+  );
+
+  const gone = mockFetch({ wallet: () => ({ status: 410, json: { error: "expired" } }) });
+  assert.deepEqual(
+    await runBindFlow({ provider, fetchFn: gone, config: CONFIG, initData: "", token: "t" }, "b1"),
+    { ok: false, reason: "expired" }
+  );
 });

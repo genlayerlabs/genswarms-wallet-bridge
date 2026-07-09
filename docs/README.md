@@ -5,7 +5,7 @@
   `EchoSpendRouterSuite` (the in-repo reference consumer).
 - **[spike-9.1a-checklist.md](spike-9.1a-checklist.md)** — the recurring
   manual on-device checklist (Telegram webview ↔ MetaMask Mobile round trip)
-  that gates each Mini App release.
+  that gates each wallet dapp release.
 - **Security invariants** — the authoritative do-not-weaken list lives in the
   top-level [README.md](../README.md); `CONTRIBUTING.md` summarizes it for
   reviewers.

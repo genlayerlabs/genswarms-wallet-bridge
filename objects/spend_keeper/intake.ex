@@ -11,7 +11,7 @@ defmodule DelegatedSpend.Intake do
     * Unauthenticated requests are rejected BEFORE any work (401, no store
       reads, no rate-bucket consumption for unauthenticated callers).
     * Grant envelopes are strictly validated against pinned config.
-    * A version mismatch (stale Mini App build) is rejected at runtime (409).
+    * A version mismatch (stale wallet dapp build) is rejected at runtime (409).
     * `initData` never appears in logs or errors.
 
   ctx: `%{bot_token:, max_age_s:, user_ref_fn:, keeper:, pinned:, rate:}`
@@ -109,9 +109,12 @@ defmodule DelegatedSpend.Intake do
          {:ok, address} <- checksum_address(params["address"]),
          {:ok, order} <- fetch_kind(ctx, bind_ref, user_ref, "bind"),
          {:ok, _order} <- consume(ctx, order, user_ref) do
-      case wallet_fn.(user_ref, address, bind_ref) do
+      # The ref is consumed BEFORE the callback on purpose (single-use,
+      # fail-closed): a rejected or crashing wallet_fn burns it and the user
+      # asks for a fresh bind link — a failure is never replayable.
+      case safe_wallet(wallet_fn, user_ref, address, bind_ref) do
         :ok -> {200, %{"status" => "bound", "address" => address}}
-        {:error, _reason} -> {422, %{"error" => "bind rejected"}}
+        _ -> {422, %{"error" => "bind rejected"}}
       end
     else
       {:error, status, body} -> {status, body}
@@ -228,10 +231,22 @@ defmodule DelegatedSpend.Intake do
 
   defp tx_hash(_), do: {:error, 422, %{"error" => "invalid", "field" => "tx_hash"}}
 
+  # rescue alone misses exits — and a dead persistence GenServer EXITS the
+  # caller rather than raising, so both callback shields need catch too.
   defp safe_submitted(fun, order_id, tx_hash) do
     fun.(order_id, tx_hash)
   rescue
     _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp safe_wallet(fun, user_ref, address, bind_ref) do
+    fun.(user_ref, address, bind_ref)
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
   end
 
   defp stringify(map) when is_map(map),

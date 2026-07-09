@@ -1,4 +1,4 @@
-// Mini App permit-lane flow (spec §6.3 steps 2–4), DOM-free and
+// Wallet dapp permit-lane flow (spec §6.3 steps 2–4), DOM-free and
 // dependency-injected so it runs identically under the browser glue
 // (app.mjs) and the node --test mock-provider suite.
 //
@@ -7,7 +7,7 @@
 //           intakeUrl, actionLabel }
 //
 // Every failure is a TYPED state — the chat card's transfer-lane fallback is
-// the product-side answer to all of them; the Mini App only reports.
+// the product-side answer to all of them; the wallet dapp only reports.
 
 import { buildPermitTypedData, buildGrantEnvelope } from "./permit.mjs";
 
@@ -174,6 +174,7 @@ export async function runBindFlow(deps, bindRef) {
     body: authBody(deps, { bind_ref: bindRef, address: conn.account }),
   });
   if (res.status === 401) return { ok: false, reason: "unauthorized" };
+  if (res.status === 409) return { ok: false, reason: "version_mismatch" };
   if (res.status === 410) return { ok: false, reason: "expired" };
   const body = await res.json();
   if (res.status !== 200) return { ok: false, reason: body.error || `http_${res.status}` };

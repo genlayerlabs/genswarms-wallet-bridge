@@ -63,7 +63,8 @@ gap-free nonces, same-nonce fee-bump sweep. `Keeper.PermitLane` composes
 server-authoritative order + the user's permit envelope; `Keeper.BootCheck`
 pins chain id + contract codehashes before the keeper enables.
 Hermetic: `mix test`. Real-EVM: `mix run test/e2e/anvil_permit_lane.exs`
-(forge build + anvil; runs in CI).
+(forge build + anvil; runs in CI). `scripts/check.sh` runs every layer
+(stamps, mix, webapp, vectors, forge, e2e) — the same gates as CI.
 
 ## Registry + intake (Elixir)
 

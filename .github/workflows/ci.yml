@@ -34,8 +34,8 @@ jobs:
         with:
           node-version: "22"
       - uses: foundry-rs/foundry-toolchain@v1
-      - name: Mock-provider flow tests
-        run: node --test webapp/tools/flow.test.mjs
+      - name: Webapp tests (flow, launcher, app glue)
+        run: node --test webapp/tools/
       - name: Vectors are the committed generator output (byte-identical)
         run: |
           node webapp/tools/gen-vectors.mjs

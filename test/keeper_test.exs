@@ -490,7 +490,7 @@ defmodule DelegatedSpend.KeeperTest do
     end
 
     test "bind order registers and fetches; permit orders default kind" do
-      %{keeper: keeper} = start_stack()
+      %{keeper: keeper, fake: fake} = start_stack()
 
       assert {:ok, %{order_ref: bref}} =
                Keeper.register_order(keeper, "market_phase", %{
@@ -501,6 +501,11 @@ defmodule DelegatedSpend.KeeperTest do
                })
 
       assert {:ok, %{kind: "bind"}} = Keeper.fetch_order(keeper, bref, "u-a")
+
+      # a permit-lane grant against a bind ref is refused WITHOUT consuming it
+      assert {:failed, :wrong_kind} = Keeper.execute_with_permit(keeper, bref, "u-a", permit(0))
+      assert {:ok, %{kind: "bind"}} = Keeper.fetch_order(keeper, bref, "u-a")
+      assert FakeRpc.sent(fake) == []
 
       assert {:ok, %{order_ref: pref}} = Keeper.register_order(keeper, "market_phase", order_req())
       assert {:ok, %{kind: "permit"}} = Keeper.fetch_order(keeper, pref, "u-a")
