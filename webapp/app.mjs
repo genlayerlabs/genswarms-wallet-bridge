@@ -85,7 +85,7 @@ function setupPermit(deps, order, orderRef, tg, config) {
       $("status").textContent = "Payment submitted ✓ — you can return to the chat.";
       if (tg) setTimeout(() => tg.close(), 1500);
     } else {
-      $("status").textContent = MESSAGES[result.reason] || `Payment failed (${result.reason}). The transfer option in chat still works.`;
+      $("status").textContent = MESSAGES[result.reason] || `Payment failed (${result.reason}). Nothing was charged — reopen this page from the chat button to retry, or use the manual send option below if shown.`;
       $("pay").disabled = false;
     }
   };
