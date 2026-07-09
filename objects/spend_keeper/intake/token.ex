@@ -31,7 +31,7 @@ defmodule DelegatedSpend.Intake.Token do
 
   def verify(_, _, _, _), do: {:error, :bad_token}
 
-  defp split_user_ref_and_mac(rest) when is_binary(rest) and byte_size(rest) > 65 do
+  defp split_user_ref_and_mac(rest) when is_binary(rest) and byte_size(rest) >= 65 do
     user_ref_size = byte_size(rest) - 65
 
     case rest do

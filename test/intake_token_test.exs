@@ -18,6 +18,11 @@ defmodule DelegatedSpend.Intake.TokenTest do
     assert {:ok, ^user_ref} = Token.verify(@secret, @ref, token, 1_999_999_999)
   end
 
+  test "empty opaque user_ref round-trips" do
+    token = Token.mint(@secret, @ref, "", 2_000_000_000)
+    assert {:ok, ""} = Token.verify(@secret, @ref, token, 1_999_999_999)
+  end
+
   test "expired token is rejected as :expired" do
     token = Token.mint(@secret, @ref, @user_ref, 1_000)
     assert {:error, :expired} = Token.verify(@secret, @ref, token, 1_001)

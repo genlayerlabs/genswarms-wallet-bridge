@@ -19,14 +19,17 @@ defmodule DelegatedSpend.Intake do
   `rate = {RateLimiter-pid, max_per_window}` (see `DelegatedSpend.Intake.Rate`).
   """
 
-  alias DelegatedSpend.Intake.{GrantValidation, Rate, TelegramAuth}
+  alias DelegatedSpend.Intake.{GrantValidation, Rate, TelegramAuth, Token}
   alias DelegatedSpend.Keeper
 
   @doc "GET /orders?order_ref=… — fetch a pending order for the verified user."
   def handle_order(params, ctx) when is_map(params) do
-    with {:ok, user_ref} <- authenticate(params, ctx),
+    order_ref = to_string(params["order_ref"] || "")
+
+    with :ok <- pin_version(params, ctx),
+         {:ok, user_ref} <- authenticate(params, ctx, order_ref),
          :ok <- allow(ctx, user_ref) do
-      case Keeper.fetch_order(ctx.keeper, to_string(params["order_ref"] || ""), user_ref) do
+      case Keeper.fetch_order(ctx.keeper, order_ref, user_ref) do
         {:ok, view} ->
           {200,
            %{
@@ -48,7 +51,9 @@ defmodule DelegatedSpend.Intake do
   against pinned config, then hands to the keeper for execution.
   """
   def handle_grant(params, ctx) when is_map(params) do
-    with {:ok, user_ref} <- authenticate(params, ctx),
+    order_ref = to_string(params["order_ref"] || "")
+
+    with {:ok, user_ref} <- authenticate(params, ctx, order_ref),
          :ok <- allow(ctx, user_ref) do
       case GrantValidation.validate_permit(params["permit"] || %{}, ctx.pinned) do
         {:error, {:pinned_mismatch, :version}} ->
@@ -61,8 +66,6 @@ defmodule DelegatedSpend.Intake do
           {422, %{"error" => "invalid", "field" => to_string(field)}}
 
         {:ok, permit} ->
-          order_ref = to_string(params["order_ref"] || "")
-
           case Keeper.execute_with_permit(ctx.keeper, order_ref, user_ref, permit) do
             {:submitted, hash} -> {200, %{"status" => "submitted", "tx" => hash}}
             {:credited, hash} -> {200, %{"status" => "credited", "tx" => hash}}
@@ -78,16 +81,33 @@ defmodule DelegatedSpend.Intake do
 
   # ── auth + rate ────────────────────────────────────────────────────────────
 
-  defp authenticate(params, ctx) do
-    case TelegramAuth.verify(params["init_data"], ctx.bot_token, ctx.max_age_s) do
-      {:ok, %{user_id: user_id}} ->
-        {:ok, ctx.user_ref_fn.(user_id)}
+  defp authenticate(params, ctx, ref) do
+    case {params["token"], Map.get(ctx, :token_secret)} do
+      {token, secret} when is_binary(token) and is_binary(secret) ->
+        case Token.verify(secret, ref, token) do
+          {:ok, user_ref} -> {:ok, user_ref}
+          {:error, _reason} -> {:error, 401, %{"error" => "unauthorized"}}
+        end
 
-      {:error, _reason} ->
-        # deliberately reason-blind to the caller; never echoes the payload
-        {:error, 401, %{"error" => "unauthorized"}}
+      _ ->
+        case TelegramAuth.verify(params["init_data"], ctx.bot_token, ctx.max_age_s) do
+          {:ok, %{user_id: user_id}} ->
+            {:ok, ctx.user_ref_fn.(user_id)}
+
+          {:error, _reason} ->
+            # deliberately reason-blind to the caller; never echoes the payload
+            {:error, 401, %{"error" => "unauthorized"}}
+        end
     end
   end
+
+  defp pin_version(params, %{pinned: %{version: version}}) when is_binary(version) do
+    if params["v"] == version,
+      do: :ok,
+      else: {:error, 409, %{"error" => "version mismatch"}}
+  end
+
+  defp pin_version(_params, _ctx), do: :ok
 
   defp allow(%{rate: {limiter, max}}, user_ref) do
     if Rate.allow?(limiter, user_ref, max),
