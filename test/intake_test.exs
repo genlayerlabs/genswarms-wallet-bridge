@@ -83,7 +83,7 @@ defmodule DelegatedSpend.IntakeTest do
       rate: {Rate.start(60), rate_max}
     }
 
-    %{fake: fake, store: store, keeper: keeper, ctx: ctx}
+    %{fake: fake, signer: signer, store: store, keeper: keeper, ctx: ctx}
   end
 
   defp register(keeper, user_id) do
@@ -97,13 +97,19 @@ defmodule DelegatedSpend.IntakeTest do
     ref
   end
 
+  defp order_params(ctx, extra) do
+    Map.put(extra, "v", ctx.pinned.version)
+  end
+
+  defp future, do: System.os_time(:second) + 600
+
   test "unauthenticated requests are rejected before ANY work" do
     %{ctx: ctx, store: store, keeper: keeper} = start_stack()
     ref = register(keeper, @user_id)
 
     for bad <- [nil, "", "garbage", init_data(@user_id, "999:WRONG")] do
       assert {401, %{"error" => "unauthorized"}} =
-               Intake.handle_order(%{"init_data" => bad, "order_ref" => ref}, ctx)
+               Intake.handle_order(order_params(ctx, %{"init_data" => bad, "order_ref" => ref}), ctx)
 
       assert {401, _} =
                Intake.handle_grant(
@@ -121,12 +127,14 @@ defmodule DelegatedSpend.IntakeTest do
     %{ctx: ctx, keeper: keeper} = start_stack()
     ref = register(keeper, @user_id)
 
-    assert {200, body} = Intake.handle_order(%{"init_data" => init_data(), "order_ref" => ref}, ctx)
+    assert {200, body} =
+             Intake.handle_order(order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}), ctx)
+
     assert body["amount"] == 25_000_000
     assert body["order_ref"] == ref
 
     other = init_data(666_000_000)
-    assert {404, _} = Intake.handle_order(%{"init_data" => other, "order_ref" => ref}, ctx)
+    assert {404, _} = Intake.handle_order(order_params(ctx, %{"init_data" => other, "order_ref" => ref}), ctx)
   end
 
   test "client-supplied user_ref is IGNORED — identity comes from initData only" do
@@ -138,7 +146,8 @@ defmodule DelegatedSpend.IntakeTest do
       "init_data" => other,
       "order_ref" => ref,
       # attacker claims the victim's ref in the payload
-      "user_ref" => "ref-#{@user_id}"
+      "user_ref" => "ref-#{@user_id}",
+      "v" => ctx.pinned.version
     }
 
     assert {404, _} = Intake.handle_order(params, ctx)
@@ -165,11 +174,58 @@ defmodule DelegatedSpend.IntakeTest do
              )
   end
 
+  test "grant: malformed permit fields are typed 422 invalid responses" do
+    %{ctx: ctx, keeper: keeper} = start_stack()
+    ref = register(keeper, @user_id)
+
+    assert {422, %{"error" => "invalid", "field" => "value"}} =
+             Intake.handle_grant(
+               %{
+                 "init_data" => init_data(),
+                 "order_ref" => ref,
+                 "permit" => Map.delete(permit_env(25_000_000), "value")
+               },
+               ctx
+             )
+  end
+
   test "grant happy path: strict validation → keeper → submitted" do
     %{ctx: ctx, keeper: keeper} = start_stack()
     ref = register(keeper, @user_id)
 
     assert {200, %{"status" => "submitted", "tx" => "0x" <> _}} =
+             Intake.handle_grant(
+               %{"init_data" => init_data(), "order_ref" => ref, "permit" => permit_env(25_000_000)},
+               ctx
+             )
+  end
+
+  test "grant retry after mined settlement returns credited" do
+    %{ctx: ctx, keeper: keeper, fake: fake, signer: signer} = start_stack()
+    ref = register(keeper, @user_id)
+    params = %{"init_data" => init_data(), "order_ref" => ref, "permit" => permit_env(25_000_000)}
+
+    assert {200, %{"status" => "submitted", "tx" => hash}} = Intake.handle_grant(params, ctx)
+    FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
+    Signer.sweep_now(signer)
+    Keeper.sweep_now(keeper)
+
+    assert {200, %{"status" => "credited", "tx" => ^hash}} = Intake.handle_grant(params, ctx)
+  end
+
+  test "grant retry after consumed order with no pending status maps unknown to 404" do
+    %{ctx: ctx, keeper: keeper, store: store} = start_stack()
+
+    {:ok, %{order_ref: ref, order_id: order_id}} =
+      Keeper.register_order(keeper, "market_phase", %{
+        user_ref: "ref-#{@user_id}",
+        amount: 25_000_000,
+        action_args: [<<7::256>>, 25_000_000, <<9::256>>]
+      })
+
+    assert {:ok, _order} = MemoryStore.consume_order(store, order_id, "ref-#{@user_id}")
+
+    assert {404, %{"error" => "not found"}} =
              Intake.handle_grant(
                %{"init_data" => init_data(), "order_ref" => ref, "permit" => permit_env(25_000_000)},
                ctx
@@ -196,14 +252,14 @@ defmodule DelegatedSpend.IntakeTest do
   test "rate limiting is per verified user and only counts authenticated calls" do
     %{ctx: ctx, keeper: keeper} = start_stack(2)
     ref = register(keeper, @user_id)
-    params = %{"init_data" => init_data(), "order_ref" => ref}
+    params = order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref})
 
     assert {200, _} = Intake.handle_order(params, ctx)
     assert {200, _} = Intake.handle_order(params, ctx)
     assert {429, _} = Intake.handle_order(params, ctx)
 
     # a DIFFERENT verified user has their own bucket
-    other = %{"init_data" => init_data(666_000_000), "order_ref" => ref}
+    other = order_params(ctx, %{"init_data" => init_data(666_000_000), "order_ref" => ref})
     assert {404, _} = Intake.handle_order(other, ctx)
   end
 
@@ -215,11 +271,458 @@ defmodule DelegatedSpend.IntakeTest do
 
     for _ <- 1..3 do
       assert {401, _} =
-               Intake.handle_order(%{"init_data" => "garbage", "order_ref" => ref}, ctx)
+               Intake.handle_order(order_params(ctx, %{"init_data" => "garbage", "order_ref" => ref}), ctx)
     end
 
     assert {200, _} =
-             Intake.handle_order(%{"init_data" => init_data(), "order_ref" => ref}, ctx)
+             Intake.handle_order(order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}), ctx)
+  end
+
+  describe "token auth + version pin" do
+    test "a valid ref-scoped token authenticates handle_order without init_data" do
+      %{ctx: ctx, keeper: keeper} = start_stack()
+      ref = register(keeper, @user_id)
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
+      ctx = Map.put(ctx, :token_secret, "tsecret")
+
+      assert {200, %{"order_ref" => ^ref}} =
+               Intake.handle_order(%{"order_ref" => ref, "token" => token, "v" => ctx.pinned.version}, ctx)
+    end
+
+    test "a token for ref A cannot fetch ref B; expired token is 401" do
+      %{ctx: ctx, keeper: keeper} = start_stack()
+      ref_a = register(keeper, @user_id)
+      ref_b = register(keeper, @user_id)
+      ctx = Map.put(ctx, :token_secret, "tsecret")
+      token_a = DelegatedSpend.Intake.Token.mint("tsecret", ref_a, "ref-#{@user_id}", future())
+
+      assert {401, _} =
+               Intake.handle_order(%{"order_ref" => ref_b, "token" => token_a, "v" => ctx.pinned.version}, ctx)
+
+      stale = DelegatedSpend.Intake.Token.mint("tsecret", ref_a, "ref-#{@user_id}", 1)
+
+      assert {401, _} =
+               Intake.handle_order(%{"order_ref" => ref_a, "token" => stale, "v" => ctx.pinned.version}, ctx)
+    end
+
+    test "token param without ctx.token_secret falls through to initData auth and 401s" do
+      %{ctx: ctx, keeper: keeper} = start_stack()
+      ref = register(keeper, @user_id)
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
+
+      assert {401, _} =
+               Intake.handle_order(%{"order_ref" => ref, "token" => token, "v" => ctx.pinned.version}, ctx)
+    end
+
+    test "missing or wrong v is a 409 stale-build rejection before auth work" do
+      %{ctx: ctx, keeper: keeper} = start_stack()
+      ref = register(keeper, @user_id)
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
+      ctx = Map.put(ctx, :token_secret, "tsecret")
+
+      assert {409, %{"error" => "version mismatch"}} =
+               Intake.handle_order(%{"order_ref" => ref, "token" => token}, ctx)
+
+      assert {409, %{"error" => "version mismatch"}} =
+               Intake.handle_order(%{"order_ref" => ref, "token" => token, "v" => "0.0.1"}, ctx)
+    end
+
+    test "handle_grant accepts token auth in place of init_data" do
+      %{ctx: ctx, keeper: keeper} = start_stack()
+      ref = register(keeper, @user_id)
+      ctx = Map.put(ctx, :token_secret, "tsecret")
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
+
+      assert {200, %{"status" => "submitted"}} =
+               Intake.handle_grant(%{"token" => token, "order_ref" => ref, "permit" => permit_env(25_000_000)}, ctx)
+    end
+  end
+
+  describe "wallet bind + user_tx views" do
+    setup do
+      %{ctx: ctx} = c = start_stack()
+      me = self()
+
+      ctx =
+        ctx
+        |> Map.put(:token_secret, "tsecret")
+        |> Map.put(:wallet_fn, fn user_ref, addr, bind_ref ->
+          send(me, {:bound, user_ref, addr, bind_ref})
+          :ok
+        end)
+        |> Map.put(:wallet_view_fn, fn _user_ref -> "0xAbCd000000000000000000000000000000000001" end)
+        |> Map.put(:submitted_fn, fn order_id, tx ->
+          send(me, {:submitted, order_id, tx})
+          :ok
+        end)
+
+      {:ok, Map.put(c, :ctx, ctx)}
+    end
+
+    test "bind fetch returns kind+current_wallet; POST /wallet binds via wallet_fn single-use", %{ctx: ctx} do
+      {:ok, %{order_ref: bind_ref}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "bind"
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", bind_ref, "ref-#{@user_id}", future())
+      v = ctx.pinned.version
+
+      assert {200, body} = Intake.handle_order(%{"order_ref" => bind_ref, "token" => token, "v" => v}, ctx)
+      assert body["kind"] == "bind"
+      assert body["current_wallet"] == "0xAbCd000000000000000000000000000000000001"
+
+      addr = "0x8ba1f109551bd432803012645ac136ddd64dba72"
+
+      assert {200, %{"status" => "bound", "address" => bound}} =
+               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v}, ctx)
+
+      assert String.downcase(bound) == addr
+      user_ref = "ref-#{@user_id}"
+      assert_received {:bound, ^user_ref, ^bound, ^bind_ref}
+
+      assert {410, _} =
+               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v}, ctx)
+    end
+
+    test "bad address is 422; wrong-kind ref is 422; missing wallet_fn is 503", %{ctx: ctx} do
+      v = ctx.pinned.version
+
+      {:ok, %{order_ref: bind_ref}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "bind"
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", bind_ref, "ref-#{@user_id}", future())
+
+      assert {422, %{"field" => "address"}} =
+               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => "nonsense", "v" => v}, ctx)
+
+      assert {422, %{"field" => "address"}} =
+               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => 42, "v" => v}, ctx)
+
+      assert {422, %{"field" => "address"}} =
+               Intake.handle_wallet(
+                 %{
+                   "bind_ref" => bind_ref,
+                   "token" => token,
+                   "address" => "0x0000000000000000000000000000000000000000",
+                   "v" => v
+                 },
+                 ctx
+               )
+
+      permit_ref = register(ctx.keeper, @user_id)
+      ptoken = DelegatedSpend.Intake.Token.mint("tsecret", permit_ref, "ref-#{@user_id}", future())
+
+      assert {422, %{"field" => "kind"}} =
+               Intake.handle_wallet(
+                 %{
+                   "bind_ref" => permit_ref,
+                   "token" => ptoken,
+                   "address" => "0x8ba1f109551bd432803012645ac136ddd64dba72",
+                   "v" => v
+                 },
+                 ctx
+               )
+
+      assert {503, %{"error" => "unavailable"}} =
+               Intake.handle_wallet(
+                 %{
+                   "bind_ref" => bind_ref,
+                   "token" => token,
+                   "address" => "0x8ba1f109551bd432803012645ac136ddd64dba72",
+                   "v" => v
+                 },
+                 Map.delete(ctx, :wallet_fn)
+               )
+
+      assert {503, %{"error" => "unavailable"}} =
+               Intake.handle_wallet(
+                 %{
+                   "bind_ref" => bind_ref,
+                   "token" => token,
+                   "address" => "0x8ba1f109551bd432803012645ac136ddd64dba72",
+                   "v" => v
+                 },
+                 Map.put(ctx, :wallet_fn, fn _user_ref, _address -> :ok end)
+               )
+    end
+
+    test "bind fetch can omit current_wallet and wallet_fn rejection is surfaced", %{ctx: ctx} do
+      v = ctx.pinned.version
+
+      {:ok, %{order_ref: bind_ref}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "bind"
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", bind_ref, "ref-#{@user_id}", future())
+      ctx_no_view = Map.delete(ctx, :wallet_view_fn)
+
+      assert {200, %{"current_wallet" => nil}} =
+               Intake.handle_order(%{"order_ref" => bind_ref, "token" => token, "v" => v}, ctx_no_view)
+
+      reject_ctx = Map.put(ctx, :wallet_fn, fn _user_ref, _address, _bind_ref -> {:error, :nope} end)
+
+      assert {422, %{"error" => "bind rejected"}} =
+               Intake.handle_wallet(
+                 %{
+                   "bind_ref" => bind_ref,
+                   "token" => token,
+                   "address" => "0x8ba1f109551bd432803012645ac136ddd64dba72",
+                   "v" => v
+                 },
+                 reject_ctx
+               )
+    end
+
+    test "user_tx fetch carries tx + display; submitted-report is noted", %{ctx: ctx} do
+      v = ctx.pinned.version
+
+      {:ok, %{order_ref: ref}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "user_tx",
+          tx: %{to: "0x" <> String.duplicate("11", 20), data: "0xdeadbeef", value: 0},
+          display: %{summary_lines: ["Sell YES"]}
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
+
+      assert {200, body} = Intake.handle_order(%{"order_ref" => ref, "token" => token, "v" => v}, ctx)
+      assert body["kind"] == "user_tx"
+      assert body["tx"]["data"] == "0xdeadbeef"
+      assert body["display"]["summary_lines"] == ["Sell YES"]
+
+      tx_hash = "0x" <> String.duplicate("ef", 32)
+
+      assert {200, %{"status" => "noted"}} =
+               Intake.handle_submitted(%{"order_ref" => ref, "token" => token, "tx_hash" => tx_hash, "v" => v}, ctx)
+
+      assert_received {:submitted, _order_id, ^tx_hash}
+
+      assert {422, %{"field" => "tx_hash"}} =
+               Intake.handle_submitted(%{"order_ref" => ref, "token" => token, "tx_hash" => "zzz", "v" => v}, ctx)
+
+      bad_hex = "0x" <> String.duplicate("zz", 32)
+
+      assert {422, %{"field" => "tx_hash"}} =
+               Intake.handle_submitted(%{"order_ref" => ref, "token" => token, "tx_hash" => bad_hex, "v" => v}, ctx)
+    end
+
+    test "submitted-report without callback is noted and expired or missing orders are typed",
+         %{ctx: ctx, store: store} do
+      v = ctx.pinned.version
+
+      {:ok, %{order_ref: ref}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "user_tx",
+          tx: %{to: "0x" <> String.duplicate("11", 20), data: "0xdeadbeef", value: 0}
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
+      tx_hash = "0x" <> String.duplicate("ef", 32)
+
+      assert {200, %{"status" => "noted"}} =
+               Intake.handle_submitted(
+                 %{"order_ref" => ref, "token" => token, "tx_hash" => tx_hash, "v" => v},
+                 Map.delete(ctx, :submitted_fn)
+               )
+
+      assert {404, %{"error" => "not found"}} =
+               Intake.handle_submitted(
+                 %{
+                   "order_ref" => String.duplicate("cd", 32),
+                   "token" =>
+                     DelegatedSpend.Intake.Token.mint("tsecret", String.duplicate("cd", 32), "ref-#{@user_id}", future()),
+                   "tx_hash" => tx_hash,
+                   "v" => v
+                 },
+                 ctx
+               )
+
+      # seed an already-expired order straight into the store — no sleeping
+      expired_ref = String.duplicate("ee", 32)
+
+      :ok =
+        MemoryStore.put_order(store, %{
+          order_id: "0x" <> String.duplicate("aa", 32),
+          order_ref: expired_ref,
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "user_tx",
+          tx: %{to: "0x" <> String.duplicate("11", 20), data: "0x", value: 0},
+          display: %{},
+          expected_owner: nil,
+          expires_at: System.os_time(:second) - 5
+        })
+
+      etoken = DelegatedSpend.Intake.Token.mint("tsecret", expired_ref, "ref-#{@user_id}", future())
+
+      assert {410, %{"error" => "expired"}} =
+               Intake.handle_submitted(
+                 %{"order_ref" => expired_ref, "token" => etoken, "tx_hash" => tx_hash, "v" => v},
+                 ctx
+               )
+    end
+
+    test "expired user_tx order fetch is 410 and does not expose tx", %{ctx: ctx, store: store} do
+      v = ctx.pinned.version
+      expired_ref = String.duplicate("ab", 32)
+
+      :ok =
+        MemoryStore.put_order(store, %{
+          order_id: "0x" <> String.duplicate("bb", 32),
+          order_ref: expired_ref,
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "user_tx",
+          tx: %{to: "0x" <> String.duplicate("11", 20), data: "0x", value: 0},
+          display: %{},
+          expected_owner: nil,
+          expires_at: System.os_time(:second) - 5
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", expired_ref, "ref-#{@user_id}", future())
+
+      assert {410, %{"error" => "expired"}} =
+               Intake.handle_order(%{"order_ref" => expired_ref, "token" => token, "v" => v}, ctx)
+    end
+
+    test "submitted-report remains best-effort when callback raises", %{ctx: ctx} do
+      v = ctx.pinned.version
+
+      {:ok, %{order_ref: ref}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "user_tx",
+          tx: %{to: "0x" <> String.duplicate("11", 20), data: "0xdeadbeef", value: 0}
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
+      tx_hash = "0x" <> String.duplicate("ef", 32)
+      ctx = Map.put(ctx, :submitted_fn, fn _order_id, _tx -> raise "scanner offline" end)
+
+      assert {200, %{"status" => "noted"}} =
+               Intake.handle_submitted(%{"order_ref" => ref, "token" => token, "tx_hash" => tx_hash, "v" => v}, ctx)
+
+      exit_ctx = Map.put(ctx, :submitted_fn, fn _order_id, _tx -> exit(:watcher_down) end)
+
+      assert {200, %{"status" => "noted"}} =
+               Intake.handle_submitted(%{"order_ref" => ref, "token" => token, "tx_hash" => tx_hash, "v" => v}, exit_ctx)
+    end
+
+    test "unauthenticated /wallet and /orders/submitted are 401 before ANY work", %{ctx: ctx} do
+      v = ctx.pinned.version
+      addr = "0x8ba1f109551bd432803012645ac136ddd64dba72"
+      tx_hash = "0x" <> String.duplicate("ef", 32)
+
+      {:ok, %{order_ref: bind_ref}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "bind"
+        })
+
+      {:ok, %{order_ref: tx_ref}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "user_tx",
+          tx: %{to: "0x" <> String.duplicate("11", 20), data: "0x", value: 0}
+        })
+
+      # a token minted for ANOTHER ref must not open these
+      wrong = DelegatedSpend.Intake.Token.mint("tsecret", String.duplicate("cd", 32), "ref-#{@user_id}", future())
+
+      for bad <- [nil, "", "garbage", wrong] do
+        assert {401, %{"error" => "unauthorized"}} =
+                 Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => bad, "address" => addr, "v" => v}, ctx)
+
+        assert {401, %{"error" => "unauthorized"}} =
+                 Intake.handle_submitted(%{"order_ref" => tx_ref, "token" => bad, "tx_hash" => tx_hash, "v" => v}, ctx)
+      end
+
+      refute_received {:bound, _, _, _}
+      refute_received {:submitted, _, _}
+
+      # the failed attempts did NOT burn the bind order: a real bind still lands
+      token = DelegatedSpend.Intake.Token.mint("tsecret", bind_ref, "ref-#{@user_id}", future())
+
+      assert {200, %{"status" => "bound"}} =
+               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v}, ctx)
+    end
+
+    test "submitted-report against a non-user_tx order is 422 and never reaches submitted_fn", %{ctx: ctx} do
+      v = ctx.pinned.version
+      permit_ref = register(ctx.keeper, @user_id)
+      token = DelegatedSpend.Intake.Token.mint("tsecret", permit_ref, "ref-#{@user_id}", future())
+      tx_hash = "0x" <> String.duplicate("ef", 32)
+
+      assert {422, %{"error" => "invalid", "field" => "kind"}} =
+               Intake.handle_submitted(%{"order_ref" => permit_ref, "token" => token, "tx_hash" => tx_hash, "v" => v}, ctx)
+
+      refute_received {:submitted, _, _}
+    end
+
+    test "crashing wallet_fn is a 422 bind rejection and still burns the single-use ref", %{ctx: ctx} do
+      v = ctx.pinned.version
+      addr = "0x8ba1f109551bd432803012645ac136ddd64dba72"
+
+      {:ok, %{order_ref: bind_ref}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "bind"
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", bind_ref, "ref-#{@user_id}", future())
+      crash_ctx = Map.put(ctx, :wallet_fn, fn _user_ref, _address, _bind_ref -> raise "db down" end)
+
+      assert {422, %{"error" => "bind rejected"}} =
+               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v}, crash_ctx)
+
+      # a dead persistence GenServer EXITS rather than raises — same contract
+      {:ok, %{order_ref: bind_ref2}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "bind"
+        })
+
+      token2 = DelegatedSpend.Intake.Token.mint("tsecret", bind_ref2, "ref-#{@user_id}", future())
+      exit_ctx = Map.put(ctx, :wallet_fn, fn _user_ref, _address, _bind_ref -> exit(:db_down) end)
+
+      assert {422, %{"error" => "bind rejected"}} =
+               Intake.handle_wallet(%{"bind_ref" => bind_ref2, "token" => token2, "address" => addr, "v" => v}, exit_ctx)
+
+      # fail-closed single-use: the ref is consumed even though the bind failed
+      assert {410, _} =
+               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v}, ctx)
+    end
   end
 
   test "handle_grant is rate limited too (429 after the bucket is consumed)" do
@@ -232,6 +735,10 @@ defmodule DelegatedSpend.IntakeTest do
   end
 
   test "Rate.start_link with :name — supervision-friendly, usable by name in ctx" do
+    pid = Rate.start()
+    assert Rate.allow?(pid, "default", 1)
+    refute Rate.allow?(pid, "default", 1)
+
     {:ok, pid} = Rate.start_link(60, name: :spend_rate_named_test)
     assert Process.whereis(:spend_rate_named_test) == pid
     assert Rate.allow?(:spend_rate_named_test, "u", 1)

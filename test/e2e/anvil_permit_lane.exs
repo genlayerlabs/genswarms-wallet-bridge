@@ -70,7 +70,7 @@ mint = Abi.encode_call("mint", [:address, {:uint, 256}], [Address.to_bytes(user)
 E2E.await_mined(signer, "mint")
 
 # 3) user signs an EIP-2612 permit for the router (keeper never touches user keys —
-#    this block plays the Mini App's role)
+#    this block plays the wallet dapp's role)
 [domain_sep] = E2E.view(rpc, token, "DOMAIN_SEPARATOR", [], [], [{:bytes, 32}])
 [nonce] = E2E.view(rpc, token, "nonces", [:address], [Address.to_bytes(user)], [{:uint, 256}])
 deadline = Rpc.block_timestamp(rpc) + 3600
@@ -131,7 +131,7 @@ IO.puts("anvil e2e OK: permit lane end-to-end (destination #{dest_hex})")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Part 2 (Plan 3): the FULL registry path — product object registers a
-# server-authoritative order, the "Mini App" fetches it through the intake
+# server-authoritative order, the wallet dapp fetches it through the intake
 # (verified initData), signs a real permit, posts the grant, the keeper
 # executes, the result goes typed. Then the abuse cases.
 # ═══════════════════════════════════════════════════════════════════════════
@@ -195,9 +195,12 @@ oid2 = DelegatedSpend.Keccak.hash_256("e2e-order-2")
     action_args: [topic2, 10_000_000, oid2]
   })
 
-# Mini App fetches the order through the intake
+# Wallet dapp fetches the order through the intake
 {200, order_view} =
-  Intake.handle_order(%{"init_data" => make_init_data.(user_id), "order_ref" => order_ref}, ctx)
+  Intake.handle_order(
+    %{"init_data" => make_init_data.(user_id), "order_ref" => order_ref, "v" => "0.2.0"},
+    ctx
+  )
 
 E2E.assert!(order_view["amount"] == 10_000_000, "intake order fetch")
 
@@ -263,7 +266,7 @@ E2E.assert!(dest2_bal2 == 10_000_000, "replay caused no second spend")
 
 # a different verified user cannot see or spend the order
 {404, _} =
-  Intake.handle_order(%{"init_data" => make_init_data.(666), "order_ref" => order_ref}, ctx)
+  Intake.handle_order(%{"init_data" => make_init_data.(666), "order_ref" => order_ref, "v" => "0.2.0"}, ctx)
 
 # expired order: typed failure, zero broadcast (keeper nonce untouched)
 {:ok, keeper_fast} =

@@ -1,0 +1,12 @@
+{
+  "order_ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "kind": "user_tx",
+  "amount": 0,
+  "expires_at": 2000000000,
+  "display": { "summary_lines": ["Sell YES — 10 shares", "Min received: 9.90 USDC", "Valid 30 min"] },
+  "tx": {
+    "to": "0x1111111111111111111111111111111111111111",
+    "data": "0xdeadbeef",
+    "value": 0
+  }
+}

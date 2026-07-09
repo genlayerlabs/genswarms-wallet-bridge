@@ -25,7 +25,11 @@ defmodule DelegatedSpend.Keeper.Store do
           required(:user_ref) => user_ref,
           required(:amount) => non_neg_integer,
           required(:action_args) => list,
-          required(:expires_at) => non_neg_integer
+          required(:expires_at) => non_neg_integer,
+          optional(:kind) => String.t(),
+          optional(:tx) => map | nil,
+          optional(:display) => map,
+          optional(:expected_owner) => String.t() | nil
         }
 
   @callback put_grant(ref :: term, grant_ref :: String.t(), user_ref, grant :: map) :: :ok

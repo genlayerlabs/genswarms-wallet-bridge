@@ -23,4 +23,10 @@ defmodule DelegatedSpend.KeccakTest do
     assert byte_size(Keccak.hash_256(input)) == 32
     assert Keccak.hash_256(input) == Keccak.hash_256(:binary.copy("a", 200))
   end
+
+  test "input exactly one byte short of the rate uses single-byte padding" do
+    input = :binary.copy("a", 135)
+    assert byte_size(Keccak.hash_256(input)) == 32
+    assert Keccak.hash_256(input) == Keccak.hash_256(:binary.copy("a", 135))
+  end
 end

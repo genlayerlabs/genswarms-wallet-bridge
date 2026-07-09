@@ -1,12 +1,12 @@
 defmodule GenswarmsDelegatedSpend.MixProject do
   use Mix.Project
 
-  # Version is stamped here, in VERSION, vectors/VERSION and
-  # SpendRouter.version(); scripts/check-version.sh enforces the match.
+  # Package version is stamped here, in VERSION, vectors/VERSION and
+  # webapp/config.json. CONTRACT_VERSION pins unchanged Solidity bytes.
   def project do
     [
       app: :genswarms_delegated_spend,
-      version: "0.2.0",
+      version: "0.3.0",
       elixir: "~> 1.14",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,

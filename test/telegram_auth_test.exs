@@ -79,6 +79,11 @@ defmodule DelegatedSpend.TelegramAuthTest do
     assert {:error, :malformed} = TelegramAuth.verify(init_data(fields), @bot_token, 900, @now)
   end
 
+  test "validly-hashed malformed user JSON is malformed" do
+    fields = %{base_fields() | "user" => ~s({"id":"not-integer"})}
+    assert {:error, :malformed} = TelegramAuth.verify(init_data(fields), @bot_token, 900, @now)
+  end
+
   test "extra Telegram fields are covered by the data-check-string (all fields except hash)" do
     # Pins the "every field except hash" construction against field-set drift:
     # Telegram adds fields like chat_type/chat_instance/signature over time and

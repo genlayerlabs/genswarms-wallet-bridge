@@ -17,7 +17,7 @@ defmodule DelegatedSpend.Keeper.Object do
 
   Because messages are one-way, the message door requires a CALLER-MINTED
   `order_ref` (64 lowercase hex chars, e.g. 32 random bytes hex-encoded):
-  the sender already knows the ref it will put in the Mini App URL and does
+  the sender already knows the ref it will put in the wallet dapp URL and does
   not need a reply to proceed. The keeper still enforces format and
   uniqueness. Every message is acknowledged with a `{:reply, json}` routed
   back to the sender; senders may ignore it (it is observability, not a
@@ -181,16 +181,11 @@ defmodule DelegatedSpend.Keeper.Object do
     with ref when is_binary(ref) <- Map.get(order, "order_ref", {:error, "order_ref required"}),
          user_ref when is_binary(user_ref) <-
            Map.get(order, "user_ref", {:error, "user_ref required"}),
-         amount when is_integer(amount) and amount > 0 <-
+         amount when is_integer(amount) and amount >= 0 <-
            Map.get(order, "amount", {:error, "amount required"}),
          {:ok, args} <- decode_args(Map.get(order, "action_args")) do
       req = %{order_ref: ref, user_ref: user_ref, amount: amount, action_args: args}
-
-      case Map.get(order, "expected_owner") do
-        nil -> {:ok, req}
-        owner when is_binary(owner) -> {:ok, Map.put(req, :expected_owner, owner)}
-        _ -> {:error, "expected_owner must be a string address"}
-      end
+      pass_order_options(order, req)
     else
       {:error, detail} -> {:error, detail}
       _ -> {:error, "order_ref/user_ref/amount malformed"}
@@ -224,6 +219,50 @@ defmodule DelegatedSpend.Keeper.Object do
   end
 
   defp decode_arg(_), do: :error
+
+  defp pass_order_options(order, req) do
+    [
+      {"expected_owner", :expected_owner, &is_binary/1, "expected_owner must be a string address"},
+      {"kind", :kind, &is_binary/1, "kind must be a string"},
+      {"tx", :tx, &is_map/1, "tx must be a map"},
+      {"display", :display, &is_map/1, "display must be a map"},
+      {"ttl_s", :ttl_s, fn v -> is_integer(v) and v > 0 end, "ttl_s must be a positive integer"}
+    ]
+    |> Enum.reduce_while({:ok, req}, fn {json_key, atom_key, valid?, error}, {:ok, acc} ->
+      case Map.get(order, json_key) do
+        nil ->
+          {:cont, {:ok, acc}}
+
+        value ->
+          if valid?.(value),
+            do: {:cont, {:ok, Map.put(acc, atom_key, normalize_order_option(atom_key, value))}},
+            else: {:halt, {:error, error}}
+      end
+    end)
+  end
+
+  defp normalize_order_option(:tx, tx) do
+    tx
+    |> take_string("to", :to)
+    |> take_string("data", :data)
+    |> take_int("value", :value)
+  end
+
+  defp normalize_order_option(_key, value), do: value
+
+  defp take_string(tx, key, atom_key) do
+    case Map.get(tx, key) do
+      value when is_binary(value) -> Map.put(tx, atom_key, value)
+      _ -> tx
+    end
+  end
+
+  defp take_int(tx, key, atom_key) do
+    case Map.get(tx, key) do
+      value when is_integer(value) and value >= 0 -> Map.put(tx, atom_key, value)
+      _ -> tx
+    end
+  end
 
   # ── helpers ───────────────────────────────────────────────────────────────
 

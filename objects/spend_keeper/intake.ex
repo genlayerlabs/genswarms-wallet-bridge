@@ -11,7 +11,7 @@ defmodule DelegatedSpend.Intake do
     * Unauthenticated requests are rejected BEFORE any work (401, no store
       reads, no rate-bucket consumption for unauthenticated callers).
     * Grant envelopes are strictly validated against pinned config.
-    * A version mismatch (stale Mini App build) is rejected at runtime (409).
+    * A version mismatch (stale wallet dapp build) is rejected at runtime (409).
     * `initData` never appears in logs or errors.
 
   ctx: `%{bot_token:, max_age_s:, user_ref_fn:, keeper:, pinned:, rate:}`
@@ -19,21 +19,43 @@ defmodule DelegatedSpend.Intake do
   `rate = {RateLimiter-pid, max_per_window}` (see `DelegatedSpend.Intake.Rate`).
   """
 
-  alias DelegatedSpend.Intake.{GrantValidation, Rate, TelegramAuth}
+  alias DelegatedSpend.Intake.{GrantValidation, Rate, TelegramAuth, Token}
   alias DelegatedSpend.Keeper
 
   @doc "GET /orders?order_ref=… — fetch a pending order for the verified user."
   def handle_order(params, ctx) when is_map(params) do
-    with {:ok, user_ref} <- authenticate(params, ctx),
+    order_ref = to_string(params["order_ref"] || "")
+
+    with :ok <- pin_version(params, ctx),
+         {:ok, user_ref} <- authenticate(params, ctx, order_ref),
          :ok <- allow(ctx, user_ref) do
-      case Keeper.fetch_order(ctx.keeper, to_string(params["order_ref"] || ""), user_ref) do
+      case Keeper.fetch_order(ctx.keeper, order_ref, user_ref) do
         {:ok, view} ->
-          {200,
-           %{
-             "order_ref" => view.order_ref,
-             "amount" => view.amount,
-             "expires_at" => view.expires_at
-           }}
+          if expired_user_tx?(view) do
+            {410, %{"error" => "expired"}}
+          else
+            base = %{
+              "order_ref" => view.order_ref,
+              "kind" => view.kind,
+              "amount" => view.amount,
+              "expires_at" => view.expires_at,
+              "display" => stringify(view.display)
+            }
+
+            body =
+              case view.kind do
+                "user_tx" ->
+                  Map.put(base, "tx", stringify(view.tx))
+
+                "bind" ->
+                  Map.put(base, "current_wallet", wallet_view(ctx, user_ref))
+
+                _ ->
+                  base
+              end
+
+            {200, body}
+          end
 
         {:error, :not_found} ->
           {404, %{"error" => "not found"}}
@@ -48,7 +70,9 @@ defmodule DelegatedSpend.Intake do
   against pinned config, then hands to the keeper for execution.
   """
   def handle_grant(params, ctx) when is_map(params) do
-    with {:ok, user_ref} <- authenticate(params, ctx),
+    order_ref = to_string(params["order_ref"] || "")
+
+    with {:ok, user_ref} <- authenticate(params, ctx, order_ref),
          :ok <- allow(ctx, user_ref) do
       case GrantValidation.validate_permit(params["permit"] || %{}, ctx.pinned) do
         {:error, {:pinned_mismatch, :version}} ->
@@ -61,8 +85,6 @@ defmodule DelegatedSpend.Intake do
           {422, %{"error" => "invalid", "field" => to_string(field)}}
 
         {:ok, permit} ->
-          order_ref = to_string(params["order_ref"] || "")
-
           case Keeper.execute_with_permit(ctx.keeper, order_ref, user_ref, permit) do
             {:submitted, hash} -> {200, %{"status" => "submitted", "tx" => hash}}
             {:credited, hash} -> {200, %{"status" => "credited", "tx" => hash}}
@@ -76,18 +98,162 @@ defmodule DelegatedSpend.Intake do
     end
   end
 
-  # ── auth + rate ────────────────────────────────────────────────────────────
+  @doc "POST /wallet — bind a connected wallet address through a bind order."
+  def handle_wallet(params, ctx) when is_map(params) do
+    bind_ref = to_string(params["bind_ref"] || "")
 
-  defp authenticate(params, ctx) do
-    case TelegramAuth.verify(params["init_data"], ctx.bot_token, ctx.max_age_s) do
-      {:ok, %{user_id: user_id}} ->
-        {:ok, ctx.user_ref_fn.(user_id)}
-
-      {:error, _reason} ->
-        # deliberately reason-blind to the caller; never echoes the payload
-        {:error, 401, %{"error" => "unauthorized"}}
+    with :ok <- pin_version(params, ctx),
+         {:ok, user_ref} <- authenticate(params, ctx, bind_ref),
+         :ok <- allow(ctx, user_ref),
+         {:ok, wallet_fn} <- fetch_fn(ctx, :wallet_fn, 3),
+         {:ok, address} <- checksum_address(params["address"]),
+         {:ok, order} <- fetch_kind(ctx, bind_ref, user_ref, "bind"),
+         {:ok, _order} <- consume(ctx, order, user_ref) do
+      # The ref is consumed BEFORE the callback on purpose (single-use,
+      # fail-closed): a rejected or crashing wallet_fn burns it and the user
+      # asks for a fresh bind link — a failure is never replayable.
+      case safe_wallet(wallet_fn, user_ref, address, bind_ref) do
+        :ok -> {200, %{"status" => "bound", "address" => address}}
+        _ -> {422, %{"error" => "bind rejected"}}
+      end
+    else
+      {:error, status, body} -> {status, body}
     end
   end
+
+  @doc "POST /orders/submitted — best-effort user_tx hash report; watcher credits."
+  def handle_submitted(params, ctx) when is_map(params) do
+    order_ref = to_string(params["order_ref"] || "")
+
+    with :ok <- pin_version(params, ctx),
+         {:ok, user_ref} <- authenticate(params, ctx, order_ref),
+         :ok <- allow(ctx, user_ref),
+         {:ok, tx_hash} <- tx_hash(params["tx_hash"]),
+         {:ok, order} <- fetch_kind(ctx, order_ref, user_ref, "user_tx") do
+      case Map.get(ctx, :submitted_fn) do
+        fun when is_function(fun, 2) -> safe_submitted(fun, order.order_id, tx_hash)
+        _ -> :ok
+      end
+
+      {200, %{"status" => "noted"}}
+    else
+      {:error, status, body} -> {status, body}
+    end
+  end
+
+  # ── auth + rate ────────────────────────────────────────────────────────────
+
+  defp authenticate(params, ctx, ref) do
+    case {params["token"], Map.get(ctx, :token_secret)} do
+      {token, secret} when is_binary(token) and is_binary(secret) ->
+        case Token.verify(secret, ref, token) do
+          {:ok, user_ref} -> {:ok, user_ref}
+          {:error, _reason} -> {:error, 401, %{"error" => "unauthorized"}}
+        end
+
+      _ ->
+        case TelegramAuth.verify(params["init_data"], ctx.bot_token, ctx.max_age_s) do
+          {:ok, %{user_id: user_id}} ->
+            {:ok, ctx.user_ref_fn.(user_id)}
+
+          {:error, _reason} ->
+            # deliberately reason-blind to the caller; never echoes the payload
+            {:error, 401, %{"error" => "unauthorized"}}
+        end
+    end
+  end
+
+  defp pin_version(params, %{pinned: %{version: version}}) when is_binary(version) do
+    if params["v"] == version,
+      do: :ok,
+      else: {:error, 409, %{"error" => "version mismatch"}}
+  end
+
+  defp pin_version(_params, _ctx), do: :ok
+
+  defp wallet_view(ctx, user_ref) do
+    case Map.get(ctx, :wallet_view_fn) do
+      fun when is_function(fun, 1) -> fun.(user_ref)
+      _ -> nil
+    end
+  end
+
+  defp expired_user_tx?(%{kind: "user_tx", expires_at: exp}), do: System.os_time(:second) > exp
+  defp expired_user_tx?(_view), do: false
+
+  defp fetch_fn(ctx, key, arity) do
+    case Map.get(ctx, key) do
+      fun when is_function(fun, arity) -> {:ok, fun}
+      _ -> {:error, 503, %{"error" => "unavailable"}}
+    end
+  end
+
+  defp fetch_kind(ctx, ref, user_ref, kind) do
+    case Keeper.fetch_order_full(ctx.keeper, ref, user_ref) do
+      {:error, :not_found} ->
+        {:error, 404, %{"error" => "not found"}}
+
+      {:ok, %{kind: ^kind} = order} ->
+        if System.os_time(:second) > order.expires_at,
+          do: {:error, 410, %{"error" => "expired"}},
+          else: {:ok, order}
+
+      {:ok, _wrong_kind} ->
+        {:error, 422, %{"error" => "invalid", "field" => "kind"}}
+    end
+  end
+
+  defp consume(ctx, order, user_ref) do
+    case Keeper.consume_order(ctx.keeper, order.order_id, user_ref) do
+      {:ok, order} -> {:ok, order}
+      :already_consumed -> {:error, 410, %{"error" => "expired"}}
+      :not_found -> {:error, 404, %{"error" => "not found"}}
+    end
+  end
+
+  defp checksum_address(addr) when is_binary(addr) do
+    bytes = DelegatedSpend.Evm.Address.to_bytes(String.trim(addr))
+
+    if byte_size(bytes) == 20 and bytes != <<0::160>>,
+      do: {:ok, DelegatedSpend.Evm.Address.checksum(bytes)},
+      else: {:error, 422, %{"error" => "invalid", "field" => "address"}}
+  rescue
+    _ -> {:error, 422, %{"error" => "invalid", "field" => "address"}}
+  end
+
+  defp checksum_address(_), do: {:error, 422, %{"error" => "invalid", "field" => "address"}}
+
+  defp tx_hash("0x" <> hex = h) when byte_size(hex) == 64 do
+    if Regex.match?(~r/^[0-9a-fA-F]+$/, hex),
+      do: {:ok, h},
+      else: {:error, 422, %{"error" => "invalid", "field" => "tx_hash"}}
+  end
+
+  defp tx_hash(_), do: {:error, 422, %{"error" => "invalid", "field" => "tx_hash"}}
+
+  # rescue alone misses exits — and a dead persistence GenServer EXITS the
+  # caller rather than raising, so both callback shields need catch too.
+  defp safe_submitted(fun, order_id, tx_hash) do
+    fun.(order_id, tx_hash)
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp safe_wallet(fun, user_ref, address, bind_ref) do
+    fun.(user_ref, address, bind_ref)
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  defp stringify(map) when is_map(map),
+    do: Map.new(map, fn {k, v} -> {to_string(k), stringify(v)} end)
+
+  defp stringify(list) when is_list(list), do: Enum.map(list, &stringify/1)
+  defp stringify(other), do: other
 
   defp allow(%{rate: {limiter, max}}, user_ref) do
     if Rate.allow?(limiter, user_ref, max),

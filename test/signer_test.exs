@@ -158,6 +158,25 @@ defmodule DelegatedSpend.SignerTest do
     assert FakeRpc.sent(fake) == []
   end
 
+  test "contract creation skips eth_call simulation and raw address bytes are accepted" do
+    {fake, signer} = start_signer(%{simulate: {:revert, %{"message" => "would fail if called"}}})
+    assert {:ok, _} = Signer.submit(signer, "create", %{to: :create, data: <<1, 2, 3>>, value: 0})
+    assert [raw_create] = FakeRpc.sent(fake)
+
+    FakeRpc.put(fake, :simulate, :ok)
+    assert {:ok, _} = Signer.submit(signer, "raw-address", %{to: <<0x11::160>>, data: <<4>>, value: 0})
+    assert [_raw_create, raw_address] = FakeRpc.sent(fake)
+    assert raw_create != raw_address
+  end
+
+  test "unexpected info messages do not disturb signer state" do
+    {_fake, signer} = start_signer()
+    send(signer, :noise)
+    Process.sleep(10)
+    assert Process.alive?(signer)
+    assert Signer.status(signer, "missing") == :unknown
+  end
+
   test "sweep on a MINED-but-reverted (0x0) receipt → terminal failed" do
     {fake, signer} = start_signer()
     {:ok, hash} = Signer.submit(signer, "k1", @tx)

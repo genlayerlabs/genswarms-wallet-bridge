@@ -22,6 +22,64 @@ The five items:
 4. A storage adapter (the `Keeper.Store` behaviour)
 5. Config + deploys
 
+## 0.3 wallet-order transport
+
+Version 0.3 adds two transport order kinds beside the permit lane:
+
+- `permit` remains delegated spend: the keeper broadcasts, intake validation is
+  load-bearing, and your router/test invariants define the money-moving
+  authority.
+- `user_tx` and `bind` are wallet-order transport: the server routes a
+  server-built payload, but the user's wallet is the verifier. The keeper never
+  broadcasts these kinds; `execute_with_permit/4` refuses them with
+  `{:failed, :wrong_kind}` without consuming the order.
+
+If you only need wallet-order transport, start the keeper registry-only:
+
+```elixir
+{:ok, keeper} =
+  DelegatedSpend.Keeper.start_link(%{
+    store: {YourStore, ref},
+    source_allowlist: ["your-app"],
+    order_ttl_s: 900
+  })
+```
+
+No `:signer`, `:router`, or `:action` is required. A permit order can still be
+registered, but execution returns `{:failed, :permit_lane_disabled}` until you
+configure the permit lane.
+
+The intake supports the existing Telegram `initData` path and a ref-scoped
+token path. Mint tokens app-side when creating button URLs:
+
+```elixir
+token = DelegatedSpend.Intake.Token.mint(secret, order_ref, user_ref, expires_at)
+```
+
+Order-token TTL should match the order TTL; bind tokens should be short-lived
+(15 minutes or less). Tokens bind `{ref, user_ref, expires_at}` and open one
+order or bind ref only. They are not account credentials.
+
+New or changed intake endpoints:
+
+| Handler | Request | Purpose |
+|---|---|---|
+| `handle_order/2` | `{v, token \| init_data, order_ref}` | Fetch kind-aware order views; `user_tx` includes `tx`, `bind` includes `current_wallet`. |
+| `handle_wallet/2` | `{v, token \| init_data, bind_ref, address}` | Consume one bind order and call `ctx.wallet_fn.(user_ref, address, bind_ref)`. |
+| `handle_submitted/2` | `{v, token \| init_data, order_ref, tx_hash}` | Best-effort user-tx report through `ctx.submitted_fn.(order_id, tx_hash)`. It has zero crediting authority. |
+
+Optional ctx keys:
+
+- `:token_secret` enables token auth.
+- `:wallet_fn` persists a bind result.
+- `:wallet_view_fn` returns the current wallet for a bind view.
+- `:submitted_fn` nudges your watcher after a user-tx report.
+
+Hard rule for adopters: `user_ref` is one-way. If your app must act on a bind
+or order result, key your own state by `bind_ref` or `order_ref` at mint time.
+The callbacks return those refs; they will never get a platform id back out of
+`user_ref`.
+
 ---
 
 ## 1. The concrete router
@@ -143,7 +201,7 @@ starts — see item 5 for options):
     expected_owner: claim_wallet # optional wallet binding (see below)
   })
 
-# The Mini App drives these two through the intake (item 5), but they are
+# The wallet dapp drives these two through the intake (item 5), but they are
 # plain keeper calls:
 {:ok, view} = Keeper.fetch_order(keeper, order_ref, user_ref)
 result      = Keeper.execute_with_permit(keeper, order_ref, user_ref, permit)
@@ -241,9 +299,10 @@ package's tests are the executable contract):
 - Grants are keyed by app-supplied opaque `user_ref` — never raw platform
   ids; never log grant bodies.
 - `list_inflight/1` powers `reconcile_boot`.
-- Round-trip **every** order field — including the optional
-  `expected_owner`. Dropping it silently is the audit's F1; pair your adapter
-  with `require_owner_binding: true` so that failure mode is CLOSED.
+- Round-trip **every** order field — including `kind`, `tx`, `display`,
+  `expected_owner`, and `expires_at`. Dropping `expected_owner` silently is
+  the audit's F1; pair your adapter with `require_owner_binding: true` so that
+  failure mode is CLOSED.
 
 Money-lane bookkeeping should not be in-memory-only in production —
 `MemoryStore` is reference semantics, not a production store.
@@ -266,16 +325,19 @@ Money-lane bookkeeping should not be in-memory-only in production —
   codehashes: %{addr => hash}})` before enabling the keeper — wrong network
   or wrong contract fails closed.
 
-- **Mini App build on your domain.** `webapp/` is a static, zero-dependency
+- **Wallet dapp build on your domain.** `webapp/` is a static, zero-dependency
   build parameterized by `webapp/config.json`:
   `version, chainId, token, tokenName, tokenVersion, router, intakeUrl,
-  actionLabel`. Serve it over HTTPS on the app's domain and attach it as the
-  bot's WebApp button; order links are `<miniapp-url>?order=<order_ref>`.
-  The `version` stamp must match the package tag — the intake 409s a stale
-  build at runtime.
+  actionLabel, dappLinkPrefix`. Serve it over HTTPS on the app's domain and
+  attach `go.html?order=<order_ref>&token=<token>` (or `go.html?bind=<bind_ref>&token=<token>`)
+  as the bot button. `go.html` routes mobile users into the configured wallet
+  dapp browser and desktop users straight to `index.html`, preserving query
+  params. The `version` stamp must match the package tag — the intake 409s a
+  stale build at runtime.
 
 - **Intake mounted.** The package ships PURE handlers —
-  `DelegatedSpend.Intake.handle_order/2` and `handle_grant/2`, each
+  `DelegatedSpend.Intake.handle_order/2`, `handle_grant/2`,
+  `handle_wallet/2`, and `handle_submitted/2`, each
   `params → {status, body_map}` — and YOU supply the HTTP serving and the
   fail-closed bind (loopback unless explicitly published). The ctx:
 
@@ -283,15 +345,20 @@ Money-lane bookkeeping should not be in-memory-only in production —
   %{bot_token: bot_token,          # Telegram initData HMAC key
     max_age_s: 900,                # initData freshness window
     user_ref_fn: fn user_id -> ... end,  # verified Telegram id -> opaque user_ref
+    token_secret: token_secret,    # optional ref-scoped URL-token secret
     keeper: keeper_pid,
+    wallet_fn: fn user_ref, address, bind_ref -> ... end,        # optional bind
+    wallet_view_fn: fn user_ref -> current_wallet_or_nil end,    # optional bind view
+    submitted_fn: fn order_id, tx_hash -> ... end,               # optional watcher nudge
     pinned: %{chain_id: id, token: token, router: router, version: version},
     rate: {DelegatedSpend.Intake.Rate.start(60), 30}}   # optional
   ```
 
-  The Mini App POSTs `{intakeUrl}/orders` and `{intakeUrl}/grants` with
-  `init_data` in the body. A ~60-line Plug over Bandit is all the serving
-  glue takes: route first, cap the body (64 kB → 413), decode-error → 400 —
-  auth still happens inside the handlers.
+  The wallet dapp POSTs `{intakeUrl}/orders`, `{intakeUrl}/grants`,
+  `{intakeUrl}/wallet`, and `{intakeUrl}/orders/submitted` with either
+  `token` or `init_data` plus `v` in the body. A ~60-line Plug over Bandit is
+  all the serving glue takes: route first, cap the body (64 kB → 413),
+  decode-error → 400 — auth still happens inside the handlers.
 
 - **Keeper key provisioned.** The keeper signs with its OWN key
   (`SPEND_KEEPER_PRIVATE_KEY` in the template) — **never** the app's

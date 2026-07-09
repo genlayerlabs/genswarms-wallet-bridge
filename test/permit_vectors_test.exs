@@ -9,10 +9,11 @@ defmodule DelegatedSpend.PermitVectorsTest do
   @moduledoc """
   Elixir leg of the 3-language golden-vector cross-check (spec §8): recompute
   the EIP-2612 digest with the keeper's own primitives, recover the signer,
-  and accept the Mini App's envelope through the intake's strict validation.
+  and accept the wallet dapp's envelope through the intake's strict validation.
   """
 
   @vectors_dir Path.expand(Path.join([__DIR__, "..", "vectors", "permit"]))
+  @package_version File.read!("VERSION") |> String.trim()
 
   defp vectors do
     @vectors_dir
@@ -33,10 +34,10 @@ defmodule DelegatedSpend.PermitVectorsTest do
 
   defp unhex("0x" <> h), do: Base.decode16!(h, case: :mixed)
 
-  test "vectors exist (generator ran) and pin version 0.2.0" do
+  test "vectors exist (generator ran) and pin package version" do
     vs = vectors()
     assert length(vs) == 3
-    assert Enum.all?(vs, &(&1["version"] == "0.2.0"))
+    assert Enum.all?(vs, &(&1["version"] == @package_version))
     assert Enum.all?(vs, &(&1["account_state"] == "eoa"))
   end
 

@@ -1,10 +1,11 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "chainId": 84532,
   "token": "0x0000000000000000000000000000000000000000",
   "tokenName": "USDC",
   "tokenVersion": "2",
   "router": "0x0000000000000000000000000000000000000000",
   "intakeUrl": "/spend",
-  "actionLabel": "Open position"
+  "actionLabel": "Open position",
+  "dappLinkPrefix": "https://link.metamask.io/dapp/"
 }

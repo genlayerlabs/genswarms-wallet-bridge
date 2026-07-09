@@ -66,6 +66,20 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
     assert {:error, :missing_keeper} = Object.init(%{})
   end
 
+  test "init: keeper_opts start errors are surfaced" do
+    {:ok, owner} = Agent.start_link(fn -> :taken end, name: :spend_keeper_object_taken_test)
+
+    assert {:error, {:already_started, ^owner}} =
+             Object.init(%{
+               keeper_opts: %{
+                 store: {MemoryStore, MemoryStore.start()},
+                 source_allowlist: [],
+                 order_ttl_s: 60,
+                 name: :spend_keeper_object_taken_test
+               }
+             })
+  end
+
   test "init: attaching an external core without an explicit allowlist fails closed" do
     %{state: owned} = start_object()
     {:ok, state} = Object.init(%{keeper: owned.keeper})
@@ -96,6 +110,30 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
     assert byte_size(a) == 32 and byte_size(b) == 32 and is_binary(b)
   end
 
+  test "register via the door: transport order fields pass through" do
+    %{state: state, opts: opts} = start_object()
+
+    payload =
+      register_payload(%{
+        "amount" => 0,
+        "action_args" => [],
+        "kind" => "user_tx",
+        "tx" => %{"to" => "0x" <> String.duplicate("11", 20), "data" => "0xdeadbeef", "value" => 0},
+        "display" => %{"summary_lines" => ["Sell YES"]},
+        "ttl_s" => 60
+      })
+
+    {%{"ok" => true}, _} = msg(state, :market_phase, payload)
+
+    {MemoryStore, store} = opts.store
+    order = MemoryStore.get_order_by_ref(store, @ref, "u-a")
+    assert order.kind == "user_tx"
+    assert order.tx.data == "0xdeadbeef"
+    assert order.display["summary_lines"] == ["Sell YES"]
+    assert is_nil(order.display[:summary_lines])
+    assert_in_delta order.expires_at, System.os_time(:second) + 60, 5
+  end
+
   test "register via the door: unlisted from is refused; payload-claimed source is inert" do
     %{state: state} = start_object()
 
@@ -113,6 +151,14 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
 
     {reply2, _} = msg(state, :evil_object, smuggled)
     assert %{"ok" => false, "error" => "unknown_source"} = reply2
+  end
+
+  test "register via the door: core allowlist remains authoritative even if door is wider" do
+    %{state: owned} = start_object()
+    {:ok, state} = Object.init(%{keeper: owned.keeper, source_allowlist: ["door_only"]})
+
+    {reply, _} = msg(state, :door_only, register_payload())
+    assert %{"ok" => false, "error" => "unknown_source", "detail" => "door_only"} = reply
   end
 
   test "register via the door: order_ref is REQUIRED (no sync return channel to mint through)" do
@@ -149,16 +195,36 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
 
     for {field, value} <- [
           {"action_args", ["not-hex", 1]},
+          {"action_args", ["0xzz"]},
           {"action_args", "not-a-list"},
           {"amount", "25"},
           {"amount", -5},
-          {"expected_owner", 42}
+          {"expected_owner", 42},
+          {"kind", 42},
+          {"tx", "not-a-map"},
+          {"display", "not-a-map"},
+          {"ttl_s", 0}
         ] do
       {reply, _} = msg(state, :market_phase, register_payload(%{field => value}))
       assert %{"ok" => false, "error" => "bad_request"} = reply, "accepted bad #{field}"
     end
 
     assert {:error, :not_found} = Keeper.fetch_order(state.keeper, @ref, "u-a")
+  end
+
+  test "register via the door: malformed tx internals reach the core as bad_tx" do
+    %{state: state} = start_object()
+
+    payload =
+      register_payload(%{
+        "amount" => 0,
+        "action_args" => [],
+        "kind" => "user_tx",
+        "tx" => %{"to" => 42, "data" => "0x", "value" => "0"}
+      })
+
+    {reply, _} = msg(state, :market_phase, payload)
+    assert %{"ok" => false, "error" => "bad_tx"} = reply
   end
 
   test "non-JSON and unknown actions get a typed error reply, never a crash; the door keeps working" do
@@ -184,6 +250,59 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
 
     {reset, _} = msg(state, :market_phase, Jason.encode!(%{"action" => "reset_backoff", "user_ref" => "u-a"}))
     assert %{"ok" => true} = reset
+  end
+
+  test "order_status returns terminal statuses through the door" do
+    %{state: state, opts: opts} = start_object()
+    fake = opts.rpc
+    signer = opts.signer
+    {%{"ok" => true, "order_id" => order_id}, state} = msg(state, :market_phase, register_payload())
+
+    {:ok, order} = Keeper.fetch_order_full(state.keeper, @ref, "u-a")
+    assert order.order_id == order_id
+    {:submitted, hash} =
+      Keeper.execute_with_permit(state.keeper, @ref, "u-a", %{
+        owner: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        value: 25_000_000,
+        deadline: 4_000_000_000,
+        v: 27,
+        r: <<1::256>>,
+        s: <<2::256>>
+      })
+
+    {submitted, state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
+    assert %{"ok" => true, "status" => "submitted", "tx" => ^hash} = submitted
+
+    FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
+    Signer.sweep_now(signer)
+    Keeper.sweep_now(state.keeper)
+
+    {credited, _state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
+    assert %{"ok" => true, "status" => "credited", "tx" => ^hash} = credited
+  end
+
+  test "order_status returns failed terminal status through the door" do
+    %{state: state, opts: opts} = start_object()
+    fake = opts.rpc
+    {%{"ok" => true, "order_id" => order_id}, state} = msg(state, :market_phase, register_payload())
+    FakeRpc.put(fake, :simulate, {:revert, %{"message" => "no"}})
+
+    assert {:failed, :reverted} =
+             Keeper.execute_with_permit(state.keeper, @ref, "u-a", %{
+               owner: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+               value: 25_000_000,
+               deadline: 4_000_000_000,
+               v: 27,
+               r: <<1::256>>,
+               s: <<2::256>>
+             })
+
+    {failed, _state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
+    assert %{"ok" => true, "status" => "failed", "reason" => "reverted"} = failed
+  end
+
+  test "terminate tolerates invalid owned keeper pid" do
+    assert :ok = Object.terminate(:shutdown, %{owned: true, keeper: self()})
   end
 
   test "handle_info is a no-op; terminate stops an owned core only" do

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>hop probe</title></head>
+<body style="font-family: system-ui; margin: 1rem;">
+  <h2>Hop probe</h2>
+  <button id="go" style="font-size:1.1rem;padding:.6rem 1.2rem;">Run checks</button>
+  <pre id="log" style="white-space:pre-wrap;"></pre>
+  <script>
+    const log = (m) => (document.getElementById("log").textContent += m + "\n");
+    const params = new URLSearchParams(location.search);
+    const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
+    log("UA: " + navigator.userAgent);
+    log("params intact: " + (params.get("order") === "probe123" &&
+        params.get("token") === "tok456" ? "PASS" : "FAIL - " + location.search));
+    log("provider injected: " + (globalThis.ethereum ? "PASS" : "FAIL"));
+    document.getElementById("go").onclick = async () => {
+      try {
+        const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+        const acct = Array.isArray(accounts) && isAddress(accounts[0]) ? accounts[0] : "";
+        if (!acct) return log("eth_requestAccounts: FAIL");
+        log("eth_requestAccounts: PASS " + acct);
+        const chain = await ethereum.request({ method: "eth_chainId" });
+        log("chain: " + chain + (chain === "0x14a34" ? " (Base Sepolia) PASS" : " FAIL - switch wallet network and rerun"));
+        const typed = JSON.stringify({
+          types: { EIP712Domain: [{ name: "name", type: "string" }], Probe: [{ name: "note", type: "string" }] },
+          primaryType: "Probe",
+          domain: { name: "hop-probe" },
+          message: { note: "Telegram button to wallet dapp browser" }
+        });
+        const sig = await ethereum.request({ method: "eth_signTypedData_v4", params: [acct, typed] });
+        log("signature: " + (sig && sig.startsWith("0x") ? "PASS" : "FAIL"));
+      } catch (e) { log("FAIL: " + (e && e.message)); }
+    };
+  </script>
+</body>
+</html>

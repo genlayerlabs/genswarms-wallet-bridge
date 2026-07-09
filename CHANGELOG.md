@@ -4,9 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-One version is stamped in `VERSION`, `SpendRouter.version()`, `vectors/VERSION`,
-`mix.exs`, and `webapp/config.json`; `scripts/check-version.sh` (run in CI)
-fails on divergence.
+The package version is stamped in `VERSION`, `vectors/VERSION`, `mix.exs`, and
+`webapp/config.json`; `CONTRACT_VERSION` pins `SpendRouter.version()` because
+package releases can ship zero contract bytecode changes. `scripts/check-version.sh`
+(run in CI) fails on divergence.
 
 ## [Unreleased]
 
@@ -17,6 +18,37 @@ fails on divergence.
   router path. The base contract already carries the `delegationManager`
   introspection view and the keeper's grant registry stores delegation
   grants, but no redemption path exists yet.
+
+## [0.3.0] - 2026-07-09
+
+Wallet dapp consolidation release: permit remains the delegated-spend lane,
+while `user_tx` and `bind` add generic wallet-order transport behind the same
+static dapp and launcher.
+
+### Added
+
+- `DelegatedSpend.Intake.Token` for ref-scoped, expiring HMAC access tokens,
+  plus intake admission that accepts either token auth (`ctx.token_secret`) or
+  the existing Telegram `initData` path. Dapp order fetches are now build
+  version-pinned and return 409 on stale or missing `"v"`.
+- Keeper order kinds: default `permit`, `user_tx`, and `bind`; per-order
+  `ttl_s`; registry-only keeper boot without `:signer`, `:router`, or
+  `:action`; typed `:wrong_kind` and `:permit_lane_disabled` refusals that do
+  not consume orders.
+- Kind-aware intake views plus `handle_wallet/2` for single-use bind refs
+  (`ctx.wallet_fn`, `ctx.wallet_view_fn`) and `handle_submitted/2` for
+  best-effort user-tx reports (`ctx.submitted_fn`). Submitted reports have no
+  crediting authority.
+- Static webapp routing for permit, `user_tx`, and bind orders; token-aware
+  request bodies; manual transfer panel; no-provider open-in-wallet hint; and
+  `go.html` launcher with configurable `dappLinkPrefix`.
+- Golden `user_tx` order vector and ExUnit fixture test pinning the order-fetch
+  wire shape.
+
+### Changed
+
+- Package version stamps move to `0.3.0`; Solidity stays at
+  `CONTRACT_VERSION` `0.2.0` because this release changes no contract bytes.
 
 ## [0.2.0] - 2026-07-05
 

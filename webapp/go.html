@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self';" />
+  <title>Opening your wallet...</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 1.25rem; }
+    a.button { display: inline-block; font-size: 1.15rem; padding: 0.7rem 1.4rem;
+               border: 1px solid #ccc; border-radius: 8px; text-decoration: none; }
+    .muted { color: #777; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <h1>Opening your wallet...</h1>
+  <p><a id="open" class="button" href="#">Open in MetaMask</a></p>
+  <p class="muted">Nothing happening? Tap the button. No MetaMask on this device? Open this chat on your phone and tap the chat button there.</p>
+  <script type="module" src="./go.mjs"></script>
+</body>
+</html>

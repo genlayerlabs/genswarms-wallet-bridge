@@ -7,10 +7,10 @@
       "name": "genswarms-delegated-spend",
       "dir": ".",
       "kind": "handler",
-      "description": "Wallet-native delegated spending: immutable SpendRouter contract base + gasless permit-lane keeper (swarm object) + Telegram Mini App intake",
+      "description": "Wallet-native delegated spending: immutable SpendRouter contract base + gasless permit-lane keeper (swarm object) + wallet dapp intake",
       "module": "DelegatedSpend.Keeper.Object",
       "deps": [],
-      "note": "module is the keeper's swarm-object door (async registration, framework-stamped source identity); the intake HTTP path stays a synchronous call into the same core. Contracts (Foundry) and the Mini App webapp travel in-repo; consumers deploy their own SpendRouter subclass — no shared deployed contracts."
+      "note": "module is the keeper's swarm-object door (async registration, framework-stamped source identity); the intake HTTP path stays a synchronous call into the same core. Contracts (Foundry) and the wallet dapp travel in-repo; consumers deploy their own SpendRouter subclass — no shared deployed contracts."
     }
   ]
 }

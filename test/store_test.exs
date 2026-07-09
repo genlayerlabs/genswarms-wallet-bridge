@@ -43,6 +43,7 @@ defmodule DelegatedSpend.StoreTest do
 
   test "grant lifecycle: put, get, revoke; scoped by user_ref" do
     store = MemoryStore.start()
+    assert :ok = MemoryStore.revoke_grant(store, "missing", "u-a")
     :ok = MemoryStore.put_grant(store, "g-1", "u-a", %{kind: :permit_profile})
     assert %{revoked: false} = MemoryStore.get_grant(store, "g-1", "u-a")
     assert MemoryStore.get_grant(store, "g-1", "u-EVIL") == nil
@@ -62,9 +63,16 @@ defmodule DelegatedSpend.StoreTest do
 
   test "inflight bookkeeping for boot reconciliation" do
     store = MemoryStore.start()
+    assert :ok = MemoryStore.update_inflight_hash(store, "missing", "0xabc")
     :ok = MemoryStore.put_inflight(store, "oid-1", "ak-1")
     assert [%{order_id: "oid-1", action_key: "ak-1"}] = MemoryStore.list_inflight(store)
     :ok = MemoryStore.resolve_inflight(store, "oid-1", {:credited, "0xabc"})
     assert MemoryStore.list_inflight(store) == []
+  end
+
+  test "stale ref index returns nil if the order row is gone" do
+    store = MemoryStore.start()
+    Agent.update(store, &put_in(&1, [:by_ref, {"oref-missing", "u-a"}], "missing-order-id"))
+    assert MemoryStore.get_order_by_ref(store, "oref-missing", "u-a") == nil
   end
 end

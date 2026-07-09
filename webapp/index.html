@@ -13,6 +13,8 @@
     #status { margin-top: 1rem; white-space: pre-wrap; }
     button { font-size: 1.1rem; padding: 0.6rem 1.2rem; }
     .muted { color: #777; font-size: 0.85rem; }
+    [hidden] { display: none !important; }
+    #open-wallet { display: inline-block; font-size: 1.1rem; padding: 0.6rem 1.2rem; border: 1px solid #ccc; border-radius: 8px; text-decoration: none; }
   </style>
 </head>
 <body>
@@ -20,6 +22,12 @@
   <p id="summary">Loading order…</p>
   <button id="pay" disabled>Review &amp; sign</button>
   <p id="status"></p>
+  <p><a id="open-wallet" hidden>Open in MetaMask</a></p>
+  <div id="manual" hidden>
+    <p class="muted" id="manual-amount"></p>
+    <p><code id="manual-address" style="user-select: all; word-break: break-all;"></code></p>
+    <p class="muted">Prefer a manual transfer? Funds sent here credit the same bet; payouts still go to your bound wallet.</p>
+  </div>
   <p class="muted">
     Delegated spending — you sign exactly one payment for exactly the shown
     amount. Nothing else is authorized. The regular transfer option in chat

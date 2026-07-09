@@ -6,7 +6,7 @@ defmodule DelegatedSpend.Keeper.PermitLane do
   arguments — args come from the stored order, the permit from the user.
 
   The tail `[owner, deadline, v, r, s]` is the SpendRouter convention; the
-  permit shape is byte-matched with the Mini App per spec §3.1.
+  permit shape is byte-matched with the wallet dapp per spec §3.1.
   """
 
   alias DelegatedSpend.Evm.{Abi, Address}

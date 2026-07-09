@@ -54,4 +54,27 @@ defmodule DelegatedSpend.Tx1559Test do
     [_, _, _, _, _, to, _, _, _, _, _, _] = ExRLP.decode(rlp)
     assert to == ""
   end
+
+  test "to may be supplied as raw address bytes" do
+    to = <<0x11::160>>
+    {raw_hex, _} = Tx1559.sign(%{@params | to: to}, @anvil0)
+    raw = Base.decode16!(String.trim_leading(raw_hex, "0x"), case: :lower)
+    <<2, rlp::binary>> = raw
+    [_, _, _, _, _, decoded_to, _, _, _, _, _, _] = ExRLP.decode(rlp)
+    assert decoded_to == to
+  end
+
+  test "address helpers cover create, binary pass-through, and 0X equality" do
+    sender = "0x000000000000000000000000000000000000dEaD"
+    expected =
+      [Address.to_bytes(sender), 7]
+      |> ExRLP.encode()
+      |> Keccak.hash_256()
+      |> binary_part(12, 20)
+      |> Address.checksum()
+
+    assert Address.create_address(sender, 7) == expected
+    assert Address.to_bytes(<<1::160>>) == <<1::160>>
+    assert Address.eq?("0x000000000000000000000000000000000000dead", "0X000000000000000000000000000000000000DEAD")
+  end
 end
