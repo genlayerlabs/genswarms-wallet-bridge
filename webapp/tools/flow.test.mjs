@@ -245,7 +245,15 @@ test("runUserTxFlow: connect → fetch → eth_sendTransaction → submitted rep
         kind: "user_tx",
         amount: 0,
         expires_at: 9_999_999_999,
-        tx: { to: "0x" + "11".repeat(20), data: "0xdeadbeef", value: 0 },
+        tx: {
+          to: "0x" + "11".repeat(20),
+          data: "0xdeadbeef",
+          value: "0x20000000000001",
+          gas: "0x5208",
+          maxFeePerGas: "0x59682f00",
+          maxPriorityFeePerGas: "0x3b9aca00",
+          chainId: "0x14a34",
+        },
         display: { summary_lines: ["Sell YES"] },
       },
     }),
@@ -259,6 +267,11 @@ test("runUserTxFlow: connect → fetch → eth_sendTransaction → submitted rep
   assert.equal(res.ok, true);
   assert.equal(sent[0].to, "0x" + "11".repeat(20));
   assert.equal(sent[0].data, "0xdeadbeef");
+  assert.equal(sent[0].value, "0x20000000000001");
+  assert.equal(sent[0].gas, "0x5208");
+  assert.equal(sent[0].maxFeePerGas, "0x59682f00");
+  assert.equal(sent[0].maxPriorityFeePerGas, "0x3b9aca00");
+  assert.equal(sent[0].chainId, "0x14a34");
   assert.equal(sent[0].from, ACCOUNT);
   assert.equal(submitted[0].tx_hash, "0x" + "ef".repeat(32));
   assert.equal(submitted[0].token, "tok");

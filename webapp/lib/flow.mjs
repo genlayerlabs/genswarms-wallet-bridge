@@ -136,12 +136,7 @@ export async function runUserTxFlow(deps, orderRef) {
   try {
     tx = await deps.provider.request({
       method: "eth_sendTransaction",
-      params: [{
-        from: conn.account,
-        to: fetched.order.tx.to,
-        data: fetched.order.tx.data,
-        value: "0x" + Number(fetched.order.tx.value || 0).toString(16),
-      }],
+      params: [{ ...fetched.order.tx, from: conn.account }],
     });
   } catch (e) {
     if (e && e.code === 4001) return { ok: false, reason: "user_rejected" };
