@@ -35,6 +35,7 @@ async function main() {
     return;
   }
 
+  $("open-wallet").hidden = true;
   const deps = { provider, fetchFn: fetch.bind(globalThis), config, initData, token };
 
   const fetched = await fetchOrder(deps, orderRef);
