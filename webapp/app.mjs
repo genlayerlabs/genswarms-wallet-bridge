@@ -44,25 +44,20 @@ async function main() {
     return;
   }
 
-  renderManual(fetched.order);
   if (fetched.order.kind === "user_tx") return setupUserTx(deps, fetched.order, orderRef, tg);
   if (fetched.order.kind === "bind") return setupBind(deps, fetched.order, orderRef, tg);
   setupPermit(deps, fetched.order, orderRef, tg, config);
 }
 
-// Kind-agnostic: any order carrying display.manual gets the manual-send panel
-// (permit deposits and live user_tx deposits; binds never carry it).
-function renderManual(order) {
-  const manual = order.display && order.display.manual;
-  if (!manual) return;
-  $("manual-address").textContent = manual.address;
-  $("manual-amount").textContent = `Send exactly ${(manual.amount / 1_000_000).toFixed(2)} USDC on Base to:`;
-  $("manual").hidden = false;
-}
-
 function setupPermit(deps, order, orderRef, tg, config) {
   const amount = (order.amount / 1_000_000).toFixed(2);
   $("summary").textContent = `${config.actionLabel}: ${amount} USDC (gasless — the operator pays network fees).`;
+  const manual = order.display && order.display.manual;
+  if (manual) {
+    $("manual-address").textContent = manual.address;
+    $("manual-amount").textContent = `Send exactly ${(manual.amount / 1_000_000).toFixed(2)} USDC on Base to:`;
+    $("manual").hidden = false;
+  }
   $("pay").disabled = false;
 
   $("pay").onclick = async () => {
