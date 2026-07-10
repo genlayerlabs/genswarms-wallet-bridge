@@ -8,9 +8,10 @@ the user's wallet verify and submit app-built payloads directly.
 
 Not a wallet (it never holds user keys or funds) and not a cross-chain bridge
 (one chain, one token path) — it is the span between the deterministic object
-brain and the user's own wallet. Formerly published as
-`genswarms-delegated-spend` (through 0.3.0); the swarmidx identity is
-`genlayerlabs/genswarms-wallet-bridge` from the next release.
+brain and the user's own wallet. The swarmidx identity is
+`genlayerlabs/wallet-bridge` (0.3.3+). Formerly published as
+`genswarms-delegated-spend` (through 0.3.0) and
+`genswarms-wallet-bridge` (0.3.1–0.3.2).
 
 - **Permit lane (M1):** one EIP-2612 signature per payment — gasless for the user.
 - **Delegation lane (M2):** ERC-7710 standing delegation with caveats — one-tap.

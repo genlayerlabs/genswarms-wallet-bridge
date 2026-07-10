@@ -4,7 +4,7 @@
   },
   "packages": [
     {
-      "name": "genswarms-wallet-bridge",
+      "name": "wallet-bridge",
       "dir": ".",
       "kind": "handler",
       "description": "Chat-to-wallet bridge: delegated spend lanes (immutable SpendRouter contract base + gasless permit-lane keeper swarm object) plus generic wallet-order transport (user_tx/bind) behind one attested wallet dapp and launcher",

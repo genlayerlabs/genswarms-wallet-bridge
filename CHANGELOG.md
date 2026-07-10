@@ -19,6 +19,19 @@ package releases can ship zero contract bytecode changes. `scripts/check-version
   introspection view and the keeper's grant registry stores delegation
   grants, but no redemption path exists yet.
 
+## [0.3.3] - 2026-07-10
+
+Notary-identity release: the published package name drops the `genswarms-`
+prefix.
+
+### Changed
+
+- The swarmidx package name is now **`wallet-bridge`** — refs read
+  `swarmidx:genlayerlabs/wallet-bridge@0.3.3+`. The GitHub repository keeps
+  the `genswarms-wallet-bridge` name. Earlier notary entries stay where they
+  were published: `genswarms-delegated-spend` through 0.3.0,
+  `genswarms-wallet-bridge` for 0.3.1–0.3.2.
+
 ## [0.3.2] - 2026-07-10
 
 Copy release: the wallet dapp speaks bridge, not lanes.
