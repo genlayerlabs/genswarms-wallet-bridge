@@ -24,7 +24,8 @@ jobs:
           elixir-version: "1.16"
           otp-version: "26"
       - run: mix deps.get
-      - run: mix test
+      - name: Keeper tests + coverage ratchet (threshold in mix.exs)
+        run: mix test --cover
 
   webapp:
     runs-on: ubuntu-latest
@@ -34,8 +35,16 @@ jobs:
         with:
           node-version: "22"
       - uses: foundry-rs/foundry-toolchain@v1
-      - name: Webapp tests (flow, launcher, app glue)
-        run: node --test webapp/tools/
+      # Coverage caveats, on purpose and in the open: V8 coverage only sees
+      # IMPORTED files — go.mjs (9 lines of DOM entry glue over the fully
+      # tested lib/launch.mjs) never loads under node and is absent from the
+      # report, and app.mjs (DOM glue over lib/flow.mjs) is mostly untested,
+      # which is what holds the line threshold at 70 instead of 90+.
+      - name: Webapp tests (flow, launcher, app glue) + coverage floor
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-lines=70 --test-coverage-branches=70
+          webapp/tools/
       - name: Vectors are the committed generator output (byte-identical)
         run: |
           node webapp/tools/gen-vectors.mjs

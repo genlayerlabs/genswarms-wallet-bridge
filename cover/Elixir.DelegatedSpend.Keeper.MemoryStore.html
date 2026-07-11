@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Keeper.MemoryStore.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/objects/spend_keeper/store.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-10 at 23:34:54</p></footer>
+<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/objects/spend_keeper/store.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-11 at 10:15:16</p></footer>
 <table>
 <tbody>
 <tr>
@@ -470,7 +470,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L66"><a href="#L66">66</a></td>
-<td class="hits">82</td>
+<td class="hits">86</td>
 <td class="source"><code>    {:ok, pid} =</code></td>
 </tr>
 <tr>
@@ -480,7 +480,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L68"><a href="#L68">68</a></td>
-<td class="hits">82</td>
+<td class="hits">86</td>
 <td class="source"><code>        %{grants: %{}, spends: [], orders: %{}, by_ref: %{}, consumed: %{}, inflight: %{}}</code></td>
 </tr>
 <tr>
@@ -495,7 +495,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L71"><a href="#L71">71</a></td>
-<td class="hits">82</td>
+<td class="hits">86</td>
 <td class="source"><code>    pid</code></td>
 </tr>
 <tr>
@@ -650,7 +650,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L102"><a href="#L102">102</a></td>
-<td class="hits">10</td>
+<td class="hits">11</td>
 <td class="source"><code>    do: Agent.update(pid, &amp;%{&amp;1 | spends: [{user_ref, amount, at} | &amp;1.spends]})</code></td>
 </tr>
 <tr>
@@ -715,7 +715,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L115"><a href="#L115">115</a></td>
-<td class="hits">81</td>
+<td class="hits">87</td>
 <td class="source"><code>    Agent.update(pid, fn s -&gt;</code></td>
 </tr>
 <tr>
@@ -725,12 +725,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L117"><a href="#L117">117</a></td>
-<td class="hits">81</td>
+<td class="hits">87</td>
 <td class="source"><code>      |&gt; put_in([:orders, order.order_id], order)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L118"><a href="#L118">118</a></td>
-<td class="hits">81</td>
+<td class="hits">87</td>
 <td class="source"><code>      |&gt; put_in([:by_ref, {order.order_ref, order.user_ref}], order.order_id)</code></td>
 </tr>
 <tr>
@@ -755,7 +755,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L123"><a href="#L123">123</a></td>
-<td class="hits">16</td>
+<td class="hits">19</td>
 <td class="source"><code>  def get_order(pid, order_id), do: Agent.get(pid, &amp; &amp;1.orders[order_id])</code></td>
 </tr>
 <tr>
@@ -775,17 +775,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L127"><a href="#L127">127</a></td>
-<td class="hits">102</td>
+<td class="hits">107</td>
 <td class="source"><code>    Agent.get(pid, fn s -&gt;</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L128"><a href="#L128">128</a></td>
-<td class="hits">102</td>
+<td class="hits">107</td>
 <td class="source"><code>      with id when is_binary(id) &lt;- get_in(s, [:by_ref, {order_ref, user_ref}]) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L129"><a href="#L129">129</a></td>
-<td class="hits">83</td>
+<td class="hits">88</td>
 <td class="source"><code>        s.orders[id]</code></td>
 </tr>
 <tr>
@@ -820,12 +820,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L136"><a href="#L136">136</a></td>
-<td class="hits">59</td>
+<td class="hits">64</td>
 <td class="source"><code>    Agent.get_and_update(pid, fn s -&gt;</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L137"><a href="#L137">137</a></td>
-<td class="hits">59</td>
+<td class="hits">64</td>
 <td class="source"><code>      case s.orders[order_id] do</code></td>
 </tr>
 <tr class="miss">
@@ -850,7 +850,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L142"><a href="#L142">142</a></td>
-<td class="hits">58</td>
+<td class="hits">63</td>
 <td class="source"><code>          if s.consumed[order_id],</code></td>
 </tr>
 <tr>
@@ -910,7 +910,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L154"><a href="#L154">154</a></td>
-<td class="hits">26</td>
+<td class="hits">31</td>
 <td class="source"><code>    Agent.update(</code></td>
 </tr>
 <tr>
@@ -920,7 +920,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L156"><a href="#L156">156</a></td>
-<td class="hits">26</td>
+<td class="hits">31</td>
 <td class="source"><code>      &amp;put_in(&amp;1, [:inflight, order_id], %{action_key: action_key, tx_hash: nil})</code></td>
 </tr>
 <tr>
@@ -950,12 +950,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L162"><a href="#L162">162</a></td>
-<td class="hits">18</td>
+<td class="hits">21</td>
 <td class="source"><code>    Agent.update(pid, fn s -&gt;</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L163"><a href="#L163">163</a></td>
-<td class="hits">18</td>
+<td class="hits">21</td>
 <td class="source"><code>      case s.inflight[order_id] do</code></td>
 </tr>
 <tr class="hit">
@@ -965,7 +965,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L165"><a href="#L165">165</a></td>
-<td class="hits">17</td>
+<td class="hits">20</td>
 <td class="source"><code>        row -&gt; put_in(s, [:inflight, order_id], %{row | tx_hash: tx_hash})</code></td>
 </tr>
 <tr>
@@ -1000,17 +1000,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L172"><a href="#L172">172</a></td>
-<td class="hits">17</td>
+<td class="hits">20</td>
 <td class="source"><code>    Agent.update(pid, fn s -&gt;</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L173"><a href="#L173">173</a></td>
-<td class="hits">17</td>
+<td class="hits">20</td>
 <td class="source"><code>      %{s | inflight: Map.delete(s.inflight, order_id)}</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L174"><a href="#L174">174</a></td>
-<td class="hits">17</td>
+<td class="hits">20</td>
 <td class="source"><code>      |&gt; Map.put(:last_result, {order_id, result})</code></td>
 </tr>
 <tr>
@@ -1040,12 +1040,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L180"><a href="#L180">180</a></td>
-<td class="hits">15</td>
+<td class="hits">18</td>
 <td class="source"><code>    Agent.get(pid, fn s -&gt;</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L181"><a href="#L181">181</a></td>
-<td class="hits">15</td>
+<td class="hits">18</td>
 <td class="source"><code>      for {order_id, %{action_key: ak, tx_hash: h}} &lt;- s.inflight,</code></td>
 </tr>
 <tr>
