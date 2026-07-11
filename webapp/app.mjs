@@ -3,7 +3,7 @@
 // the injected EIP-1193 provider, and the DOM elements.
 
 import { applyProductName } from "./lib/brand.mjs";
-import { connectWallet, fetchOrder, fetchPermitNonce, runBindFlow, runUserTxFlow, signAndSubmit, walletDappLink } from "./lib/flow.mjs";
+import { connectWallet, fetchOrder, fetchPermitNonce, ownerMismatch, runBindFlow, runUserTxFlow, signAndSubmit, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -67,7 +67,34 @@ async function main() {
   setupPermit(deps, fetched.order, orderRef, tg, config);
 }
 
-function setupPermit(deps, order, orderRef, tg, config) {
+// Owner-bound orders (order.expected_owner, exposed by the intake view only
+// when set): the paying wallet MUST be the bound one — payouts go to it, so a
+// different connected account gets debited while someone else is credited
+// (and owner-scoped calldata reverts on-chain). A mismatch is the 0.3.1
+// dead-state pattern: hide #pay, stamp the error. The re-check inside each
+// pay path is the load-bearing one (accounts change mid-session); this
+// load-time pass and the accountsChanged listener just surface it early.
+function blockWrongWallet(expected) {
+  $("pay").hidden = true;
+  paintStatus($("status"), wrongWalletMessage(expected), "error");
+}
+
+async function enforceOwnerAtLoad(deps, order) {
+  if (!order.expected_owner) return true;
+  if (typeof deps.provider.on === "function") {
+    deps.provider.on("accountsChanged", (accounts) => {
+      if (ownerMismatch(order, accounts && accounts[0])) blockWrongWallet(order.expected_owner);
+    });
+  }
+  const conn = await connectWallet(deps).catch(() => ({ ok: false }));
+  if (conn.ok && ownerMismatch(order, conn.account)) {
+    blockWrongWallet(order.expected_owner);
+    return false;
+  }
+  return true; // connect refusals stay non-fatal — the pay path re-checks
+}
+
+async function setupPermit(deps, order, orderRef, tg, config) {
   const amount = (order.amount / 1_000_000).toFixed(2);
   $("summary").textContent = `${config.actionLabel}: ${amount} USDC (gasless — the operator pays network fees).`;
   const manual = order.display && order.display.manual;
@@ -76,6 +103,7 @@ function setupPermit(deps, order, orderRef, tg, config) {
     $("manual-amount").textContent = `Send exactly ${(manual.amount / 1_000_000).toFixed(2)} USDC on Base to:`;
     $("manual").hidden = false;
   }
+  if (!(await enforceOwnerAtLoad(deps, order))) return;
   $("pay").disabled = false;
 
   $("pay").onclick = async () => {
@@ -88,6 +116,7 @@ function setupPermit(deps, order, orderRef, tg, config) {
       $("pay").disabled = false;
       return;
     }
+    if (ownerMismatch(order, conn.account)) return blockWrongWallet(order.expected_owner);
 
     paintStatus($("status"), "Waiting for your signature…");
     const nonce = await fetchPermitNonce(deps, conn.account);
@@ -109,9 +138,10 @@ function setupPermit(deps, order, orderRef, tg, config) {
   };
 }
 
-function setupUserTx(deps, order, orderRef, tg) {
+async function setupUserTx(deps, order, orderRef, tg) {
   $("summary").textContent = summaryLines(order);
   $("pay").textContent = "Review & sign in wallet";
+  if (!(await enforceOwnerAtLoad(deps, order))) return;
   $("pay").disabled = false;
   $("pay").onclick = async () => {
     $("pay").disabled = true;
@@ -120,6 +150,8 @@ function setupUserTx(deps, order, orderRef, tg) {
     if (result.ok) {
       paintStatus($("status"), "Transaction sent ✓ — you can return to the chat.", "success");
       if (tg) setTimeout(() => tg.close(), 1500);
+    } else if (result.reason === "wrong_wallet") {
+      blockWrongWallet(result.expected);
     } else {
       paintStatus($("status"), MESSAGES[result.reason] || `Transaction failed (${result.reason}).`, "error");
       $("pay").disabled = false;

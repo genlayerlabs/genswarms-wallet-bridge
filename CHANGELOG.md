@@ -45,6 +45,16 @@ scripts stay fixed. No contract changes (`CONTRACT_VERSION` stays `0.2.0`).
   `<h1>` on both pages (`webapp/lib/brand.mjs`); absent, the built-in
   "Fast payments" / "Opening your wallet..." strings stay.
 - Neutral `webapp/favicon.svg` plus `<link rel="icon">` on both pages.
+- Owner-bound order enforcement in the dapp: the intake order view now
+  exposes `expected_owner` (only when the order carries one — it is the
+  wallet the user must pay from, not a secret), and both the permit and
+  `user_tx` paths refuse a mismatched connected wallet with a typed
+  `wrong_wallet` failure — `#pay` hides and `#status` stamps
+  `data-state="error"` with switch-wallet copy, checked at load, on
+  `accountsChanged`, and (load-bearing) again inside each pay path.
+  Previously only the keeper's server-side permit check compared owners; the
+  browser-signed `user_tx` lane never did, so a wallet other than the bound
+  one could pay an order whose payouts go to the bound wallet.
 
 ### Changed
 

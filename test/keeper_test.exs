@@ -147,6 +147,21 @@ defmodule DelegatedSpend.KeeperTest do
     assert {:ok, view} = Keeper.fetch_order(keeper, ref, "u-a")
     assert Map.keys(view) |> Enum.sort() == [:amount, :display, :expires_at, :kind, :order_ref]
     assert view.kind == "permit"
+
+    # owner-bound orders add exactly one field: the wallet they must be paid
+    # from (payer-facing contract, not a secret — the dapp refuses a
+    # mismatched connected account with it)
+    bound = "0x000000000000000000000000000000000000dEaD"
+
+    {:ok, %{order_ref: bref}} =
+      Keeper.register_order(keeper, "market_phase", Map.put(order_req(), :expected_owner, bound))
+
+    assert {:ok, bview} = Keeper.fetch_order(keeper, bref, "u-a")
+
+    assert Map.keys(bview) |> Enum.sort() ==
+             [:amount, :display, :expected_owner, :expires_at, :kind, :order_ref]
+
+    assert bview.expected_owner == bound
   end
 
   test "happy path: submit → sweep(mined) → credited result + spend recorded" do

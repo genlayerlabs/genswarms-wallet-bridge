@@ -386,6 +386,16 @@ defmodule DelegatedSpend.Keeper do
       |> Map.take([:order_ref, :amount, :expires_at])
       |> Map.merge(%{kind: Map.get(order, :kind, "permit"), display: Map.get(order, :display, %{})})
 
+    # An owner binding is part of the payer-facing contract — the wallet the
+    # user must pay from, not a secret — so the dapp can refuse a mismatched
+    # connected account BEFORE anything is signed. Exposed only when set, so
+    # unbound views keep their exact sanitized shape.
+    base =
+      case Map.get(order, :expected_owner) do
+        nil -> base
+        owner -> Map.put(base, :expected_owner, owner)
+      end
+
     if base.kind == "user_tx", do: Map.put(base, :tx, order.tx), else: base
   end
 

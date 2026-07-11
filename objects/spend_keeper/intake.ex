@@ -42,6 +42,15 @@ defmodule DelegatedSpend.Intake do
               "display" => stringify(view.display)
             }
 
+            # Owner-bound orders carry the wallet they must be paid from (an
+            # address the user already knows, not a secret) so the dapp can
+            # refuse a mismatched connected wallet before anything is signed.
+            base =
+              case Map.get(view, :expected_owner) do
+                nil -> base
+                owner -> Map.put(base, "expected_owner", owner)
+              end
+
             body =
               case view.kind do
                 "user_tx" ->

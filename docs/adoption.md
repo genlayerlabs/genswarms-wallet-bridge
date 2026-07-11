@@ -64,7 +64,7 @@ New or changed intake endpoints:
 
 | Handler | Request | Purpose |
 |---|---|---|
-| `handle_order/2` | `{v, token \| init_data, order_ref}` | Fetch kind-aware order views; `user_tx` includes `tx`, `bind` includes `current_wallet`. |
+| `handle_order/2` | `{v, token \| init_data, order_ref}` | Fetch kind-aware order views; `user_tx` includes `tx`, `bind` includes `current_wallet`; owner-bound orders include `expected_owner`. |
 | `handle_wallet/2` | `{v, token \| init_data, bind_ref, address}` | Consume one bind order and call `ctx.wallet_fn.(user_ref, address, bind_ref)`. |
 | `handle_submitted/2` | `{v, token \| init_data, order_ref, tx_hash}` | Best-effort user-tx report through `ctx.submitted_fn.(order_id, tx_hash)`. It has zero crediting authority. |
 
@@ -266,7 +266,12 @@ If your credit machinery scans addresses derived from a wallet-on-file, set
 `require_owner_binding: true` — then a permit signed by any other wallet
 typed-fails, and an order that *loses* its binding (e.g. a storage bug) fails
 CLOSED instead of executing. Set both; the external audit's one critical
-finding (F1) was exactly a SQL adapter dropping this field.
+finding (F1) was exactly a SQL adapter dropping this field. The dapp enforces
+the same binding in the browser: an owner-bound order view carries
+`expected_owner`, and a mismatched connected wallet is refused (typed
+`wrong_wallet`, pay button hidden) before anything is signed — which is the
+ONLY pre-payment check for `user_tx` orders, since the user signs those
+directly and the keeper never sees a permit to compare.
 
 Shape your product seam so every failure is `{:error, _}` and the caller
 renders its UI exactly as before — the app's ordinary payment path is the

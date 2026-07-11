@@ -137,6 +137,35 @@ defmodule DelegatedSpend.IntakeTest do
     assert {404, _} = Intake.handle_order(order_params(ctx, %{"init_data" => other, "order_ref" => ref}), ctx)
   end
 
+  test "order view exposes expected_owner ONLY when the order is owner-bound" do
+    %{ctx: ctx, keeper: keeper} = start_stack()
+
+    # unbound order: no expected_owner key at all
+    ref = register(keeper, @user_id)
+
+    assert {200, body} =
+             Intake.handle_order(order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}), ctx)
+
+    refute Map.has_key?(body, "expected_owner")
+
+    # owner-bound order: the wallet the user must pay from is exposed so the
+    # dapp can refuse a mismatched connected account before anything is signed
+    bound = "0xF39FD6e51aad88F6F4ce6aB8827279cffFb92266"
+
+    {:ok, %{order_ref: bref}} =
+      Keeper.register_order(keeper, "market_phase", %{
+        user_ref: "ref-#{@user_id}",
+        amount: 25_000_000,
+        action_args: [<<7::256>>, 25_000_000, <<9::256>>],
+        expected_owner: bound
+      })
+
+    assert {200, body} =
+             Intake.handle_order(order_params(ctx, %{"init_data" => init_data(), "order_ref" => bref}), ctx)
+
+    assert body["expected_owner"] == bound
+  end
+
   test "client-supplied user_ref is IGNORED — identity comes from initData only" do
     %{ctx: ctx, keeper: keeper} = start_stack()
     ref = register(keeper, @user_id)

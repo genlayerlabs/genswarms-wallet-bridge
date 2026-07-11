@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fetchOrder, runBindFlow, runPermitFlow, runUserTxFlow, walletDappLink } from "../lib/flow.mjs";
+import { fetchOrder, ownerMismatch, runBindFlow, runPermitFlow, runUserTxFlow, shortAddress, walletDappLink, wrongWalletMessage } from "../lib/flow.mjs";
 import { buildGrantEnvelope } from "../lib/permit.mjs";
 
 const CONFIG = {
@@ -335,6 +335,79 @@ test("runUserTxFlow: unsafe numeric value is refused before wallet submission", 
   assert.deepEqual(res, { ok: false, reason: "send_failed" });
   assert.equal(sendCalls, 0);
   assert.equal(fetchFn.posts.filter((p) => p.url.endsWith("/orders/submitted")).length, 0);
+});
+
+test("ownerMismatch: unbound orders never mismatch; bound orders compare case-insensitively", () => {
+  const bound = "0x000000000000000000000000000000000000dEaD";
+  assert.equal(ownerMismatch({}, ACCOUNT), false);
+  assert.equal(ownerMismatch({ expected_owner: null }, ACCOUNT), false);
+  assert.equal(ownerMismatch({ expected_owner: bound }, null), false); // not connected yet
+  assert.equal(ownerMismatch({ expected_owner: ACCOUNT.toLowerCase() }, "0x" + ACCOUNT.slice(2).toUpperCase()), false);
+  assert.equal(ownerMismatch({ expected_owner: bound }, ACCOUNT), true);
+});
+
+test("wrongWalletMessage shortens the bound address middle", () => {
+  assert.equal(shortAddress("0x1234567890abcdef1234567890abcdef1234abcd"), "0x1234…abcd");
+  assert.equal(
+    wrongWalletMessage("0x1234567890abcdef1234567890abcdef1234abcd"),
+    "Wrong wallet connected. Switch to 0x1234…abcd in your wallet, then reload."
+  );
+});
+
+test("owner-bound permit order + wrong connected wallet → wrong_wallet, nothing signed or POSTed to /grants", async () => {
+  const bound = "0x000000000000000000000000000000000000dEaD";
+  const provider = mockProvider();
+  const fetchFn = mockFetch({
+    ...happyRoutes,
+    orders: () => ({ status: 200, json: { ...ORDER, expected_owner: bound } }),
+  });
+
+  const result = await runPermitFlow({ provider, fetchFn, config: CONFIG, initData: "x" }, "oref-1");
+  assert.deepEqual(result, { ok: false, reason: "wrong_wallet", expected: bound });
+  assert.ok(!provider.calls.some((c) => c.method === "eth_signTypedData_v4"));
+  assert.equal(fetchFn.posts.filter((p) => p.url.endsWith("/grants")).length, 0);
+});
+
+test("owner-bound user_tx order + wrong connected wallet → wrong_wallet, nothing sent, no submitted report", async () => {
+  const bound = "0x000000000000000000000000000000000000dEaD";
+  let sendCalls = 0;
+  const provider = mockProvider({
+    eth_sendTransaction: () => {
+      sendCalls += 1;
+      return "0x" + "ef".repeat(32);
+    },
+  });
+  const fetchFn = mockFetch({
+    orders: () => ({
+      status: 200,
+      json: {
+        order_ref: "r1",
+        kind: "user_tx",
+        amount: 0,
+        expires_at: 9_999_999_999,
+        expected_owner: bound,
+        tx: { to: "0x" + "11".repeat(20), data: "0xdeadbeef", value: 0 },
+        display: {},
+      },
+    }),
+  });
+
+  const res = await runUserTxFlow({ provider, fetchFn, config: CONFIG, initData: "", token: "t" }, "r1");
+  assert.deepEqual(res, { ok: false, reason: "wrong_wallet", expected: bound });
+  assert.equal(sendCalls, 0);
+  assert.equal(fetchFn.posts.filter((p) => p.url.endsWith("/orders/submitted")).length, 0);
+});
+
+test("owner-bound order matching the connected wallet (different case) proceeds unchanged", async () => {
+  const provider = mockProvider();
+  const fetchFn = mockFetch({
+    ...happyRoutes,
+    orders: () => ({ status: 200, json: { ...ORDER, expected_owner: ACCOUNT.toLowerCase() } }),
+  });
+
+  const result = await runPermitFlow({ provider, fetchFn, config: CONFIG, initData: "x" }, "oref-1");
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "submitted");
 });
 
 test("runBindFlow: connect → POST /wallet with connected address", async () => {

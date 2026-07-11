@@ -28,6 +28,26 @@ export function walletDappLink(href, prefix = "https://link.metamask.io/dapp/") 
   return prefix + (prefix.includes("?") ? encodeURIComponent(noScheme) : noScheme);
 }
 
+/**
+ * Owner-bound orders (`order.expected_owner`): true when a connected account
+ * is NOT the wallet the order is bound to (case-insensitive). Unbound orders
+ * and a not-yet-connected account never mismatch — connecting is a separate,
+ * already-typed step.
+ */
+export function ownerMismatch(order, account) {
+  const expected = order && order.expected_owner;
+  if (!expected || !account) return false;
+  return expected.toLowerCase() !== account.toLowerCase();
+}
+
+export function shortAddress(address) {
+  return address.length > 12 ? `${address.slice(0, 6)}…${address.slice(-4)}` : address;
+}
+
+export function wrongWalletMessage(expected) {
+  return `Wrong wallet connected. Switch to ${shortAddress(expected)} in your wallet, then reload.`;
+}
+
 export async function fetchOrder(deps, orderRef) {
   const { fetchFn, config } = deps;
   const res = await fetchFn(`${config.intakeUrl}/orders`, {
@@ -113,6 +133,8 @@ export async function runPermitFlow(deps, orderRef) {
 
   const fetched = await fetchOrder(deps, orderRef);
   if (!fetched.ok) return fetched;
+  if (ownerMismatch(fetched.order, conn.account))
+    return { ok: false, reason: "wrong_wallet", expected: fetched.order.expected_owner };
 
   const nonce = await fetchPermitNonce(deps, conn.account);
 
@@ -133,6 +155,11 @@ export async function runUserTxFlow(deps, orderRef) {
   const fetched = await fetchOrder(deps, orderRef);
   if (!fetched.ok) return fetched;
   if (fetched.order.kind !== "user_tx") return { ok: false, reason: "wrong_kind" };
+  // The load-bearing wrong-wallet check: paying an owner-bound order from a
+  // different account debits that account while payouts go to the bound
+  // wallet (and sells revert on-chain). Refuse before the wallet ever opens.
+  if (ownerMismatch(fetched.order, conn.account))
+    return { ok: false, reason: "wrong_wallet", expected: fetched.order.expected_owner };
 
   let tx;
   try {
