@@ -570,4 +570,68 @@ defmodule DelegatedSpend.KeeperTest do
       assert :unknown = Keeper.order_status(keeper, "missing")
     end
   end
+
+  describe "sweep timer and status-door edges" do
+    test "timer-driven sweep (handle_info :sweep) settles and re-arms — the production path" do
+      %{keeper: keeper, fake: fake, signer: signer} = start_stack()
+
+      {:ok, %{order_ref: ref, order_id: oid}} =
+        Keeper.register_order(keeper, "market_phase", order_req())
+
+      {:submitted, hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+      FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
+      Signer.sweep_now(signer)
+      # the timer tick itself, not the sweep_now call door — in production this
+      # is the ONLY thing that settles orders nobody polls
+      send(keeper, :sweep)
+      assert_receive {:result, {^oid, {:credited, ^hash}}}
+      # stray mail is ignored and the keeper keeps serving
+      send(keeper, :bogus)
+      assert {:ok, _} = Keeper.register_order(keeper, "market_phase", order_req())
+    end
+
+    test "sweep skips a still-pending tx: no result delivered, row stays inflight" do
+      %{keeper: keeper, store: store, signer: signer} = start_stack()
+
+      {:ok, %{order_ref: ref, order_id: oid}} =
+        Keeper.register_order(keeper, "market_phase", order_req())
+
+      {:submitted, hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+      # no receipt in the fake → the tx is still mineable; a sweep must not settle it
+      Signer.sweep_now(signer)
+      Keeper.sweep_now(keeper)
+      refute_receive {:result, _}, 100
+      assert Enum.any?(MemoryStore.list_inflight(store), &(&1.order_id == oid))
+      assert {:submitted, ^hash} = Keeper.order_status(keeper, oid)
+    end
+
+    test "order_status reads a signer-known failure before the keeper sweeps it" do
+      %{keeper: keeper, fake: fake, signer: signer} = start_stack()
+
+      {:ok, %{order_ref: ref, order_id: oid}} =
+        Keeper.register_order(keeper, "market_phase", order_req())
+
+      {:submitted, hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+      FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x0"}})
+      Signer.sweep_now(signer)
+      # the keeper has NOT swept: its results map is empty, so the status door
+      # must ask the signer and report the revert instead of :unknown
+      assert Keeper.order_status(keeper, oid) == {:failed, :reverted}
+    end
+
+    test "rpc_timeout neither punishes nor clears the revert streak (§5.2.1 comment pin)" do
+      %{fake: fake, keeper: keeper} = start_backoff_stack(2)
+
+      {:ok, %{order_ref: r1}} = Keeper.register_order(keeper, "market_phase", order_req())
+      assert {:failed, :reverted} = Keeper.execute_with_permit(keeper, r1, "u-a", permit(25_000_000))
+      assert Keeper.backoff_count(keeper, "u-a") == 1
+
+      # broadcast failure → terminal rpc_timeout; the streak must stay at 1
+      FakeRpc.put(fake, :simulate, :ok)
+      FakeRpc.put(fake, :send_raw_fail, :nonce_race)
+      {:ok, %{order_ref: r2}} = Keeper.register_order(keeper, "market_phase", order_req())
+      assert {:failed, :rpc_timeout} = Keeper.execute_with_permit(keeper, r2, "u-a", permit(25_000_000))
+      assert Keeper.backoff_count(keeper, "u-a") == 1
+    end
+  end
 end

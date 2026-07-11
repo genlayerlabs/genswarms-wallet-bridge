@@ -10,6 +10,9 @@ defmodule GenswarmsDelegatedSpend.MixProject do
       elixir: "~> 1.14",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      # Coverage ratchet (CI runs `mix test --cover`): the keeper sits at ~98%;
+      # the build fails if the total regresses below the threshold.
+      test_coverage: [summary: [threshold: 95]],
       deps: deps()
     ]
   end

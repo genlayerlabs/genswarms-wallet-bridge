@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.FakeRpc.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/test/support/fake_rpc.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-10 at 23:34:54</p></footer>
+<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/test/support/fake_rpc.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-11 at 10:15:16</p></footer>
 <table>
 <tbody>
 <tr>
@@ -185,12 +185,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L9"><a href="#L9">9</a></td>
-<td class="hits">90</td>
+<td class="hits">94</td>
 <td class="source"><code>    {:ok, pid} = Agent.start_link(fn -&gt; Map.merge(%{sent: [], receipts: %{}}, config) end)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L10"><a href="#L10">10</a></td>
-<td class="hits">90</td>
+<td class="hits">94</td>
 <td class="source"><code>    pid</code></td>
 </tr>
 <tr>
@@ -210,7 +210,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L14"><a href="#L14">14</a></td>
-<td class="hits">26</td>
+<td class="hits">30</td>
 <td class="source"><code>  def put(pid, key, value), do: Agent.update(pid, &amp;Map.put(&amp;1, key, value))</code></td>
 </tr>
 <tr>
@@ -250,12 +250,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L22"><a href="#L22">22</a></td>
-<td class="hits">93</td>
+<td class="hits">97</td>
 <td class="source"><code>  def chain_id(pid), do: Agent.get(pid, &amp; &amp;1.chain_id)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L23"><a href="#L23">23</a></td>
-<td class="hits">89</td>
+<td class="hits">93</td>
 <td class="source"><code>  def nonce(pid, _addr), do: Agent.get(pid, &amp; &amp;1.nonce)</code></td>
 </tr>
 <tr>
@@ -270,7 +270,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L26"><a href="#L26">26</a></td>
-<td class="hits">36</td>
+<td class="hits">40</td>
 <td class="source"><code>    if Agent.get(pid, &amp;Map.get(&amp;1, :fees_raise, false)), do: raise("simulated fees RPC failure")</code></td>
 </tr>
 <tr>
@@ -290,12 +290,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L30"><a href="#L30">30</a></td>
-<td class="hits">35</td>
+<td class="hits">39</td>
 <td class="source"><code>  def base_fee(_pid), do: 10_000_000_000</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L31"><a href="#L31">31</a></td>
-<td class="hits">37</td>
+<td class="hits">41</td>
 <td class="source"><code>  def estimate_gas(pid, _tx), do: {:ok, Agent.get(pid, &amp;Map.get(&amp;1, :gas, 100_000))}</code></td>
 </tr>
 <tr class="hit">
@@ -330,17 +330,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L38"><a href="#L38">38</a></td>
-<td class="hits">43</td>
+<td class="hits">48</td>
 <td class="source"><code>    case Agent.get(pid, &amp; &amp;1.simulate) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L39"><a href="#L39">39</a></td>
-<td class="hits">36</td>
+<td class="hits">40</td>
 <td class="source"><code>      :ok -&gt; {:ok, "0x"}</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L40"><a href="#L40">40</a></td>
-<td class="hits">7</td>
+<td class="hits">8</td>
 <td class="source"><code>      {:revert, info} -&gt; {:error, info}</code></td>
 </tr>
 <tr>
@@ -365,7 +365,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L45"><a href="#L45">45</a></td>
-<td class="hits">38</td>
+<td class="hits">42</td>
 <td class="source"><code>    case Agent.get(pid, &amp;Map.get(&amp;1, :send_raw_fail)) do</code></td>
 </tr>
 <tr>
@@ -375,7 +375,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L47"><a href="#L47">47</a></td>
-<td class="hits">35</td>
+<td class="hits">38</td>
 <td class="source"><code>        Agent.update(pid, &amp;%{&amp;1 | sent: [raw | &amp;1.sent]})</code></td>
 </tr>
 <tr>
@@ -390,7 +390,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L50"><a href="#L50">50</a></td>
-<td class="hits">3</td>
+<td class="hits">4</td>
 <td class="source"><code>      reason -&gt;</code></td>
 </tr>
 <tr>
@@ -420,7 +420,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L56"><a href="#L56">56</a></td>
-<td class="hits">21</td>
+<td class="hits">24</td>
 <td class="source"><code>    if Agent.get(pid, &amp;Map.get(&amp;1, :receipt_raises, false)),</code></td>
 </tr>
 <tr class="hit">
@@ -435,7 +435,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L59"><a href="#L59">59</a></td>
-<td class="hits">20</td>
+<td class="hits">23</td>
 <td class="source"><code>    Agent.get(pid, &amp;Map.get(&amp;1.receipts, hash))</code></td>
 </tr>
 <tr>
