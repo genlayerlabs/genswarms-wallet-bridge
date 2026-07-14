@@ -50,7 +50,7 @@ test("compliance messages are exact", () => {
 test("terms controls are hidden and accessible with a safely opened link", async () => {
   const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   assert.match(html, /<div id="terms" hidden>/);
-  assert.match(html, /<a id="terms-link" target="_blank" rel="noopener">[^<]+<\/a>/);
+  assert.match(html, /<a id="terms-link" target="_blank" rel="noopener noreferrer">[^<]+<\/a>/);
   assert.match(html, /<button id="terms-accept"[^>]*>[^<]+<\/button>/);
 });
 
