@@ -403,6 +403,34 @@ Money-lane bookkeeping should not be in-memory-only in production —
   for gas only. See `.env.example` for the full environment template,
   including which values are required vs optional.
 
+## 6. Compliance layer
+
+### Session/cookie evidence
+
+The consuming app owns the first-party session cookie. Its Plug mints and
+reads that cookie, then passes only its value as `meta.session_id` to
+`handle_order/3`, `handle_grant/3`, `handle_wallet/3`, or
+`handle_submitted/3`. Use exactly these cookie attributes:
+`HttpOnly; Secure; SameSite=Lax; Path=/`.
+
+The package does not mint, read, or manage cookies. It only normalizes,
+carries, and stores `session_id` through the configured compliance adapter.
+Session evidence therefore requires same-origin intake. The current deployment
+posture already uses the same-origin `intakeUrl` `/spend`; browser fetch
+defaults send first-party cookies on same-origin requests, so no wallet-dapp
+change or explicit `credentials` option is needed.
+
+`session_id: nil` is valid and expected evidence: Telegram webviews, ITP,
+privacy settings, or disabled cookies may drop it. Legal must approve nullable
+session evidence. When present, the session id must be opaque. Compliance
+adapters must never store or log raw `initData`, access tokens, Telegram or
+other platform ids, or authentication request bodies.
+
+Legacy two-arity intake handlers cannot supply session evidence. They delegate
+with empty metadata, and configured compliance already denies a missing country
+fail-closed. Production compliance deployments must use the three-arity
+handlers.
+
 ## The testing bar
 
 **Your router is not adopted until the inherited invariant suite passes.**
