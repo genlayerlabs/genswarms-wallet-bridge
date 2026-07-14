@@ -31,6 +31,14 @@ export const MESSAGES = {
   terms_stale: "The terms were updated — please review and accept the new version.",
 };
 
+function showManual(order, get = $) {
+  const manual = order?.kind === "permit" && order.display?.manual;
+  if (!manual) return;
+  get("manual-address").textContent = manual.address;
+  get("manual-amount").textContent = `Send exactly ${(manual.amount / 1_000_000).toFixed(2)} USDC on Base to:`;
+  get("manual").hidden = false;
+}
+
 function enterGeoDeadState(target, get = $) {
   get("pay").hidden = true;
   get("terms").hidden = true;
@@ -74,6 +82,10 @@ export function showTermsPrompt(deps, { account, terms, ref, retry }, get = $, a
       result = { ok: false, reason: "request_failed" };
     }
     if (result.ok) {
+      try {
+        const refreshed = await fetchOrder(deps, ref);
+        if (refreshed.ok) showManual(refreshed.order, get);
+      } catch (_) {}
       box.hidden = true;
       pay.hidden = false;
       await retry();
@@ -174,12 +186,7 @@ async function enforceOwnerAtLoad(deps, order) {
 async function setupPermit(deps, order, orderRef, tg) {
   const amount = (order.amount / 1_000_000).toFixed(2);
   $("summary").textContent = `${deps.config.actionLabel}: ${amount} USDC (gasless — the operator pays network fees).`;
-  const manual = order.display && order.display.manual;
-  if (manual) {
-    $("manual-address").textContent = manual.address;
-    $("manual-amount").textContent = `Send exactly ${(manual.amount / 1_000_000).toFixed(2)} USDC on Base to:`;
-    $("manual").hidden = false;
-  }
+  showManual(order);
   if (!(await enforceOwnerAtLoad(deps, order))) return;
   $("pay").disabled = false;
 

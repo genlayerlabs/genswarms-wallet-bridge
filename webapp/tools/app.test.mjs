@@ -13,6 +13,8 @@ function fakeDom() {
     "terms-accept": { disabled: false, onclick: null },
     pay: { hidden: false, disabled: false },
     manual: { hidden: false },
+    "manual-address": { textContent: "" },
+    "manual-amount": { textContent: "" },
     status: { textContent: "", dataset: {} },
   };
   return { elements, get: (id) => elements[id] };
@@ -86,6 +88,42 @@ test("terms prompt wires URL/hash/ref/account and retries the original action af
   assert.deepEqual(calls, [{ deps, args: { account: ACCOUNT, vHash: HASH, ref: "oref-1" } }]);
   assert.equal(elements.terms.hidden, true);
   assert.equal(elements.pay.hidden, false);
+  assert.equal(retries, 1);
+});
+
+test("accepted terms restore the server-authorized manual fallback before retry", async () => {
+  const { elements, get } = fakeDom();
+  const manual = {
+    address: "0x0000000000000000000000000000000000000001",
+    amount: 2_500_000,
+  };
+  const deps = {
+    config: { intakeUrl: "/spend", version: "0.5.0" },
+    initData: "signed-init-data",
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({ kind: "permit", display: { manual } }),
+    }),
+  };
+  let retries = 0;
+
+  showTermsPrompt(
+    deps,
+    {
+      account: ACCOUNT,
+      terms: { url: "https://example.test/terms", v_hash: HASH },
+      ref: "oref-1",
+      retry: async () => { retries += 1; },
+    },
+    get,
+    async () => ({ ok: true, status: "accepted", vHash: HASH })
+  );
+
+  await elements["terms-accept"].onclick();
+
+  assert.equal(elements.manual.hidden, false);
+  assert.equal(elements["manual-address"].textContent, manual.address);
+  assert.equal(elements["manual-amount"].textContent, "Send exactly 2.50 USDC on Base to:");
   assert.equal(retries, 1);
 });
 
