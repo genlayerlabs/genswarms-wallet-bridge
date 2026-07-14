@@ -119,7 +119,7 @@ defmodule DelegatedSpend.Keeper.Object do
       },
       order_status: %{
         input: "JSON {action: order_status, order_id}",
-        output: "JSON {ok, status: unknown|submitted|credited|failed, ...}"
+        output: "JSON {ok, status: unknown|pending|submitted|mined|failed, ...}"
       },
       reset_backoff: %{
         input: "JSON {action: reset_backoff, user_ref}",
@@ -161,8 +161,9 @@ defmodule DelegatedSpend.Keeper.Object do
        when is_binary(order_id) do
     case Keeper.order_status(state.keeper, order_id) do
       :unknown -> %{"ok" => true, "status" => "unknown"}
+      :pending -> %{"ok" => true, "status" => "pending"}
       {:submitted, hash} -> %{"ok" => true, "status" => "submitted", "tx" => hash}
-      {:credited, hash} -> %{"ok" => true, "status" => "credited", "tx" => hash}
+      {:mined, hash} -> %{"ok" => true, "status" => "mined", "tx" => hash}
       {:failed, reason} -> %{"ok" => true, "status" => "failed", "reason" => to_string(reason)}
     end
   end

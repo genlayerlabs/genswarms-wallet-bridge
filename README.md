@@ -76,10 +76,13 @@ Hermetic: `mix test`. Real-EVM: `mix run test/e2e/anvil_permit_lane.exs`
 ## Registry + intake (Elixir)
 
 `DelegatedSpend.Keeper` owns server-authoritative orders (immutable, atomic
-single consumption, TTL checked immediately before broadcast) and typed
-results (`{:credited, tx}` = MINED, display-only until the app's own
-confirmation depth). Order registration authority is the runtime ENVELOPE
-SENDER checked against an allowlist — payload-claimed identity is inert.
+single consumption, TTL checked immediately before broadcast) while
+`DelegatedSpend.Keeper.Store` owns durable technical status: `:pending`,
+`{:submitted, tx}`, `{:mined, tx}`, or `{:failed, reason}`. `:unknown` means no
+execution status is retained. `mined` means one successful receipt, not
+confirmation depth or product credit. Order registration authority is the
+runtime ENVELOPE SENDER checked against an allowlist — payload-claimed
+identity is inert.
 
 The keeper is a functional core with two doors. `DelegatedSpend.Keeper.Object`
 is the GenSwarms object door (`swarmidx.json` points at it): other swarm
@@ -92,7 +95,9 @@ put an answer in an HTTP response; end-user authority there is the platform
 auth, not swarm identity.
 `DelegatedSpend.Keeper.Store` is the behaviour apps implement
 (`MemoryStore` is the reference semantics; production apps ship their own
-SQL adapter against it). `DelegatedSpend.Intake` ships PURE HTTP handlers (the
+SQL adapter against it). Execution start and terminal resolution are atomic,
+restart-safe store operations; durable polling is the recovery path when a
+best-effort callback is lost. `DelegatedSpend.Intake` ships PURE HTTP handlers (the
 app supplies serving + fail-closed bind): Telegram `initData` HMAC with
 freshness or ref-scoped access tokens, `user_ref` derived only from verified
 identity, strict byte-for-byte grant validation against pinned config, dapp

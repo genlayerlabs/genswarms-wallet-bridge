@@ -28,28 +28,32 @@ defmodule DelegatedSpend.KeeperTest do
         chain_id: 84_532,
         priv: @anvil0,
         rpc_mod: FakeRpc,
-        sweep_ms: 3_600_000
+        sweep_ms: 3_600_000,
+        bump_after_ms: Map.get(overrides, :bump_after_ms, 30_000)
       )
 
     store = MemoryStore.start()
-    parent = self()
-
-    {:ok, keeper} =
-      Keeper.start_link(
-        signer: signer,
-        chain_id: 84_532,
-        store: {MemoryStore, store},
-        router: @router,
-        action: @action,
-        source_allowlist: ["market_phase"],
-        order_ttl_s: Map.get(overrides, :ttl, 600),
-        result_fn: fn r -> send(parent, {:result, r}) end,
-        rpc_mod: FakeRpc,
-        rpc: fake,
-        sweep_ms: 3_600_000
-      )
+    {:ok, keeper} = start_keeper(fake, signer, store, overrides)
 
     %{fake: fake, signer: signer, store: store, keeper: keeper}
+  end
+
+  defp start_keeper(fake, signer, store, overrides \\ %{}) do
+    parent = self()
+
+    Keeper.start_link(
+      signer: signer,
+      chain_id: 84_532,
+      store: {MemoryStore, store},
+      router: @router,
+      action: @action,
+      source_allowlist: ["market_phase"],
+      order_ttl_s: Map.get(overrides, :ttl, 600),
+      result_fn: Map.get(overrides, :result_fn, fn r -> send(parent, {:result, r}) end),
+      rpc_mod: FakeRpc,
+      rpc: fake,
+      sweep_ms: 3_600_000
+    )
   end
 
   defp order_req, do: %{user_ref: "u-a", amount: 25_000_000, action_args: [<<7::256>>, 25_000_000, <<9::256>>]}
@@ -114,7 +118,7 @@ defmodule DelegatedSpend.KeeperTest do
     store = MemoryStore.start()
     order = %{order_id: "0xdead", order_ref: String.duplicate("aa", 32), user_ref: "u-a", amount: 5, action_args: [], expires_at: 4_000_000_000}
     :ok = MemoryStore.put_order(store, order)
-    :ok = MemoryStore.put_inflight(store, "0xdead", "0xdead")
+    assert {:ok, _} = MemoryStore.begin_execution(store, "0xdead", "u-a", "0xdead")
     :ok = MemoryStore.update_inflight_hash(store, "0xdead", "0xhash")
     FakeRpc.put(fake, :receipts, %{"0xhash" => %{"status" => "0x1"}})
     parent = self()
@@ -137,7 +141,7 @@ defmodule DelegatedSpend.KeeperTest do
       )
 
     assert Process.whereis(:spend_keeper_named_test) == keeper
-    assert_receive {:result, {"0xdead", {:credited, "0xhash"}}}, 1_000
+    assert_receive {:result, {"0xdead", {:mined, "0xhash"}}}, 1_000
     # and the keeper answers by name
     assert {:ok, _} = Keeper.register_order(:spend_keeper_named_test, "market_phase", order_req())
   end
@@ -172,7 +176,7 @@ defmodule DelegatedSpend.KeeperTest do
     assert bview.expected_owner == bound
   end
 
-  test "happy path: submit → sweep(mined) → credited result + spend recorded" do
+  test "happy path: submit → sweep → mined result + spend recorded" do
     %{keeper: keeper, fake: fake, store: store, signer: signer} = start_stack()
 
     {:ok, %{order_ref: ref, order_id: oid}} =
@@ -182,9 +186,11 @@ defmodule DelegatedSpend.KeeperTest do
     FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
     Signer.sweep_now(signer)
     Keeper.sweep_now(keeper)
-    assert_receive {:result, {^oid, {:credited, ^hash}}}
-    assert Keeper.order_status(keeper, oid) == {:credited, hash}
+    assert_receive {:result, {^oid, {:mined, ^hash}}}
+    assert Keeper.order_status(keeper, oid) == {:mined, hash}
     assert MemoryStore.spent_since(store, "u-a", 0) == 25_000_000
+    Keeper.sweep_now(keeper)
+    refute_receive {:result, {^oid, _}}, 50
   end
 
   test "expired order: typed failure, nothing consumed, nothing broadcast" do
@@ -244,26 +250,104 @@ defmodule DelegatedSpend.KeeperTest do
     assert_receive {:result, {^oid, {:failed, :reverted}}}
   end
 
-  test "boot reconciliation: mined-while-down delivers a late credited result" do
-    %{keeper: keeper, fake: fake} = start_stack()
+  test "boot reconciliation persists mined before delivering the late result" do
+    %{keeper: keeper, fake: fake, signer: signer, store: store} = start_stack()
 
     {:ok, %{order_ref: ref, order_id: oid}} =
       Keeper.register_order(keeper, "market_phase", order_req())
 
     {:submitted, hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
-    # "keeper was down while it mined": receipt exists, the run-time sweep
-    # never fired; reconcile queries receipts for every inflight tx hash.
+    GenServer.stop(keeper)
     FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
-    :ok = Keeper.reconcile_boot(keeper)
-    assert_receive {:result, {^oid, {:credited, ^hash}}}
+    parent = self()
+
+    {:ok, restarted} =
+      start_keeper(fake, signer, store, %{
+        result_fn: fn {order_id, result} = notification ->
+          send(parent, {:result, notification, MemoryStore.get_execution_status(store, order_id), result})
+        end
+      })
+
+    :ok = Keeper.reconcile_boot(restarted)
+    assert_receive {:result, {^oid, {:mined, ^hash}}, {:mined, ^hash}, {:mined, ^hash}}
+    assert {:mined, ^hash} = Keeper.order_status(restarted, oid)
+  end
+
+  test "fee-bumped replacement remains reconcilable after signer and keeper restart" do
+    %{keeper: keeper, fake: fake, signer: signer, store: store} =
+      start_stack(%{bump_after_ms: 0})
+
+    {:ok, %{order_ref: ref, order_id: oid}} =
+      Keeper.register_order(keeper, "market_phase", order_req())
+
+    assert {:submitted, original_hash} =
+             Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+
+    Process.sleep(5)
+    :ok = Signer.sweep_now(signer)
+    assert {:pending, replacement_hash} = Signer.status(signer, oid)
+    refute replacement_hash == original_hash
+
+    GenServer.stop(keeper)
+    GenServer.stop(signer)
+    FakeRpc.put(fake, :receipts, %{replacement_hash => %{"status" => "0x1"}})
+
+    {:ok, restarted_signer} =
+      Signer.start_link(
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000
+      )
+
+    {:ok, restarted} =
+      Keeper.start_link(
+        signer: restarted_signer,
+        chain_id: 84_532,
+        store: {MemoryStore, store},
+        router: @router,
+        action: @action,
+        source_allowlist: ["market_phase"],
+        order_ttl_s: 600,
+        sweep_ms: 3_600_000
+      )
+
+    :ok = Keeper.sweep_now(restarted)
+
+    assert {:mined, ^replacement_hash} = Keeper.order_status(restarted, oid)
+  end
+
+  test "raising, exiting, and throwing result callbacks are logged and never crash the keeper" do
+    Process.flag(:trap_exit, true)
+
+    callbacks = [
+      raise: fn _ -> raise "offline" end,
+      exit: fn _ -> exit(:offline) end,
+      throw: fn _ -> throw(:offline) end
+    ]
+
+    for {_kind, callback} <- callbacks do
+      %{keeper: keeper} = start_stack(%{simulate: {:revert, %{"message" => "no"}}, result_fn: callback})
+      {:ok, %{order_ref: ref, order_id: oid}} = Keeper.register_order(keeper, "market_phase", order_req())
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:failed, :reverted} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+          assert Process.alive?(keeper)
+        end)
+
+      assert log =~ oid
+      assert log =~ "failed"
+    end
   end
 
   test "boot reconciliation: inflight with no hash stays PENDING (never falsely failed)" do
     %{keeper: keeper, store: store} = start_stack()
 
     {:ok, %{order_id: oid}} = Keeper.register_order(keeper, "market_phase", order_req())
-    # crash after consume+put_inflight but before broadcast: no tx hash yet.
-    :ok = MemoryStore.put_inflight(store, oid, oid)
+    # crash after begin_execution but before broadcast: no tx hash yet.
+    assert {:ok, _} = MemoryStore.begin_execution(store, oid, "u-a", oid)
     :ok = Keeper.reconcile_boot(keeper)
     # NO result is delivered — marking it failed here could double-pay via the
     # fallback lane while the tx is still mineable. The row stays inflight.
@@ -364,12 +448,37 @@ defmodule DelegatedSpend.KeeperTest do
     assert MemoryStore.spent_since(store, "u-a", 0) == 0
   end
 
-  test "submit error (broadcast failure) maps to a terminal {:failed, :rpc_timeout}" do
-    %{keeper: keeper, fake: fake} = start_stack(%{send_raw_fail: :nonce_race})
+  test "broadcast error remains submitted because node acceptance is unknowable" do
+    %{keeper: keeper, fake: fake, store: store} = start_stack(%{send_raw_fail: :nonce_race})
     {:ok, %{order_ref: ref, order_id: oid}} = Keeper.register_order(keeper, "market_phase", order_req())
-    assert {:failed, :rpc_timeout} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+    assert {:submitted, hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
     assert FakeRpc.sent(fake) == []
-    assert_receive {:result, {^oid, {:failed, :rpc_timeout}}}
+    assert {:submitted, ^hash} = Keeper.order_status(keeper, oid)
+    assert [%{order_id: ^oid, tx_hashes: [^hash]}] = MemoryStore.list_inflight(store)
+    refute_receive {:result, {^oid, {:failed, :rpc_timeout}}}
+  end
+
+  test "accepted transaction remains submitted when the RPC response is lost" do
+    %{keeper: keeper, fake: fake, signer: signer, store: store} =
+      start_stack(%{send_raw_fail: {:accepted, :rpc_timeout}})
+
+    {:ok, %{order_ref: ref, order_id: oid}} =
+      Keeper.register_order(keeper, "market_phase", order_req())
+
+    assert {:submitted, hash} =
+             Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+
+    assert length(FakeRpc.sent(fake)) == 1
+    refute_receive {:result, {^oid, {:failed, :rpc_timeout}}}
+
+    GenServer.stop(keeper)
+    GenServer.stop(signer)
+    FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
+
+    {:ok, restarted} = start_keeper(fake, nil, store)
+    :ok = Keeper.sweep_now(restarted)
+
+    assert {:mined, ^hash} = Keeper.order_status(restarted, oid)
   end
 
   test "reconcile_boot: a 0x0 receipt settles failed; a no-receipt hash stays pending" do
@@ -391,6 +500,76 @@ defmodule DelegatedSpend.KeeperTest do
     # B has no receipt → must NOT be settled; it stays inflight
     refute_receive {:result, {^oidB, _}}, 100
     assert Enum.any?(MemoryStore.list_inflight(store), &(&1.order_id == oidB))
+  end
+
+  test "durable reconciliation prefers direct RPC when the signer is unavailable" do
+    Process.flag(:trap_exit, true)
+    fake = FakeRpc.start(%{chain_id: 84_532, nonce: 0, simulate: :ok})
+    store = MemoryStore.start()
+
+    order = %{
+      order_id: "direct-rpc-order",
+      order_ref: String.duplicate("ab", 32),
+      user_ref: "u-a",
+      amount: 5,
+      action_args: [],
+      expires_at: 4_000_000_000
+    }
+
+    :ok = MemoryStore.put_order(store, order)
+    assert {:ok, _} = MemoryStore.begin_execution(store, order.order_id, "u-a", order.order_id)
+    :ok = MemoryStore.update_inflight_hash(store, order.order_id, "0xdirect")
+    FakeRpc.put(fake, :receipts, %{"0xdirect" => %{"status" => "0x1"}})
+
+    {:ok, keeper} =
+      Keeper.start_link(
+        signer: :unavailable_signer_with_direct_rpc,
+        chain_id: 84_532,
+        store: {MemoryStore, store},
+        router: @router,
+        action: @action,
+        source_allowlist: ["market_phase"],
+        order_ttl_s: 600,
+        rpc_mod: FakeRpc,
+        rpc: fake,
+        sweep_ms: 3_600_000
+      )
+
+    assert :ok = Keeper.sweep_now(keeper)
+    assert {:mined, "0xdirect"} = Keeper.order_status(keeper, order.order_id)
+  end
+
+  test "durable reconciliation shields an unavailable signer fallback" do
+    Process.flag(:trap_exit, true)
+    store = MemoryStore.start()
+
+    order = %{
+      order_id: "signer-fallback-order",
+      order_ref: String.duplicate("ac", 32),
+      user_ref: "u-a",
+      amount: 5,
+      action_args: [],
+      expires_at: 4_000_000_000
+    }
+
+    :ok = MemoryStore.put_order(store, order)
+    assert {:ok, _} = MemoryStore.begin_execution(store, order.order_id, "u-a", order.order_id)
+    :ok = MemoryStore.update_inflight_hash(store, order.order_id, "0xfallback")
+
+    {:ok, keeper} =
+      Keeper.start_link(
+        signer: :unavailable_signer_fallback,
+        chain_id: 84_532,
+        store: {MemoryStore, store},
+        router: @router,
+        action: @action,
+        source_allowlist: ["market_phase"],
+        order_ttl_s: 600,
+        sweep_ms: 3_600_000
+      )
+
+    assert :ok = Keeper.reconcile_boot(keeper)
+    assert {:submitted, "0xfallback"} = Keeper.order_status(keeper, order.order_id)
   end
 
   defp start_backoff_stack(max) do
@@ -440,7 +619,7 @@ defmodule DelegatedSpend.KeeperTest do
     assert {:submitted, _} = Keeper.execute_with_permit(keeper, ref4, "u-a", permit(25_000_000))
   end
 
-  test "revert backoff: a credited spend resets the streak" do
+  test "revert backoff: a mined spend resets the streak" do
     %{fake: fake, signer: signer, keeper: keeper} = start_backoff_stack(2)
 
     {:ok, %{order_ref: r1}} = Keeper.register_order(keeper, "market_phase", order_req())
@@ -457,16 +636,59 @@ defmodule DelegatedSpend.KeeperTest do
     assert Keeper.backoff_count(keeper, "u-a") == 0
   end
 
-  test "post-terminal retry: after credited, re-execute returns the recorded result, no re-broadcast" do
-    %{keeper: keeper, fake: fake, store: _store, signer: signer} = start_stack()
+  test "keeper restart preserves pending, submitted, mined, and failed without rebroadcast" do
+    %{keeper: keeper, fake: fake, store: store, signer: signer} = start_stack()
+
+    {:ok, %{order_ref: pending_ref, order_id: pending_id}} =
+      Keeper.register_order(keeper, "market_phase", order_req())
+
+    assert {:ok, _} = MemoryStore.begin_execution(store, pending_id, "u-a", pending_id)
+
+    {:ok, %{order_ref: submitted_ref, order_id: submitted_id}} =
+      Keeper.register_order(keeper, "market_phase", order_req())
+
+    assert {:submitted, submitted_hash} = Keeper.execute_with_permit(keeper, submitted_ref, "u-a", permit(25_000_000))
+
+    {:ok, %{order_ref: mined_ref, order_id: mined_id}} =
+      Keeper.register_order(keeper, "market_phase", order_req())
+
+    assert {:submitted, mined_hash} = Keeper.execute_with_permit(keeper, mined_ref, "u-a", permit(25_000_000))
+
+    FakeRpc.put(fake, :receipts, %{mined_hash => %{"status" => "0x1"}})
+    Signer.sweep_now(signer)
+    Keeper.sweep_now(keeper)
+    assert_receive {:result, {^mined_id, {:mined, ^mined_hash}}}
+
+    FakeRpc.put(fake, :simulate, {:revert, %{"message" => "no"}})
+    {:ok, %{order_ref: failed_ref, order_id: failed_id}} = Keeper.register_order(keeper, "market_phase", order_req())
+    assert {:failed, :reverted} = Keeper.execute_with_permit(keeper, failed_ref, "u-a", permit(25_000_000))
+    assert_receive {:result, {^failed_id, {:failed, :reverted}}}
+
+    sent_before_restart = length(FakeRpc.sent(fake))
+    GenServer.stop(keeper)
+    {:ok, restarted} = start_keeper(fake, nil, store)
+
+    assert :pending = Keeper.order_status(restarted, pending_id)
+    assert {:submitted, ^submitted_hash} = Keeper.order_status(restarted, submitted_id)
+    assert {:mined, ^mined_hash} = Keeper.order_status(restarted, mined_id)
+    assert {:failed, :reverted} = Keeper.order_status(restarted, failed_id)
+
+    assert :pending = Keeper.execute_with_permit(restarted, pending_ref, "u-a", permit(25_000_000))
+    assert {:submitted, ^submitted_hash} = Keeper.execute_with_permit(restarted, submitted_ref, "u-a", permit(25_000_000))
+    assert {:mined, ^mined_hash} = Keeper.execute_with_permit(restarted, mined_ref, "u-a", permit(25_000_000))
+    assert {:failed, :reverted} = Keeper.execute_with_permit(restarted, failed_ref, "u-a", permit(25_000_000))
+    assert length(FakeRpc.sent(fake)) == sent_before_restart
+  end
+
+  test "post-terminal retry returns the durable mined result without rebroadcast" do
+    %{keeper: keeper, fake: fake, signer: signer} = start_stack()
     {:ok, %{order_ref: ref, order_id: oid}} = Keeper.register_order(keeper, "market_phase", order_req())
     {:submitted, hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
     FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
     Signer.sweep_now(signer)
     Keeper.sweep_now(keeper)
-    assert_receive {:result, {^oid, {:credited, ^hash}}}
-    # retry AFTER terminal settle → recorded result from the results map, no new tx
-    assert {:credited, ^hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+    assert_receive {:result, {^oid, {:mined, ^hash}}}
+    assert {:mined, ^hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
     assert length(FakeRpc.sent(fake)) == 1
   end
 
@@ -624,7 +846,7 @@ defmodule DelegatedSpend.KeeperTest do
       # the timer tick itself, not the sweep_now call door — in production this
       # is the ONLY thing that settles orders nobody polls
       send(keeper, :sweep)
-      assert_receive {:result, {^oid, {:credited, ^hash}}}
+      assert_receive {:result, {^oid, {:mined, ^hash}}}
       # stray mail is ignored and the keeper keeps serving
       send(keeper, :bogus)
       assert {:ok, _} = Keeper.register_order(keeper, "market_phase", order_req())
@@ -645,7 +867,7 @@ defmodule DelegatedSpend.KeeperTest do
       assert {:submitted, ^hash} = Keeper.order_status(keeper, oid)
     end
 
-    test "order_status reads a signer-known failure before the keeper sweeps it" do
+    test "order_status remains store-authoritative until the keeper persists signer status" do
       %{keeper: keeper, fake: fake, signer: signer} = start_stack()
 
       {:ok, %{order_ref: ref, order_id: oid}} =
@@ -654,8 +876,8 @@ defmodule DelegatedSpend.KeeperTest do
       {:submitted, hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
       FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x0"}})
       Signer.sweep_now(signer)
-      # the keeper has NOT swept: its results map is empty, so the status door
-      # must ask the signer and report the revert instead of :unknown
+      assert Keeper.order_status(keeper, oid) == {:submitted, hash}
+      Keeper.sweep_now(keeper)
       assert Keeper.order_status(keeper, oid) == {:failed, :reverted}
     end
 
@@ -666,9 +888,9 @@ defmodule DelegatedSpend.KeeperTest do
       assert {:failed, :reverted} = Keeper.execute_with_permit(keeper, r1, "u-a", permit(25_000_000))
       assert Keeper.backoff_count(keeper, "u-a") == 1
 
-      # broadcast failure → terminal rpc_timeout; the streak must stay at 1
+      # a pre-broadcast fee lookup failure → terminal rpc_timeout; the streak stays at 1
       FakeRpc.put(fake, :simulate, :ok)
-      FakeRpc.put(fake, :send_raw_fail, :nonce_race)
+      FakeRpc.put(fake, :fees_raise, true)
       {:ok, %{order_ref: r2}} = Keeper.register_order(keeper, "market_phase", order_req())
       assert {:failed, :rpc_timeout} = Keeper.execute_with_permit(keeper, r2, "u-a", permit(25_000_000))
       assert Keeper.backoff_count(keeper, "u-a") == 1

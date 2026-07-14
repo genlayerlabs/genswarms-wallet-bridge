@@ -9,15 +9,16 @@ defmodule DelegatedSpend.Keeper.Signer do
     * simulation before broadcast: every submit `eth_call`s the exact
       transaction first — a failing simulation is a typed failure and spends
       ZERO gas (the anti-griefing core; do not weaken);
-    * gap-free nonces: the nonce is consumed only after a successful
-      broadcast;
+    * gap-free nonces: once a signed candidate is durably recorded, its nonce
+      is reserved even when the RPC response is ambiguous;
     * `action_key` idempotency: a retry of the same action can never
       double-broadcast — it returns the recorded hash/terminal state;
     * sweep: stuck transactions are rebroadcast at the SAME nonce with
       bumped fees.
 
-  Persistence of terminal results across restarts arrives with the storage
-  behaviour in Plan 3; within a run, state is complete.
+  The Keeper Store, not this process, owns durable execution status across
+  restarts. Keeper supplies the request-critical hash writer used before each
+  initial or replacement broadcast.
   """
   use GenServer
 
@@ -40,9 +41,13 @@ defmodule DelegatedSpend.Keeper.Signer do
   end
 
   def submit(server, action_key, tx),
-    do: GenServer.call(server, {:submit, action_key, tx}, 60_000)
+    do: submit(server, action_key, tx, fn _hash -> :ok end)
+
+  def submit(server, action_key, tx, persist_hash_fn),
+    do: GenServer.call(server, {:submit, action_key, tx, persist_hash_fn}, 60_000)
 
   def status(server, action_key), do: GenServer.call(server, {:status, action_key})
+  def receipt(server, tx_hash), do: GenServer.call(server, {:receipt, tx_hash}, 60_000)
   def address(server), do: GenServer.call(server, :address)
   def sweep_now(server), do: GenServer.call(server, :sweep_now, 60_000)
 
@@ -81,6 +86,9 @@ defmodule DelegatedSpend.Keeper.Signer do
   @impl true
   def handle_call(:address, _from, state), do: {:reply, state.addr, state}
 
+  def handle_call({:receipt, tx_hash}, _from, state),
+    do: {:reply, safe_receipt(state, tx_hash), state}
+
   def handle_call({:status, key}, _from, state) do
     reply =
       cond do
@@ -94,7 +102,7 @@ defmodule DelegatedSpend.Keeper.Signer do
 
   def handle_call(:sweep_now, _from, state), do: {:reply, :ok, do_sweep(state)}
 
-  def handle_call({:submit, key, tx}, _from, state) do
+  def handle_call({:submit, key, tx, persist_hash_fn}, _from, state) do
     cond do
       terminal = state.done[key] ->
         {:reply, terminal_reply(terminal), state}
@@ -103,7 +111,7 @@ defmodule DelegatedSpend.Keeper.Signer do
         {:reply, {:ok, p.hash}, state}
 
       true ->
-        do_submit(key, tx, state)
+        do_submit(key, tx, persist_hash_fn, state)
     end
   end
 
@@ -117,7 +125,7 @@ defmodule DelegatedSpend.Keeper.Signer do
 
   # ── submit path ──────────────────────────────────────────────────────────
 
-  defp do_submit(key, tx, state) do
+  defp do_submit(key, tx, persist_hash_fn, state) do
     %{rpc_mod: rpc_mod, rpc: rpc} = state
     to = Map.fetch!(tx, :to)
     data = Map.fetch!(tx, :data)
@@ -146,12 +154,21 @@ defmodule DelegatedSpend.Keeper.Signer do
 
           {raw, hash} = Tx1559.sign(params, state.priv)
 
-          case rpc_mod.send_raw(rpc, raw) do
-            {:ok, _} ->
+          case persist_hash(persist_hash_fn, hash) do
+            :ok ->
+              _ = rpc_mod.send_raw(rpc, raw)
+
               # `hashes` keeps every same-nonce variant ever broadcast for this
               # action: after a fee bump BOTH transactions are valid at the
               # nonce and EITHER may mine — the sweep must watch them all.
-              entry = %{hash: hash, hashes: [hash], params: params, sent_at: now_ms(), bumps: 0}
+              entry = %{
+                hash: hash,
+                hashes: [hash],
+                params: params,
+                persist_hash_fn: persist_hash_fn,
+                sent_at: now_ms(),
+                bumps: 0
+              }
 
               {:reply, {:ok, hash},
                %{
@@ -161,9 +178,7 @@ defmodule DelegatedSpend.Keeper.Signer do
                }}
 
             {:error, reason} ->
-              # Broadcast failed outright (transport / nonce race): nonce NOT
-              # consumed, nothing pending — the caller may retry the same key.
-              {:reply, {:error, {:broadcast, reason}}, state}
+              {:reply, {:error, reason}, state}
           end
         else
           {:error, reason} -> {:reply, {:error, reason}, state}
@@ -232,6 +247,8 @@ defmodule DelegatedSpend.Keeper.Signer do
     state.rpc_mod.receipt(state.rpc, hash)
   rescue
     _ -> nil
+  catch
+    _kind, _reason -> nil
   end
 
   defp finish(state, key, terminal) do
@@ -245,15 +262,16 @@ defmodule DelegatedSpend.Keeper.Signer do
   defp bump(state, key, entry) do
     params = %{
       entry.params
-      | max_priority_fee:
-          div(entry.params.max_priority_fee * @fee_bump_num, @fee_bump_den) + 1,
+      | max_priority_fee: div(entry.params.max_priority_fee * @fee_bump_num, @fee_bump_den) + 1,
         max_fee: div(entry.params.max_fee * @fee_bump_num, @fee_bump_den) + 1
     }
 
     {raw, hash} = Tx1559.sign(params, state.priv)
 
-    case state.rpc_mod.send_raw(state.rpc, raw) do
-      {:ok, _} ->
+    case persist_hash(entry.persist_hash_fn, hash) do
+      :ok ->
+        _ = state.rpc_mod.send_raw(state.rpc, raw)
+
         entry = %{
           entry
           | hash: hash,
@@ -265,10 +283,20 @@ defmodule DelegatedSpend.Keeper.Signer do
 
         %{state | pending: Map.put(state.pending, key, entry)}
 
-      {:error, _already_known_or_transport} ->
-        # keep waiting on the original hash; next sweep retries
+      {:error, _reason} ->
         state
     end
+  end
+
+  defp persist_hash(fun, hash) do
+    case fun.(hash) do
+      :ok -> :ok
+      other -> {:error, {:persist_hash, other}}
+    end
+  rescue
+    error -> {:error, {:persist_hash, error}}
+  catch
+    kind, reason -> {:error, {:persist_hash, {kind, reason}}}
   end
 
   defp terminal_reply({:mined, hash}), do: {:ok, hash}

@@ -233,7 +233,7 @@ defmodule DelegatedSpend.IntakeTest do
              )
   end
 
-  test "grant retry after mined settlement returns credited" do
+  test "grant retry after mined settlement returns mined" do
     %{ctx: ctx, keeper: keeper, fake: fake, signer: signer} = start_stack()
     ref = register(keeper, @user_id)
     params = %{"init_data" => init_data(), "order_ref" => ref, "permit" => permit_env(25_000_000)}
@@ -243,7 +243,28 @@ defmodule DelegatedSpend.IntakeTest do
     Signer.sweep_now(signer)
     Keeper.sweep_now(keeper)
 
-    assert {200, %{"status" => "credited", "tx" => ^hash}} = Intake.handle_grant(params, ctx)
+    assert {200, %{"status" => "mined", "tx" => ^hash}} = Intake.handle_grant(params, ctx)
+  end
+
+  test "grant retry after execution begins without a hash returns pending" do
+    %{ctx: ctx, keeper: keeper, store: store, fake: fake} = start_stack()
+
+    {:ok, %{order_ref: ref, order_id: order_id}} =
+      Keeper.register_order(keeper, "market_phase", %{
+        user_ref: "ref-#{@user_id}",
+        amount: 25_000_000,
+        action_args: [<<7::256>>, 25_000_000, <<9::256>>]
+      })
+
+    assert {:ok, _} = MemoryStore.begin_execution(store, order_id, "ref-#{@user_id}", order_id)
+
+    assert {200, %{"status" => "pending"}} =
+             Intake.handle_grant(
+               %{"init_data" => init_data(), "order_ref" => ref, "permit" => permit_env(25_000_000)},
+               ctx
+             )
+
+    assert FakeRpc.sent(fake) == []
   end
 
   test "grant retry after consumed order with no pending status maps unknown to 404" do

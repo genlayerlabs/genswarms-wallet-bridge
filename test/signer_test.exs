@@ -129,16 +129,71 @@ defmodule DelegatedSpend.SignerTest do
     _ = original_hash
   end
 
-  test "broadcast failure: nonce NOT consumed, nothing pending, retryable at same nonce" do
+  test "broadcast error is ambiguous: hash stays pending and nonce remains reserved" do
     {fake, signer} = start_signer(%{send_raw_fail: :nonce_race})
-    assert {:error, {:broadcast, :nonce_race}} = Signer.submit(signer, "k1", @tx)
+    assert {:ok, hash} = Signer.submit(signer, "k1", @tx)
     assert FakeRpc.sent(fake) == []
-    assert Signer.status(signer, "k1") == :unknown
-    # clear the failure and retry the SAME key — must broadcast at the ORIGINAL nonce
+    assert Signer.status(signer, "k1") == {:pending, hash}
+
+    # A retry cannot double-send the ambiguous candidate. The next action uses
+    # the next nonce, avoiding a same-nonce double payment if k1 reached the node.
     FakeRpc.put(fake, :send_raw_fail, nil)
-    assert {:ok, _} = Signer.submit(signer, "k1", @tx)
+    assert {:ok, ^hash} = Signer.submit(signer, "k1", @tx)
+    assert {:ok, _} = Signer.submit(signer, "k2", @tx)
+    assert [raw] = FakeRpc.sent(fake)
+    assert nonce_of(raw) == 6
+  end
+
+  test "initial broadcast is refused when durable hash persistence fails" do
+    {fake, signer} = start_signer()
+
+    failures = [
+      fn _ -> :not_found end,
+      fn _ -> raise "store down" end,
+      fn _ -> exit(:store_down) end,
+      fn _ -> throw(:store_down) end
+    ]
+
+    Enum.with_index(failures, fn persist_hash_fn, index ->
+      key = "k#{index}"
+      assert {:error, {:persist_hash, _}} = Signer.submit(signer, key, @tx, persist_hash_fn)
+      assert Signer.status(signer, key) == :unknown
+    end)
+
+    assert FakeRpc.sent(fake) == []
+    assert {:ok, _} = Signer.submit(signer, "good", @tx)
     assert [raw] = FakeRpc.sent(fake)
     assert nonce_of(raw) == 5
+  end
+
+  test "fee bump is refused when its durable hash write fails" do
+    fake = FakeRpc.start(%{chain_id: 84_532, nonce: 5, simulate: :ok})
+
+    {:ok, signer} =
+      Signer.start_link(
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000,
+        bump_after_ms: 0
+      )
+
+    {:ok, writes} = Agent.start_link(fn -> 0 end)
+
+    persist_hash_fn = fn _hash ->
+      Agent.get_and_update(writes, fn
+        0 -> {:ok, 1}
+        count -> {:not_found, count + 1}
+      end)
+    end
+
+    assert {:ok, original_hash} = Signer.submit(signer, "k1", @tx, persist_hash_fn)
+    Process.sleep(5)
+    :ok = Signer.sweep_now(signer)
+
+    assert FakeRpc.sent(fake) |> length() == 1
+    assert Signer.status(signer, "k1") == {:pending, original_hash}
   end
 
   test "estimate_gas non-integer → typed error, zero broadcast, nonce untouched" do
@@ -223,6 +278,20 @@ defmodule DelegatedSpend.SignerTest do
     FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
     Signer.sweep_now(signer)
     assert Signer.status(signer, "k1") == {:mined, hash}
+  end
+
+  test "exiting and throwing receipt adapters do not crash the Signer" do
+    Process.flag(:trap_exit, true)
+
+    for failure <- [:exit, :throw] do
+      {fake, signer} = start_signer()
+      assert {:ok, hash} = Signer.submit(signer, "k1", @tx)
+      FakeRpc.put(fake, :receipt_failure, failure)
+
+      assert :ok = Signer.sweep_now(signer)
+      assert Process.alive?(signer)
+      assert Signer.status(signer, "k1") == {:pending, hash}
+    end
   end
 
   defp decoded(raw_hex) do

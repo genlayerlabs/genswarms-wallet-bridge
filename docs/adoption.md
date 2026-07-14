@@ -71,9 +71,11 @@ New or changed intake endpoints:
 Optional ctx keys:
 
 - `:token_secret` enables token auth.
-- `:wallet_fn` persists a bind result.
-- `:wallet_view_fn` returns the current wallet for a bind view.
-- `:submitted_fn` nudges your watcher after a user-tx report.
+- `:wallet_fn` is consumer-owned, request-critical bind persistence. A failure
+  rejects the request after consuming the single-use bind order.
+- `:wallet_view_fn` is the consumer-owned wallet lookup for bind views.
+- `:submitted_fn` receives an untrusted, best-effort transaction hint. It can
+  be lost and has no crediting authority.
 
 Hard rule for adopters: `user_ref` is one-way. If your app must act on a bind
 or order result, key your own state by `bind_ref` or `order_ref` at mint time.
@@ -208,21 +210,20 @@ refuse to run against a stale `config.json` (config drift):
 # plain keeper calls:
 {:ok, view} = Keeper.fetch_order(keeper, order_ref, user_ref)
 result      = Keeper.execute_with_permit(keeper, order_ref, user_ref, permit)
-# result: {:submitted, tx_hash} | {:credited, tx_hash}
+# result: :pending | {:submitted, tx_hash} | {:mined, tx_hash}
 #       | {:failed, :not_found | :expired | :no_grant | :reverted | :rpc_timeout}
 #       | :unknown
 
-Keeper.order_status(keeper, order_id)   # re-queryable at-least-once results
-Keeper.reconcile_boot(keeper)           # call once after start: delivers results
-                                        # for txs that mined while the keeper was down
+Keeper.order_status(keeper, order_id)   # durable source of technical truth
+Keeper.reconcile_boot(keeper)           # persist receipts found after restart
 ```
 
-Results are also pushed through the `result_fn` option as
-`{order_id, result}` tuples. **`{:credited, tx}` means MINED, nothing more**
-— it is display-only until your app's own confirmation-depth policy says
-otherwise (a conservative first integration credits nothing from the keeper
-result at all and lets the app's own chain watcher remain the only
-crediting path).
+`result_fn` receives `{order_id, result}` after each newly persisted terminal
+transition. It is a best-effort technical-status notification: raises, exits,
+and throws are logged, never retried, and never crash the Keeper. It can be
+lost, so poll `order_status/2` for recovery. **`{:mined, tx}` means one
+successful receipt, nothing more** — never use it as product-credit authority;
+apply your own confirmation-depth policy and business crediting separately.
 
 **Swarm-object registration (the message door).** If your intent producer is
 itself a GenSwarms object, wire the keeper into the swarm instead of calling
@@ -291,22 +292,46 @@ Implement the `DelegatedSpend.Keeper.Store` behaviour
 | `put_grant/4`, `get_grant/3`, `grants_for/2`, `revoke_grant/3` | grant registry (stored in M1, redeemed in M2) |
 | `record_spend/4`, `spent_since/3` | per-`user_ref` spend accounting |
 | `put_order/2`, `get_order/2`, `get_order_by_ref/3` | server-authoritative orders |
-| `consume_order/3` | atomic single consumption |
-| `put_inflight/3`, `update_inflight_hash/3`, `resolve_inflight/3`, `list_inflight/1` | in-flight submissions + boot reconciliation |
+| `consume_order/3` | atomic single consumption for non-execution flows such as wallet binding |
+| `begin_execution/4` | atomically consume one permit order and create durable `:pending` status |
+| `get_execution_status/2` | return `:unknown`, `:pending`, `{:submitted, tx}`, `{:mined, tx}`, or `{:failed, reason}` |
+| `update_inflight_hash/3`, `list_inflight/1` | append each same-nonce candidate hash before broadcast and enumerate only unresolved executions |
+| `resolve_inflight/4` | atomically persist the first terminal result, remove in-flight state, and record mined spend once; return `:new` or `:existing` |
 
 Semantics every implementation MUST reproduce
 (`DelegatedSpend.Keeper.MemoryStore` in the same file is the reference; the
 package's tests are the executable contract):
 
-- Orders are **immutable** after `put_order` and consumed **atomically
-  exactly once**: under concurrent `consume_order` calls, exactly one caller
-  gets `{:ok, order}` — pin this in your adapter's suite against your real
-  database, with genuinely concurrent callers.
-- All reads are scoped by `user_ref` — a wrong `user_ref` is
-  indistinguishable from not-found.
+- Orders are **immutable** after `put_order`. `consume_order/3` and
+  `begin_execution/4` each consume atomically exactly once; concurrent
+  `begin_execution/4` callers yield one `{:ok, order}` and all others
+  `:already_consumed`.
+- User-facing grant/order reads are scoped by `user_ref` — a wrong `user_ref`
+  is indistinguishable from not-found. Internal reconciliation reads such as
+  `get_order/2` and `get_execution_status/2` use the server-minted `order_id`.
 - Grants are keyed by app-supplied opaque `user_ref` — never raw platform
   ids; never log grant bodies.
-- `list_inflight/1` powers `reconcile_boot`.
+- `resolve_inflight/4` is first-terminal-result-wins. Repeated or conflicting
+  resolutions return `:existing`, preserve the original terminal result, and
+  never duplicate mined spend accounting.
+- `update_inflight_hash/3` is append-only and idempotent. It returns
+  `:not_found` unless the unresolved row exists; the Signer must not broadcast
+  when that durable write fails.
+- Keep terminal status for as long as the corresponding order is queryable.
+  `list_inflight/1` returns unresolved rows with `tx_hashes` newest-first; an
+  empty list means `:pending`, while the newest hash is the public
+  `{:submitted, hash}` status. Reconciliation must check every hash because
+  any same-nonce candidate may mine.
+- Preserve existing unresolved rows during migration. Legacy terminal results
+  whose rows were already deleted cannot be reconstructed and remain
+  `:unknown`.
+- A crash after `begin_execution/4` but before a hash is known leaves an honest
+  durable `:pending` status. Never automatically resubmit it.
+- This package adds no signed-raw-transaction journal, callback
+  acknowledgements, topology-aware callback delivery, automatic swarm
+  callback router, separate store object, or product persistence. Micromarkets
+  is not changed here; its adapter needs a coordinated schema/API migration
+  before upgrading to 0.4.0.
 - Round-trip **every** order field — including `kind`, `tx`, `display`,
   `expected_owner`, and `expires_at`. Dropping `expected_owner` silently is
   the audit's F1; pair your adapter with `require_owner_binding: true` so that
@@ -424,4 +449,4 @@ The authoritative list is the package `README.md` security section (and spec
   persisted (opaque `user_ref` only). Intake fail-closed: loopback bind by
   default, 401 before any work, strict byte-for-byte grant validation
   against pinned config.
-- Treat `{:credited, _}` as display-only until your own confirmation depth.
+- Treat `{:mined, _}` as one successful receipt, never product-credit authority.

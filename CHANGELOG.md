@@ -19,6 +19,33 @@ package releases can ship zero contract bytecode changes. `scripts/check-version
   introspection view and the keeper's grant registry stores delegation
   grants, but no redemption path exists yet.
 
+## [0.4.0] - 2026-07-14
+
+Durable execution-status release. No Solidity bytes changed;
+`CONTRACT_VERSION` remains `0.2.0`.
+
+### Added
+
+- Store-backed `:pending`, submitted, mined, and failed execution status that
+  survives Keeper restarts, plus atomic execution start and first-terminal
+  resolution with exactly-once mined spend accounting.
+- Durable tracking of every same-nonce fee-bump hash, with periodic
+  reconciliation independent of the Signer's in-memory state.
+- Adapter migration requirements for atomic start, idempotent terminal writes,
+  unresolved-row preservation, and terminal-status retention.
+
+### Changed
+
+- Successful technical status is now `{:mined, tx_hash}` / `"mined"`
+  throughout the Keeper, intake, object door, tests, and docs.
+- `result_fn` is best-effort and runs only after a newly stored terminal result;
+  callback raises, exits, and throws are logged without crashing the Keeper.
+- Durable polling is the recovery mechanism. Callbacks remain hints, and
+  product routing, confirmation depth, wallet storage, and business crediting
+  stay consumer-owned.
+- A `send_raw` error after durable hash write is treated as ambiguous
+  submission, never as terminal failure; a late receipt can still settle it.
+
 ## [0.3.4] - 2026-07-12
 
 Wallet-dapp theme and trust-boundary release. No Solidity bytes changed.
@@ -165,7 +192,7 @@ user, over an app-specific non-custodial router.
   single consumption, TTL before broadcast, envelope-sender allowlist,
   optional `expected_owner` binding with fail-closed
   `require_owner_binding`, `min_deadline_slack_s` anti-grief check, typed
-  results (`{:credited, tx}` = mined, display-only), boot reconciliation on
+  mined receipt results (display-only), boot reconciliation on
   definitive receipts only; `Keeper.Store` behaviour with `MemoryStore`
   reference semantics.
 - **Intake (Elixir):** `DelegatedSpend.Intake` pure HTTP handlers

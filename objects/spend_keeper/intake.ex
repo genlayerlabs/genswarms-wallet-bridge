@@ -14,6 +14,12 @@ defmodule DelegatedSpend.Intake do
     * A version mismatch (stale wallet dapp build) is rejected at runtime (409).
     * `initData` never appears in logs or errors.
 
+  Callback authority:
+    * `wallet_fn` is consumer-owned, request-critical wallet persistence.
+    * `wallet_view_fn` is the consumer-owned wallet lookup.
+    * `submitted_fn` is an untrusted, best-effort transaction hint with no
+      product-credit authority.
+
   ctx: `%{bot_token:, max_age_s:, user_ref_fn:, keeper:, pinned:, rate:}`
   where `pinned = %{chain_id:, token:, router:, version:}` and
   `rate = {RateLimiter-pid, max_per_window}` (see `DelegatedSpend.Intake.Rate`).
@@ -99,8 +105,9 @@ defmodule DelegatedSpend.Intake do
 
         {:ok, permit} ->
           case Keeper.execute_with_permit(ctx.keeper, order_ref, user_ref, permit) do
+            :pending -> {200, %{"status" => "pending"}}
             {:submitted, hash} -> {200, %{"status" => "submitted", "tx" => hash}}
-            {:credited, hash} -> {200, %{"status" => "credited", "tx" => hash}}
+            {:mined, hash} -> {200, %{"status" => "mined", "tx" => hash}}
             {:failed, :not_found} -> {404, %{"error" => "not found"}}
             {:failed, reason} -> {422, %{"status" => "failed", "reason" => to_string(reason)}}
             :unknown -> {404, %{"error" => "not found"}}
@@ -134,7 +141,7 @@ defmodule DelegatedSpend.Intake do
     end
   end
 
-  @doc "POST /orders/submitted — best-effort user_tx hash report; watcher credits."
+  @doc "POST /orders/submitted — best-effort user_tx hash report; watcher hint only."
   def handle_submitted(params, ctx) when is_map(params) do
     order_ref = to_string(params["order_ref"] || "")
 

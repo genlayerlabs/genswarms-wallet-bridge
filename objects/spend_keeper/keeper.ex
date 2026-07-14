@@ -16,9 +16,10 @@ defmodule DelegatedSpend.Keeper do
     * TTL is checked immediately before broadcast (spec §5.2); expiry is a
       typed failure that consumes nothing and costs nothing.
 
-  Results are delivered at-least-once through `result_fn` (and re-queryable
-  via `order_status/2`): `{:credited, tx_hash}` means MINED — finality policy
-  belongs to the app (display-only until watcher depth; spec §7.2).
+  Results are durably re-queryable via `order_status/2`. `result_fn` is a
+  best-effort technical-status notification invoked once after a new terminal
+  result is stored; it is never product-credit authority. `{:mined, tx_hash}`
+  means one successful receipt, not confirmation depth or product credit.
 
   Typed failure reasons: `no_grant | expired | reverted | rpc_timeout |
   not_found | suspended`. `suspended` is the §5.2.1 revert backoff — a grant
@@ -26,6 +27,7 @@ defmodule DelegatedSpend.Keeper do
   `reset_backoff/2` (the wallet dapp re-enable).
   """
   use GenServer
+  require Logger
 
   alias DelegatedSpend.Keeper.{PermitLane, Signer}
 
@@ -102,14 +104,13 @@ defmodule DelegatedSpend.Keeper do
       min_deadline_slack_s: Map.get(opts, :min_deadline_slack_s, 0),
       # Per-user_ref revert backoff (spec §5.2.1). 0 disables. After this many
       # CONSECUTIVE reverts the grant is suspended until reset_backoff/2. A
-      # credited spend resets the counter.
+      # mined spend resets the counter.
       max_reverts: Map.get(opts, :max_consecutive_reverts, 0),
       reverts: %{},
       result_fn: Map.get(opts, :result_fn, fn _ -> :ok end),
       rpc_mod: Map.get(opts, :rpc_mod),
       rpc: Map.get(opts, :rpc),
-      sweep_ms: Map.get(opts, :sweep_ms, 5_000),
-      results: %{}
+      sweep_ms: Map.get(opts, :sweep_ms, 5_000)
     }
 
     Process.send_after(self(), :sweep, state.sweep_ms)
@@ -180,34 +181,40 @@ defmodule DelegatedSpend.Keeper do
         {:reply, {:failed, :not_found}, state}
 
       order ->
-        cond do
-          Map.get(order, :kind, "permit") != "permit" ->
-            {:reply, {:failed, :wrong_kind}, state}
+        case store(state).get_execution_status(store_ref(state), order.order_id) do
+          :unknown ->
+            cond do
+              Map.get(order, :kind, "permit") != "permit" ->
+                {:reply, {:failed, :wrong_kind}, state}
 
-          is_nil(state.signer) ->
-            {:reply, {:failed, :permit_lane_disabled}, state}
+              is_nil(state.signer) ->
+                {:reply, {:failed, :permit_lane_disabled}, state}
 
-          # Anti-griefing (spec §5.2.1): a grant that has produced N consecutive
-          # reverts is suspended until the user re-enables it via the wallet dapp
-          # (reset_backoff/2). Bounds a griefer who keeps triggering reverting
-          # spends against the gas sponsor. Checked BEFORE consuming the order.
-          suspended?(order.user_ref, state) ->
-            {:reply, {:failed, :suspended}, state}
+              # Anti-griefing (spec §5.2.1): a grant that has produced N consecutive
+              # reverts is suspended until the user re-enables it via the wallet dapp
+              # (reset_backoff/2). Bounds a griefer who keeps triggering reverting
+              # spends against the gas sponsor. Checked BEFORE consuming the order.
+              suspended?(order.user_ref, state) ->
+                {:reply, {:failed, :suspended}, state}
 
-          now_s() > order.expires_at ->
-            {:reply, {:failed, :expired}, state}
+              now_s() > order.expires_at ->
+                {:reply, {:failed, :expired}, state}
 
-          permit.value != order.amount ->
-            {:reply, {:failed, :no_grant}, state}
+              permit.value != order.amount ->
+                {:reply, {:failed, :no_grant}, state}
 
-          not owner_binding_ok?(order, permit, state) ->
-            {:reply, {:failed, :no_grant}, state}
+              not owner_binding_ok?(order, permit, state) ->
+                {:reply, {:failed, :no_grant}, state}
 
-          not deadline_slack_ok?(permit, state) ->
-            {:reply, {:failed, :expired}, state}
+              not deadline_slack_ok?(permit, state) ->
+                {:reply, {:failed, :expired}, state}
 
-          true ->
-            execute_consumed(order, permit, state)
+              true ->
+                execute_consumed(order, permit, state)
+            end
+
+          status ->
+            {:reply, status, state}
         end
     end
   end
@@ -221,7 +228,7 @@ defmodule DelegatedSpend.Keeper do
   end
 
   def handle_call({:order_status, order_id}, _from, state) do
-    {:reply, Map.get(state.results, order_id, pending_status(order_id, state)), state}
+    {:reply, store(state).get_execution_status(store_ref(state), order_id), state}
   end
 
   def handle_call(:sweep_now, _from, state), do: {:reply, :ok, do_sweep(state)}
@@ -245,45 +252,65 @@ defmodule DelegatedSpend.Keeper do
   # no hash yet, or a hash with no receipt, is left in place (still pending):
   # marking it failed here would falsely tell the app a payment did not
   # happen while the tx is still mineable, risking a double payment via the
-  # fallback lane. Durable pre-broadcast write-ahead (so the sweep can
-  # re-adopt an orphaned tx after restart) is the recorded hardening
-  # follow-up; in M1 the keeper result is display-only (the chain watcher
-  # credits), so a still-pending row is safe.
+  # fallback lane. Every initial and same-nonce replacement hash is written
+  # before broadcast, so reconciliation remains complete across restarts.
   defp do_reconcile(state) do
     Enum.reduce(store(state).list_inflight(store_ref(state)), state, fn row, acc ->
-      with hash when is_binary(hash) <- row.tx_hash,
-           mod when not is_nil(mod) <- acc.rpc_mod,
-           receipt when is_map(receipt) <- safe_receipt(mod, acc.rpc, hash) do
-        case receipt do
-          %{"status" => "0x1"} -> settle(acc, row.order_id, {:credited, hash})
-          %{"status" => "0x0"} -> settle(acc, row.order_id, {:failed, :reverted})
-          _ -> acc
-        end
-      else
-        _ -> acc
+      case durable_receipt(acc, row.tx_hashes) do
+        {:mined, hash} -> settle(acc, row.order_id, {:mined, hash})
+        {:failed, _hash} -> settle(acc, row.order_id, {:failed, :reverted})
+        nil -> acc
       end
     end)
   end
 
+  defp durable_receipt(state, hashes) do
+    Enum.find_value(hashes, fn hash ->
+      case receipt(state, hash) do
+        %{"status" => "0x1"} -> {:mined, hash}
+        %{"status" => "0x0"} -> {:failed, hash}
+        _ -> nil
+      end
+    end)
+  end
+
+  defp receipt(%{rpc_mod: mod} = state, hash) when not is_nil(mod),
+    do: safe_receipt(mod, state.rpc, hash)
+
+  defp receipt(%{signer: signer}, hash) when not is_nil(signer),
+    do: safe_signer_receipt(signer, hash)
+
+  defp receipt(_state, _hash), do: nil
+
   # ── execution ─────────────────────────────────────────────────────────────
 
   defp execute_consumed(order, permit, state) do
-    case store(state).consume_order(store_ref(state), order.order_id, order.user_ref) do
+    case store(state).begin_execution(
+           store_ref(state),
+           order.order_id,
+           order.user_ref,
+           order.order_id
+         ) do
       :not_found ->
         {:reply, {:failed, :not_found}, state}
 
       :already_consumed ->
-        # Idempotent client retry: report the recorded/pending outcome.
-        {:reply, Map.get(state.results, order.order_id, pending_status(order.order_id, state)),
-         state}
+        {:reply, store(state).get_execution_status(store_ref(state), order.order_id), state}
 
       {:ok, order} ->
-        :ok = store(state).put_inflight(store_ref(state), order.order_id, order.order_id)
         calldata = PermitLane.build_call(state.action, order.action_args, permit)
 
-        case Signer.submit(state.signer, order.order_id, %{to: state.router, data: calldata}) do
+        persist_hash_fn = fn hash ->
+          store(state).update_inflight_hash(store_ref(state), order.order_id, hash)
+        end
+
+        case Signer.submit(
+               state.signer,
+               order.order_id,
+               %{to: state.router, data: calldata},
+               persist_hash_fn
+             ) do
           {:ok, hash} ->
-            :ok = store(state).update_inflight_hash(store_ref(state), order.order_id, hash)
             {:reply, {:submitted, hash}, state}
 
           {:error, {:reverted, _info}} ->
@@ -299,13 +326,14 @@ defmodule DelegatedSpend.Keeper do
   # ── result delivery ───────────────────────────────────────────────────────
 
   defp do_sweep(state) do
-    if is_nil(state.signer), do: state, else: do_sweep_with_signer(state)
+    state = if is_nil(state.signer), do: state, else: do_sweep_with_signer(state)
+    do_reconcile(state)
   end
 
   defp do_sweep_with_signer(state) do
     Enum.reduce(store(state).list_inflight(store_ref(state)), state, fn row, acc ->
-      case Signer.status(acc.signer, row.action_key) do
-        {:mined, hash} -> settle(acc, row.order_id, {:credited, hash})
+      case safe_signer_status(acc.signer, row.action_key) do
+        {:mined, hash} -> settle(acc, row.order_id, {:mined, hash})
         {:failed, _hash} -> settle(acc, row.order_id, {:failed, :reverted})
         _ -> acc
       end
@@ -313,25 +341,40 @@ defmodule DelegatedSpend.Keeper do
   end
 
   defp settle(state, order_id, result) do
-    :ok = store(state).resolve_inflight(store_ref(state), order_id, result)
-    order = store(state).get_order(store_ref(state), order_id)
+    case store(state).resolve_inflight(store_ref(state), order_id, result, now_s()) do
+      :new ->
+        state =
+          update_backoff(state, store(state).get_order(store_ref(state), order_id), result)
 
-    if match?({:credited, _}, result) and is_map(order) do
-      :ok = store(state).record_spend(store_ref(state), order.user_ref, order.amount, now_s())
+        notify_result(state.result_fn, order_id, result)
+        state
+
+      :existing ->
+        state
     end
-
-    state = update_backoff(state, order, result)
-    state.result_fn.({order_id, result})
-    %{state | results: Map.put(state.results, order_id, result)}
   end
 
-  # A credit clears the user's revert streak; a revert increments it. Other
+  defp notify_result(result_fn, order_id, result) do
+    result_fn.({order_id, result})
+  rescue
+    error ->
+      Logger.error(
+        "result_fn failed order_id=#{order_id} status=#{inspect(result)} error=#{Exception.message(error)}"
+      )
+  catch
+    kind, reason ->
+      Logger.error(
+        "result_fn failed order_id=#{order_id} status=#{inspect(result)} #{kind}=#{inspect(reason)}"
+      )
+  end
+
+  # A mined result clears the user's revert streak; a revert increments it. Other
   # terminal outcomes (rpc_timeout) neither punish nor clear — they aren't the
   # griefing signal and shouldn't erase an accumulating streak.
   defp update_backoff(state, order, _result) when not is_map(order), do: state
   defp update_backoff(%{max_reverts: 0} = state, _order, _result), do: state
 
-  defp update_backoff(state, %{user_ref: user_ref}, {:credited, _}),
+  defp update_backoff(state, %{user_ref: user_ref}, {:mined, _}),
     do: %{state | reverts: Map.delete(state.reverts, user_ref)}
 
   defp update_backoff(state, %{user_ref: user_ref}, {:failed, :reverted}),
@@ -343,19 +386,6 @@ defmodule DelegatedSpend.Keeper do
 
   defp suspended?(user_ref, state),
     do: Map.get(state.reverts, user_ref, 0) >= state.max_reverts
-
-  defp pending_status(order_id, state) do
-    if is_nil(state.signer) do
-      :unknown
-    else
-      case Signer.status(state.signer, order_id) do
-        {:pending, hash} -> {:submitted, hash}
-        {:mined, hash} -> {:credited, hash}
-        {:failed, _} -> {:failed, :reverted}
-        :unknown -> :unknown
-      end
-    end
-  end
 
   defp order_kind(req) do
     case Map.get(req, :kind, "permit") do
@@ -451,6 +481,20 @@ defmodule DelegatedSpend.Keeper do
     mod.receipt(rpc, hash)
   rescue
     _ -> nil
+  catch
+    _kind, _reason -> nil
+  end
+
+  defp safe_signer_receipt(signer, hash) do
+    Signer.receipt(signer, hash)
+  catch
+    _kind, _reason -> nil
+  end
+
+  defp safe_signer_status(signer, action_key) do
+    Signer.status(signer, action_key)
+  catch
+    _kind, _reason -> :unknown
   end
 
   # The order ref (the routing token the wallet dapp URL carries). Server-minted

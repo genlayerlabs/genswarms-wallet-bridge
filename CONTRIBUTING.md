@@ -26,11 +26,10 @@ positive/negative probe (`.github/workflows/ci.yml`).
 
 ## Co-versioning rule
 
-There is exactly ONE version per git tag. It is stamped in five places —
-`VERSION`, the `SpendRouter.version()` string literal, `vectors/VERSION`,
+The package version is stamped in four places — `VERSION`, `vectors/VERSION`,
 `webapp/config.json` (`"version"`), and `mix.exs` — and
-`scripts/check-version.sh` fails CI if any diverge. Bump all five together;
-never bump one.
+`scripts/check-version.sh` fails CI if any diverge. `CONTRACT_VERSION` and the
+`SpendRouter.version()` literal move together only when Solidity bytes change.
 
 ## Golden-vector regeneration rule
 

@@ -1,5 +1,5 @@
 {
-  "version": "0.3.4",
+  "version": "0.4.0",
   "account_state": "eoa",
   "domain": {
     "name": "Mock USD Coin",
@@ -21,7 +21,7 @@
     "s": "0x64010f89d810a4e92e6d733f97d0eac5f967f414d6bee3e05ce6996d9b42bfb3"
   },
   "envelope": {
-    "v": "0.3.4",
+    "v": "0.4.0",
     "chain_id": 31337,
     "token": "0x000000000000000000000000000000000000aaaa",
     "spender": "0x000000000000000000000000000000000000bbbb",

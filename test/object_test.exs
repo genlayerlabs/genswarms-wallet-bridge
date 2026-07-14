@@ -242,13 +242,19 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
     assert %{"ok" => true} = r3
   end
 
-  test "order_status and reset_backoff round-trip through the door" do
-    %{state: state} = start_object()
+  test "order_status returns unknown and pending through the door" do
+    %{state: state, opts: opts} = start_object()
 
     {%{"ok" => true, "order_id" => order_id}, state} = msg(state, :market_phase, register_payload())
 
     {status, state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
     assert %{"ok" => true, "status" => "unknown"} = status
+
+    {MemoryStore, store} = opts.store
+    assert {:ok, _} = MemoryStore.begin_execution(store, order_id, "u-a", order_id)
+
+    {pending, state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
+    assert %{"ok" => true, "status" => "pending"} = pending
 
     {reset, _} = msg(state, :market_phase, Jason.encode!(%{"action" => "reset_backoff", "user_ref" => "u-a"}))
     assert %{"ok" => true} = reset
@@ -279,8 +285,8 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
     Signer.sweep_now(signer)
     Keeper.sweep_now(state.keeper)
 
-    {credited, _state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
-    assert %{"ok" => true, "status" => "credited", "tx" => ^hash} = credited
+    {mined, _state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
+    assert %{"ok" => true, "status" => "mined", "tx" => ^hash} = mined
   end
 
   test "order_status returns failed terminal status through the door" do

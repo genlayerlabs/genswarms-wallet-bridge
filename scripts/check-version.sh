@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Co-versioning check (spec §3.1): one version, stamped everywhere, CI-fails on
-# divergence. Later plans extend this with the gsp manifest and webapp stamps.
+# Co-versioning check for package, vectors, and webapp stamps. Contract bytes
+# keep their independent CONTRACT_VERSION.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

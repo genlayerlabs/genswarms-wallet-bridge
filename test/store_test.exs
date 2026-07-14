@@ -41,6 +41,22 @@ defmodule DelegatedSpend.StoreTest do
     assert Enum.count(results, &(&1 == :already_consumed)) == 19
   end
 
+  test "begin_execution atomically consumes once and creates durable pending state" do
+    store = MemoryStore.start()
+    :ok = MemoryStore.put_order(store, @order)
+
+    results =
+      1..20
+      |> Enum.map(fn _ -> Task.async(fn -> MemoryStore.begin_execution(store, "oid-1", "u-a", "ak-1") end) end)
+      |> Enum.map(&Task.await/1)
+
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(results, &(&1 == :already_consumed)) == 19
+    assert :pending = MemoryStore.get_execution_status(store, "oid-1")
+    assert [%{order_id: "oid-1", action_key: "ak-1", tx_hashes: []}] =
+             MemoryStore.list_inflight(store)
+  end
+
   test "grant lifecycle: put, get, revoke; scoped by user_ref" do
     store = MemoryStore.start()
     assert :ok = MemoryStore.revoke_grant(store, "missing", "u-a")
@@ -61,13 +77,42 @@ defmodule DelegatedSpend.StoreTest do
     assert MemoryStore.spent_since(store, "u-a", 0) == 30
   end
 
-  test "inflight bookkeeping for boot reconciliation" do
+  test "execution status is durable and the first terminal result records mined spend once" do
     store = MemoryStore.start()
-    assert :ok = MemoryStore.update_inflight_hash(store, "missing", "0xabc")
-    :ok = MemoryStore.put_inflight(store, "oid-1", "ak-1")
-    assert [%{order_id: "oid-1", action_key: "ak-1"}] = MemoryStore.list_inflight(store)
-    :ok = MemoryStore.resolve_inflight(store, "oid-1", {:credited, "0xabc"})
+    :ok = MemoryStore.put_order(store, @order)
+    assert :unknown = MemoryStore.get_execution_status(store, "oid-1")
+    assert :not_found = MemoryStore.update_inflight_hash(store, "missing", "0xabc")
+
+    assert {:ok, _} = MemoryStore.begin_execution(store, "oid-1", "u-a", "ak-1")
+    assert :pending = MemoryStore.get_execution_status(store, "oid-1")
+
+    :ok = MemoryStore.update_inflight_hash(store, "oid-1", "0xabc")
+    assert {:submitted, "0xabc"} = MemoryStore.get_execution_status(store, "oid-1")
+
+    :ok = MemoryStore.update_inflight_hash(store, "oid-1", "0xdef")
+    :ok = MemoryStore.update_inflight_hash(store, "oid-1", "0xabc")
+    assert {:submitted, "0xdef"} = MemoryStore.get_execution_status(store, "oid-1")
+
+    assert [%{tx_hashes: ["0xdef", "0xabc"]}] =
+             MemoryStore.list_inflight(store)
+
+    assert :new = MemoryStore.resolve_inflight(store, "oid-1", {:mined, "0xdef"}, 100)
+    assert {:mined, "0xdef"} = MemoryStore.get_execution_status(store, "oid-1")
     assert MemoryStore.list_inflight(store) == []
+    assert MemoryStore.spent_since(store, "u-a", 0) == 25_000_000
+
+    assert :existing = MemoryStore.resolve_inflight(store, "oid-1", {:failed, :reverted}, 200)
+    assert {:mined, "0xdef"} = MemoryStore.get_execution_status(store, "oid-1")
+    assert MemoryStore.spent_since(store, "u-a", 0) == 25_000_000
+  end
+
+  test "failed terminal execution records no spend" do
+    store = MemoryStore.start()
+    :ok = MemoryStore.put_order(store, @order)
+    assert {:ok, _} = MemoryStore.begin_execution(store, "oid-1", "u-a", "ak-1")
+    assert :new = MemoryStore.resolve_inflight(store, "oid-1", {:failed, :rpc_timeout}, 100)
+    assert {:failed, :rpc_timeout} = MemoryStore.get_execution_status(store, "oid-1")
+    assert MemoryStore.spent_since(store, "u-a", 0) == 0
   end
 
   test "stale ref index returns nil if the order row is gone" do

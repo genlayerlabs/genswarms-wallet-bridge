@@ -106,7 +106,7 @@ dest_hex = "0x" <> Base.encode16(dest, case: :lower)
 [dest_bal] = E2E.view(rpc, token, "balanceOf", [:address], [dest], [{:uint, 256}])
 [router_bal] = E2E.view(rpc, token, "balanceOf", [:address], [Address.to_bytes(echo)], [{:uint, 256}])
 [user_bal] = E2E.view(rpc, token, "balanceOf", [:address], [Address.to_bytes(user)], [{:uint, 256}])
-E2E.assert!(dest_bal == 25_000_000, "destination credited")
+E2E.assert!(dest_bal == 25_000_000, "destination funded")
 E2E.assert!(router_bal == 0, "router residual zero")
 E2E.assert!(user_bal == 75_000_000, "user debited")
 
@@ -181,7 +181,7 @@ ctx = %{
   max_age_s: 900,
   user_ref_fn: fn uid -> "ref-" <> Integer.to_string(uid) end,
   keeper: keeper,
-  pinned: %{chain_id: chain_id, token: token, router: echo, version: "0.2.0"},
+  pinned: %{chain_id: chain_id, token: token, router: echo, version: "0.4.0"},
   rate: {Rate.start(60), 100}
 }
 
@@ -199,7 +199,7 @@ oid2 = DelegatedSpend.Keccak.hash_256("e2e-order-2")
 # Wallet dapp fetches the order through the intake
 {200, order_view} =
   Intake.handle_order(
-    %{"init_data" => make_init_data.(user_id), "order_ref" => order_ref, "v" => "0.2.0"},
+    %{"init_data" => make_init_data.(user_id), "order_ref" => order_ref, "v" => "0.4.0"},
     ctx
   )
 
@@ -217,7 +217,7 @@ digest2 = PermitLane.permit_digest(domain_sep, user, echo, order_view["amount"],
 {r2, s2, recid2} = Secp256k1.sign(digest2, user_priv)
 
 envelope = %{
-  "v" => "0.2.0",
+  "v" => "0.4.0",
   "chain_id" => chain_id,
   "token" => token,
   "spender" => echo,
@@ -237,21 +237,21 @@ envelope = %{
     ctx
   )
 
-# result goes typed: sweep signer + keeper until credited
-await_credited = fn tries ->
+# result goes typed: sweep signer + keeper until mined
+await_mined = fn tries ->
   Enum.reduce_while(1..tries, nil, fn _, _ ->
     Signer.sweep_now(signer)
     Keeper.sweep_now(keeper)
 
     case Keeper.order_status(keeper, keeper_oid) do
-      {:credited, h} -> {:halt, h}
+      {:mined, h} -> {:halt, h}
       _ -> Process.sleep(100) && {:cont, nil}
     end
   end)
 end
 
-credited_hash = await_credited.(100)
-E2E.assert!(is_binary(credited_hash), "typed credited result")
+mined_hash = await_mined.(100)
+E2E.assert!(is_binary(mined_hash), "typed mined result")
 
 [dest2] =
   E2E.view(rpc, echo, "destinationFor", [{:bytes, 32}, :address], [topic2, Address.to_bytes(user)], [:address])
@@ -266,13 +266,13 @@ E2E.assert!(dest2_bal == 10_000_000, "registry-path funds landed")
     ctx
   )
 
-E2E.assert!(replay_status in ["submitted", "credited"], "replay reports recorded status")
+E2E.assert!(replay_status in ["submitted", "mined"], "replay reports recorded status")
 [dest2_bal2] = E2E.view(rpc, token, "balanceOf", [:address], [dest2], [{:uint, 256}])
 E2E.assert!(dest2_bal2 == 10_000_000, "replay caused no second spend")
 
 # a different verified user cannot see or spend the order
 {404, _} =
-  Intake.handle_order(%{"init_data" => make_init_data.(666), "order_ref" => order_ref, "v" => "0.2.0"}, ctx)
+  Intake.handle_order(%{"init_data" => make_init_data.(666), "order_ref" => order_ref, "v" => "0.4.0"}, ctx)
 
 # expired order: typed failure, zero broadcast (keeper nonce untouched)
 {:ok, keeper_fast} =

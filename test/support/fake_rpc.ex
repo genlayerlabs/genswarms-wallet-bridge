@@ -16,7 +16,9 @@ defmodule DelegatedSpend.FakeRpc do
   # ── rpc_mod interface ──────────────────────────────────────────────────────
   # Failure knobs (default off, so existing tests are unaffected):
   #   :send_raw_fail  → send_raw returns {:error, reason}, records nothing
+  #                     {:accepted, reason} records the tx, then returns the error
   #   :receipt_raises → receipt/2 raises (a transient-RPC crash simulation)
+  #   :receipt_failure → :raise | :exit | :throw
   #   :fees_raise     → max_priority_fee raises (fees error path)
   #   :block_timestamp → the value block_timestamp/1 returns (else wall clock)
   def chain_id(pid), do: Agent.get(pid, & &1.chain_id)
@@ -47,6 +49,10 @@ defmodule DelegatedSpend.FakeRpc do
         Agent.update(pid, &%{&1 | sent: [raw | &1.sent]})
         {:ok, "0x" <> Base.encode16(:crypto.hash(:sha256, raw), case: :lower)}
 
+      {:accepted, reason} ->
+        Agent.update(pid, &%{&1 | sent: [raw | &1.sent]})
+        {:error, reason}
+
       reason ->
         {:error, reason}
     end
@@ -55,6 +61,13 @@ defmodule DelegatedSpend.FakeRpc do
   def receipt(pid, hash) do
     if Agent.get(pid, &Map.get(&1, :receipt_raises, false)),
       do: raise("simulated RPC receipt failure")
+
+    case Agent.get(pid, &Map.get(&1, :receipt_failure)) do
+      :raise -> raise("simulated RPC receipt failure")
+      :exit -> exit(:simulated_rpc_receipt_failure)
+      :throw -> throw(:simulated_rpc_receipt_failure)
+      nil -> :ok
+    end
 
     Agent.get(pid, &Map.get(&1.receipts, hash))
   end
