@@ -25,7 +25,7 @@ defmodule DelegatedSpend.Intake do
   `rate = {RateLimiter-pid, max_per_window}` (see `DelegatedSpend.Intake.Rate`).
   """
 
-  alias DelegatedSpend.Compliance.{Geo, Store}
+  alias DelegatedSpend.Compliance.{Geo, Store, Terms}
   alias DelegatedSpend.Intake.{GrantValidation, Rate, TelegramAuth, Token}
   alias DelegatedSpend.Keeper
 
@@ -209,6 +209,39 @@ defmodule DelegatedSpend.Intake do
     end
   end
 
+  @doc "POST /terms — verify and persist current terms acceptance evidence."
+  def handle_terms(params, ctx) when is_map(params), do: handle_terms(params, %{}, ctx)
+
+  def handle_terms(params, meta, ctx) when is_map(params) do
+    with :ok <- geofence(meta, ctx),
+         :ok <- pin_version(params, ctx),
+         {:ok, ref} <- terms_ref(params["ref"]),
+         now_s = System.os_time(:second),
+         {:ok, user_ref} <- authenticate(params, ctx, ref, now_s),
+         :ok <- allow(ctx, user_ref, now_s),
+         {:ok, terms, module, store_ref} <- acceptance_config(ctx),
+         {:ok, verified} <-
+           Terms.verify_acceptance(params["acceptance"], terms, ctx.pinned, now_s),
+         acceptance = %{
+           user_ref: user_ref,
+           v_hash: verified.v_hash,
+           account: verified.account,
+           sig: verified.sig,
+           issued_at: verified.issued_at,
+           accepted_at: now_s,
+           meta: Store.normalize_meta(meta)
+         },
+         :ok <- safe_record_acceptance(module, store_ref, acceptance) do
+      {200, %{"status" => "accepted", "v_hash" => verified.v_hash}}
+    else
+      {:error, status, body} -> {status, body}
+      {:error, :terms_stale} -> terms_stale(ctx)
+      {:error, {:pinned_mismatch, :version}} -> {409, %{"error" => "version mismatch"}}
+      {:error, {:pinned_mismatch, field}} -> invalid(field)
+      {:error, {:invalid, field}} -> invalid(field)
+    end
+  end
+
   # ── auth + rate ────────────────────────────────────────────────────────────
 
   defp geofence(meta, ctx) do
@@ -226,16 +259,19 @@ defmodule DelegatedSpend.Intake do
     end
   end
 
-  defp authenticate(params, ctx, ref) do
+  defp authenticate(params, ctx, ref),
+    do: authenticate(params, ctx, ref, System.os_time(:second))
+
+  defp authenticate(params, ctx, ref, now_s) do
     case {params["token"], Map.get(ctx, :token_secret)} do
       {token, secret} when is_binary(token) and is_binary(secret) ->
-        case Token.verify(secret, ref, token) do
+        case Token.verify(secret, ref, token, now_s) do
           {:ok, user_ref} -> {:ok, user_ref}
           {:error, _reason} -> {:error, 401, %{"error" => "unauthorized"}}
         end
 
       _ ->
-        case TelegramAuth.verify(params["init_data"], ctx.bot_token, ctx.max_age_s) do
+        case TelegramAuth.verify(params["init_data"], ctx.bot_token, ctx.max_age_s, now_s) do
           {:ok, %{user_id: user_id}} ->
             {:ok, ctx.user_ref_fn.(user_id)}
 
@@ -253,6 +289,43 @@ defmodule DelegatedSpend.Intake do
   end
 
   defp pin_version(_params, _ctx), do: :ok
+
+  defp terms_ref(ref) when is_binary(ref) and byte_size(ref) > 0, do: {:ok, ref}
+  defp terms_ref(_ref), do: {:error, 422, %{"error" => "invalid", "field" => "ref"}}
+
+  defp acceptance_config(%{
+         compliance: %{
+           terms: %{hash: "0x" <> hex, url: url} = terms,
+           store: {module, store_ref}
+         }
+       })
+       when is_atom(module) and byte_size(hex) == 64 and is_binary(url) and byte_size(url) > 0 do
+    with {:ok, _bytes} <- Base.decode16(hex, case: :mixed),
+         true <- Code.ensure_loaded?(module),
+         true <- function_exported?(module, :record_acceptance, 2) do
+      {:ok, terms, module, store_ref}
+    else
+      _ -> @unavailable
+    end
+  end
+
+  defp acceptance_config(_ctx), do: @unavailable
+
+  defp safe_record_acceptance(module, store_ref, acceptance) do
+    case apply(module, :record_acceptance, [store_ref, acceptance]) do
+      :ok -> :ok
+      _ -> @unavailable
+    end
+  rescue
+    _ -> @unavailable
+  catch
+    _, _ -> @unavailable
+  end
+
+  defp terms_stale(%{compliance: %{terms: %{hash: hash}}}),
+    do: {409, %{"error" => "terms_stale", "v_hash" => hash}}
+
+  defp invalid(field), do: {422, %{"error" => "invalid", "field" => to_string(field)}}
 
   defp wallet_view(ctx, user_ref) do
     case Map.get(ctx, :wallet_view_fn) do
@@ -421,13 +494,15 @@ defmodule DelegatedSpend.Intake do
   defp stringify(list) when is_list(list), do: Enum.map(list, &stringify/1)
   defp stringify(other), do: other
 
-  defp allow(%{rate: {limiter, max}}, user_ref) do
-    if Rate.allow?(limiter, user_ref, max),
+  defp allow(ctx, user_ref), do: allow(ctx, user_ref, System.os_time(:second))
+
+  defp allow(%{rate: {limiter, max}}, user_ref, now_s) do
+    if Rate.allow?(limiter, user_ref, max, now_s),
       do: :ok,
       else: {:error, 429, %{"error" => "rate limited"}}
   end
 
-  defp allow(_ctx, _user_ref), do: :ok
+  defp allow(_ctx, _user_ref, _now_s), do: :ok
 end
 
 defmodule DelegatedSpend.Intake.Rate do
