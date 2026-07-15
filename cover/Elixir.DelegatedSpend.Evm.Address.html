@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Evm.Address.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/objects/spend_keeper/evm/address.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-11 at 10:15:16</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/evm/address.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
 <table>
 <tbody>
 <tr>
@@ -215,12 +215,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L15"><a href="#L15">15</a></td>
-<td class="hits">96</td>
+<td class="hits">151</td>
 <td class="source"><code>    &lt;&lt;4, pub::binary&gt;&gt; = DelegatedSpend.Evm.Secp256k1.public_key(priv)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L16"><a href="#L16">16</a></td>
-<td class="hits">96</td>
+<td class="hits">151</td>
 <td class="source"><code>    pub |&gt; DelegatedSpend.Keccak.hash_256() |&gt; binary_part(12, 20) |&gt; checksum()</code></td>
 </tr>
 <tr>
@@ -290,7 +290,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L30"><a href="#L30">30</a></td>
-<td class="hits">97</td>
+<td class="hits">122</td>
 <td class="source"><code>  def to_bytes(addr) when is_binary(addr), do: Base.decode16!(strip0x(addr), case: :mixed)</code></td>
 </tr>
 <tr>
@@ -305,7 +305,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L33"><a href="#L33">33</a></td>
-<td class="hits">106</td>
+<td class="hits">293</td>
 <td class="source"><code>  def checksum(&lt;&lt;_::binary-size(20)&gt;&gt; = bin), do: checksum(Base.encode16(bin, case: :lower))</code></td>
 </tr>
 <tr>
@@ -320,12 +320,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L36"><a href="#L36">36</a></td>
-<td class="hits">107</td>
+<td class="hits">294</td>
 <td class="source"><code>    lower = addr |&gt; strip0x() |&gt; String.downcase()</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L37"><a href="#L37">37</a></td>
-<td class="hits">107</td>
+<td class="hits">294</td>
 <td class="source"><code>    hash = lower |&gt; DelegatedSpend.Keccak.hash_256() |&gt; Base.encode16(case: :lower)</code></td>
 </tr>
 <tr>
@@ -335,7 +335,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L39"><a href="#L39">39</a></td>
-<td class="hits">107</td>
+<td class="hits">294</td>
 <td class="source"><code>    out =</code></td>
 </tr>
 <tr>
@@ -350,7 +350,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L42"><a href="#L42">42</a></td>
-<td class="hits">4280</td>
+<td class="hits">11760</td>
 <td class="source"><code>        if c in ?a..?f and (h in ?8..?9 or h in ?a..?f), do: c - 32, else: c</code></td>
 </tr>
 <tr>
@@ -365,7 +365,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L45"><a href="#L45">45</a></td>
-<td class="hits">107</td>
+<td class="hits">294</td>
 <td class="source"><code>    "0x" &lt;&gt; List.to_string(out)</code></td>
 </tr>
 <tr>
@@ -385,7 +385,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L49"><a href="#L49">49</a></td>
-<td class="hits">1</td>
+<td class="hits">21</td>
 <td class="source"><code>  def eq?(a, b), do: down(a) == down(b)</code></td>
 </tr>
 <tr>
@@ -395,12 +395,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L51"><a href="#L51">51</a></td>
-<td class="hits">2</td>
+<td class="hits">42</td>
 <td class="source"><code>  defp down(a), do: a |&gt; strip0x() |&gt; String.downcase()</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L52"><a href="#L52">52</a></td>
-<td class="hits">98</td>
+<td class="hits">163</td>
 <td class="source"><code>  defp strip0x("0x" &lt;&gt; h), do: h</code></td>
 </tr>
 <tr class="hit">
@@ -410,7 +410,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L54"><a href="#L54">54</a></td>
-<td class="hits">107</td>
+<td class="hits">294</td>
 <td class="source"><code>  defp strip0x(h), do: h</code></td>
 </tr>
 <tr>

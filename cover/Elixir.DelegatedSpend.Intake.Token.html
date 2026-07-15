@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Intake.Token.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/objects/spend_keeper/intake/token.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-11 at 10:15:16</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/intake/token.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
 <table>
 <tbody>
 <tr>
@@ -195,7 +195,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L11"><a href="#L11">11</a></td>
-<td class="hits">29</td>
+<td class="hits">60</td>
 <td class="source"><code>    "v1.#{expires_at}.#{user_ref}." &lt;&gt; mac(secret, ref, user_ref, expires_at)</code></td>
 </tr>
 <tr>
@@ -213,9 +213,9 @@ td.source {
 <td class="hits"></td>
 <td class="source"><code>  @doc "Verify a token against `ref`; returns `{:ok, user_ref}` or `{:error, reason}`."</code></td>
 </tr>
-<tr class="hit">
+<tr class="miss">
 <td class="line" id="L15"><a href="#L15">15</a></td>
-<td class="hits">37</td>
+<td class="hits"><pre style="display: inline;">:-(</pre></td>
 <td class="source"><code>  def verify(secret, ref, token, now_s \\ System.os_time(:second))</code></td>
 </tr>
 <tr>
@@ -225,42 +225,42 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L17"><a href="#L17">17</a></td>
-<td class="hits">53</td>
+<td class="hits">134</td>
 <td class="source"><code>  def verify(secret, ref, token, now_s) when is_binary(token) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L18"><a href="#L18">18</a></td>
-<td class="hits">53</td>
+<td class="hits">134</td>
 <td class="source"><code>    with ["v1", exp_s, rest] &lt;- String.split(token, ".", parts: 3),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L19"><a href="#L19">19</a></td>
-<td class="hits">46</td>
+<td class="hits">126</td>
 <td class="source"><code>         {exp, ""} &lt;- Integer.parse(exp_s),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L20"><a href="#L20">20</a></td>
-<td class="hits">45</td>
+<td class="hits">125</td>
 <td class="source"><code>         {:ok, user_ref, mac_hex} &lt;- split_user_ref_and_mac(rest),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L21"><a href="#L21">21</a></td>
-<td class="hits">43</td>
+<td class="hits">123</td>
 <td class="source"><code>         expected = mac(secret, ref, user_ref, exp),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L22"><a href="#L22">22</a></td>
-<td class="hits">42</td>
+<td class="hits">122</td>
 <td class="source"><code>         true &lt;- byte_size(mac_hex) == byte_size(expected),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L23"><a href="#L23">23</a></td>
-<td class="hits">42</td>
+<td class="hits">122</td>
 <td class="source"><code>         true &lt;- :crypto.hash_equals(mac_hex, expected) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L24"><a href="#L24">24</a></td>
-<td class="hits">34</td>
+<td class="hits">113</td>
 <td class="source"><code>      if now_s &lt;= exp, do: {:ok, user_ref}, else: {:error, :expired}</code></td>
 </tr>
 <tr>
@@ -315,7 +315,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L35"><a href="#L35">35</a></td>
-<td class="hits">44</td>
+<td class="hits">124</td>
 <td class="source"><code>    user_ref_size = byte_size(rest) - 65</code></td>
 </tr>
 <tr>
@@ -325,7 +325,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L37"><a href="#L37">37</a></td>
-<td class="hits">44</td>
+<td class="hits">124</td>
 <td class="source"><code>    case rest do</code></td>
 </tr>
 <tr>
@@ -335,7 +335,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L39"><a href="#L39">39</a></td>
-<td class="hits">43</td>
+<td class="hits">123</td>
 <td class="source"><code>        {:ok, user_ref, mac_hex}</code></td>
 </tr>
 <tr>
@@ -385,12 +385,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L49"><a href="#L49">49</a></td>
-<td class="hits">72</td>
+<td class="hits">183</td>
 <td class="source"><code>    :crypto.mac(:hmac, :sha256, secret, "spend-token\n#{ref}\n#{user_ref}\n#{expires_at}")</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L50"><a href="#L50">50</a></td>
-<td class="hits">72</td>
+<td class="hits">183</td>
 <td class="source"><code>    |&gt; Base.encode16(case: :lower)</code></td>
 </tr>
 <tr>

@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Evm.Secp256k1.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/objects/spend_keeper/evm/secp256k1.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-11 at 10:15:16</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/evm/secp256k1.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
 <table>
 <tbody>
 <tr>
@@ -330,12 +330,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L38"><a href="#L38">38</a></td>
-<td class="hits">96</td>
+<td class="hits">151</td>
 <td class="source"><code>    {pub, ^priv} = :crypto.generate_key(:ecdh, :secp256k1, priv)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L39"><a href="#L39">39</a></td>
-<td class="hits">96</td>
+<td class="hits">151</td>
 <td class="source"><code>    pub</code></td>
 </tr>
 <tr>
@@ -385,17 +385,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L49"><a href="#L49">49</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    z = :binary.decode_unsigned(digest)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L50"><a href="#L50">50</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    d = :binary.decode_unsigned(priv)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L51"><a href="#L51">51</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    sign_loop(z, d, rfc6979_init(priv, digest))</code></td>
 </tr>
 <tr>
@@ -425,17 +425,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L57"><a href="#L57">57</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>    r = :binary.decode_unsigned(r_bin)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L58"><a href="#L58">58</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>    s = :binary.decode_unsigned(s_bin)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L59"><a href="#L59">59</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>    z = :binary.decode_unsigned(digest)</code></td>
 </tr>
 <tr>
@@ -445,22 +445,22 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L61"><a href="#L61">61</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>    x = r + if(recid &gt;= 2, do: @n, else: 0)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L62"><a href="#L62">62</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>    alpha = mod(x * x * x + 7, @p)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L63"><a href="#L63">63</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>    beta = powmod(alpha, div(@p + 1, 4), @p)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L64"><a href="#L64">64</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>    y = if rem(beta, 2) == (recid &amp;&amp;&amp; 1), do: beta, else: @p - beta</code></td>
 </tr>
 <tr>
@@ -475,27 +475,27 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L67"><a href="#L67">67</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>    rinv = powmod(r, @n - 2, @n)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L68"><a href="#L68">68</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>    sr = mul(s, {x, y})</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L69"><a href="#L69">69</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>    zg = mul(z, {@gx, @gy})</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L70"><a href="#L70">70</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>    {qx, qy} = mul(rinv, add(sr, negate(zg)))</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L71"><a href="#L71">71</a></td>
-<td class="hits">6</td>
+<td class="hits">30</td>
 <td class="source"><code>    &lt;&lt;4, qx::256, qy::256&gt;&gt;</code></td>
 </tr>
 <tr>
@@ -520,37 +520,37 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L76"><a href="#L76">76</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    h1 = bits2octets(digest)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L77"><a href="#L77">77</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    v0 = :binary.copy(&lt;&lt;1&gt;&gt;, 32)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L78"><a href="#L78">78</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    k0 = :binary.copy(&lt;&lt;0&gt;&gt;, 32)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L79"><a href="#L79">79</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    k1 = hmac(k0, v0 &lt;&gt; &lt;&lt;0&gt;&gt; &lt;&gt; priv &lt;&gt; h1)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L80"><a href="#L80">80</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    v1 = hmac(k1, v0)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L81"><a href="#L81">81</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    k2 = hmac(k1, v1 &lt;&gt; &lt;&lt;1&gt;&gt; &lt;&gt; priv &lt;&gt; h1)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L82"><a href="#L82">82</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    v2 = hmac(k2, v1)</code></td>
 </tr>
 <tr>
@@ -575,12 +575,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L87"><a href="#L87">87</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    v = hmac(k, v)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L88"><a href="#L88">88</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    cand = :binary.decode_unsigned(v)</code></td>
 </tr>
 <tr>
@@ -590,12 +590,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L90"><a href="#L90">90</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    case try_sign(cand, z, d) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L91"><a href="#L91">91</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>      {:ok, r, s, recid} -&gt; {pad32(r), pad32(s), recid}</code></td>
 </tr>
 <tr class="miss">
@@ -635,17 +635,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L99"><a href="#L99">99</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    {pub, _} = :crypto.generate_key(:ecdh, :secp256k1, &lt;&lt;k::256&gt;&gt;)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L100"><a href="#L100">100</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    &lt;&lt;4, rx::256, ry::256&gt;&gt; = pub</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L101"><a href="#L101">101</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    r = mod(rx, @n)</code></td>
 </tr>
 <tr>
@@ -655,7 +655,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L103"><a href="#L103">103</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    if r == 0 do</code></td>
 </tr>
 <tr>
@@ -670,12 +670,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L106"><a href="#L106">106</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>      s = mod(powmod(k, @n - 2, @n) * (z + r * d), @n)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L107"><a href="#L107">107</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>      recid = (ry &amp;&amp;&amp; 1) ||| if(rx &gt;= @n, do: 2, else: 0)</code></td>
 </tr>
 <tr>
@@ -685,7 +685,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L109"><a href="#L109">109</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>      cond do</code></td>
 </tr>
 <tr class="miss">
@@ -695,12 +695,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L111"><a href="#L111">111</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>        s &gt; @half_n -&gt; {:ok, r, @n - s, bxor(recid, 1)}</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L112"><a href="#L112">112</a></td>
-<td class="hits">30</td>
+<td class="hits">57</td>
 <td class="source"><code>        true -&gt; {:ok, r, s, recid}</code></td>
 </tr>
 <tr>
@@ -735,17 +735,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L119"><a href="#L119">119</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    z = :binary.decode_unsigned(digest)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L120"><a href="#L120">120</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    z = if z &gt;= @n, do: z - @n, else: z</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L121"><a href="#L121">121</a></td>
-<td class="hits">50</td>
+<td class="hits">89</td>
 <td class="source"><code>    &lt;&lt;z::256&gt;&gt;</code></td>
 </tr>
 <tr>
@@ -760,7 +760,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L124"><a href="#L124">124</a></td>
-<td class="hits">250</td>
+<td class="hits">445</td>
 <td class="source"><code>  defp hmac(key, data), do: :crypto.mac(:hmac, :sha256, key, data)</code></td>
 </tr>
 <tr>
@@ -775,7 +775,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L127"><a href="#L127">127</a></td>
-<td class="hits">18</td>
+<td class="hits">92</td>
 <td class="source"><code>  defp add(:inf, q), do: q</code></td>
 </tr>
 <tr class="miss">
@@ -795,22 +795,22 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L131"><a href="#L131">131</a></td>
-<td class="hits">2300</td>
+<td class="hits">11338</td>
 <td class="source"><code>    cond do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L132"><a href="#L132">132</a></td>
-<td class="hits">2300</td>
+<td class="hits">11338</td>
 <td class="source"><code>      x1 == x2 and mod(y1 + y2, @p) == 0 -&gt; :inf</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L133"><a href="#L133">133</a></td>
-<td class="hits">2300</td>
+<td class="hits">11337</td>
 <td class="source"><code>      x1 == x2 and y1 == y2 -&gt; double({x1, y1})</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L134"><a href="#L134">134</a></td>
-<td class="hits">2300</td>
+<td class="hits">11337</td>
 <td class="source"><code>      true -&gt; chord({x1, y1}, {x2, y2})</code></td>
 </tr>
 <tr>
@@ -835,12 +835,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L139"><a href="#L139">139</a></td>
-<td class="hits">2300</td>
+<td class="hits">11337</td>
 <td class="source"><code>    m = mod((y2 - y1) * powmod(mod(x2 - x1, @p), @p - 2, @p), @p)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L140"><a href="#L140">140</a></td>
-<td class="hits">2300</td>
+<td class="hits">11337</td>
 <td class="source"><code>    x3 = mod(m * m - x1 - x2, @p)</code></td>
 </tr>
 <tr>
@@ -865,12 +865,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L145"><a href="#L145">145</a></td>
-<td class="hits">4583</td>
+<td class="hits">22906</td>
 <td class="source"><code>    m = mod(3 * x * x * powmod(mod(2 * y, @p), @p - 2, @p), @p)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L146"><a href="#L146">146</a></td>
-<td class="hits">4583</td>
+<td class="hits">22906</td>
 <td class="source"><code>    x3 = mod(m * m - 2 * x, @p)</code></td>
 </tr>
 <tr>
@@ -890,7 +890,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L150"><a href="#L150">150</a></td>
-<td class="hits">6</td>
+<td class="hits">31</td>
 <td class="source"><code>  defp negate({x, y}), do: {x, mod(-y, @p)}</code></td>
 </tr>
 <tr>
@@ -900,12 +900,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L152"><a href="#L152">152</a></td>
-<td class="hits">18</td>
+<td class="hits">93</td>
 <td class="source"><code>  defp mul(k, point), do: mul(k, point, :inf)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L153"><a href="#L153">153</a></td>
-<td class="hits">18</td>
+<td class="hits">92</td>
 <td class="source"><code>  defp mul(0, _point, acc), do: acc</code></td>
 </tr>
 <tr>
@@ -920,12 +920,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L156"><a href="#L156">156</a></td>
-<td class="hits">4583</td>
+<td class="hits">22907</td>
 <td class="source"><code>    acc = if (k &amp;&amp;&amp; 1) == 1, do: add(acc, point), else: acc</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L157"><a href="#L157">157</a></td>
-<td class="hits">4583</td>
+<td class="hits">22907</td>
 <td class="source"><code>    mul(k &gt;&gt;&gt; 1, double(point), acc)</code></td>
 </tr>
 <tr>
@@ -940,17 +940,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L160"><a href="#L160">160</a></td>
-<td class="hits">6945</td>
+<td class="hits">34394</td>
 <td class="source"><code>  defp powmod(b, e, m), do: :crypto.mod_pow(b, e, m) |&gt; :binary.decode_unsigned()</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L161"><a href="#L161">161</a></td>
-<td class="hits">27644</td>
+<td class="hits">137213</td>
 <td class="source"><code>  defp mod(a, m), do: Integer.mod(a, m)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L162"><a href="#L162">162</a></td>
-<td class="hits">100</td>
+<td class="hits">178</td>
 <td class="source"><code>  defp pad32(n), do: &lt;&lt;n::256&gt;&gt;</code></td>
 </tr>
 <tr>

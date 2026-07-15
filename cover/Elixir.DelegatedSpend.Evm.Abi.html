@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Evm.Abi.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/objects/spend_keeper/evm/abi.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-11 at 10:15:16</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/evm/abi.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
 <table>
 <tbody>
 <tr>
@@ -240,12 +240,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L20"><a href="#L20">20</a></td>
-<td class="hits">33</td>
+<td class="hits">42</td>
 <td class="source"><code>    selector = DelegatedSpend.Keccak.hash_256(signature(name, types)) |&gt; binary_part(0, 4)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L21"><a href="#L21">21</a></td>
-<td class="hits">33</td>
+<td class="hits">42</td>
 <td class="source"><code>    selector &lt;&gt; ABI.TypeEncoder.encode(args, %FunctionSelector{function: nil, types: types})</code></td>
 </tr>
 <tr>
@@ -265,7 +265,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L25"><a href="#L25">25</a></td>
-<td class="hits">33</td>
+<td class="hits">42</td>
 <td class="source"><code>    do: name &lt;&gt; "(" &lt;&gt; Enum.map_join(types, ",", &amp;FunctionSelector.encode_type/1) &lt;&gt; ")"</code></td>
 </tr>
 <tr>

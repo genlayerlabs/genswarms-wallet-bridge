@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Intake.GrantValidation.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/objects/spend_keeper/intake/grant_validation.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-11 at 10:15:16</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/intake/grant_validation.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
 <table>
 <tbody>
 <tr>
@@ -240,42 +240,42 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L20"><a href="#L20">20</a></td>
-<td class="hits">36</td>
+<td class="hits">40</td>
 <td class="source"><code>    with :ok &lt;- pin(env["v"], pinned.version, :version),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L21"><a href="#L21">21</a></td>
-<td class="hits">34</td>
+<td class="hits">36</td>
 <td class="source"><code>         :ok &lt;- pin(env["chain_id"], pinned.chain_id, :chain_id),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L22"><a href="#L22">22</a></td>
-<td class="hits">32</td>
+<td class="hits">34</td>
 <td class="source"><code>         :ok &lt;- pin_addr(env["token"], pinned.token, :token),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L23"><a href="#L23">23</a></td>
-<td class="hits">30</td>
+<td class="hits">32</td>
 <td class="source"><code>         :ok &lt;- pin_addr(env["spender"], pinned.router, :spender),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L24"><a href="#L24">24</a></td>
-<td class="hits">26</td>
+<td class="hits">28</td>
 <td class="source"><code>         {:ok, owner} &lt;- addr(env["owner"], :owner),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L25"><a href="#L25">25</a></td>
-<td class="hits">24</td>
+<td class="hits">26</td>
 <td class="source"><code>         {:ok, value} &lt;- pos_int(env["value"], :value),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L26"><a href="#L26">26</a></td>
-<td class="hits">21</td>
+<td class="hits">23</td>
 <td class="source"><code>         {:ok, deadline} &lt;- pos_int(env["deadline"], :deadline),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L27"><a href="#L27">27</a></td>
-<td class="hits">20</td>
+<td class="hits">22</td>
 <td class="source"><code>         {:ok, {v, r, s}} &lt;- sig(env["sig"]) do</code></td>
 </tr>
 <tr>
@@ -310,12 +310,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L34"><a href="#L34">34</a></td>
-<td class="hits">66</td>
+<td class="hits">70</td>
 <td class="source"><code>  defp pin(got, expected, _field) when got == expected, do: :ok</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L35"><a href="#L35">35</a></td>
-<td class="hits">4</td>
+<td class="hits">6</td>
 <td class="source"><code>  defp pin(_got, _expected, field), do: {:error, {:pinned_mismatch, field}}</code></td>
 </tr>
 <tr>
@@ -330,12 +330,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L38"><a href="#L38">38</a></td>
-<td class="hits">62</td>
+<td class="hits">66</td>
 <td class="source"><code>    with {:ok, g} &lt;- addr(got, field) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L39"><a href="#L39">39</a></td>
-<td class="hits">60</td>
+<td class="hits">64</td>
 <td class="source"><code>      if String.downcase(g) == String.downcase(expected),</code></td>
 </tr>
 <tr>
@@ -370,12 +370,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L46"><a href="#L46">46</a></td>
-<td class="hits">86</td>
+<td class="hits">92</td>
 <td class="source"><code>    case byte_size(hex) == 40 and match?({:ok, _}, Base.decode16(hex, case: :mixed)) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L47"><a href="#L47">47</a></td>
-<td class="hits">84</td>
+<td class="hits">90</td>
 <td class="source"><code>      true -&gt; {:ok, a}</code></td>
 </tr>
 <tr class="hit">
@@ -410,7 +410,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L54"><a href="#L54">54</a></td>
-<td class="hits">41</td>
+<td class="hits">45</td>
 <td class="source"><code>  defp pos_int(n, _field) when is_integer(n) and n &gt; 0, do: {:ok, n}</code></td>
 </tr>
 <tr class="hit">
@@ -430,12 +430,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L58"><a href="#L58">58</a></td>
-<td class="hits">16</td>
+<td class="hits">18</td>
 <td class="source"><code>    with {:ok, r} when byte_size(r) == 32 &lt;- Base.decode16(r_hex, case: :mixed),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L59"><a href="#L59">59</a></td>
-<td class="hits">15</td>
+<td class="hits">17</td>
 <td class="source"><code>         {:ok, s} when byte_size(s) == 32 &lt;- Base.decode16(s_hex, case: :mixed) do</code></td>
 </tr>
 <tr>

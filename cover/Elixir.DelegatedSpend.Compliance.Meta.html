@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>cover/Elixir.DelegatedSpend.Evm.Rpc.html</title>
+<title>cover/Elixir.DelegatedSpend.Compliance.Meta.html</title>
 <style>/*
  %CopyrightBegin%
 
@@ -139,14 +139,14 @@ td.source {
 </style>
 </head>
 <body>
-<h1><code>cover/Elixir.DelegatedSpend.Evm.Rpc.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/evm/rpc.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<h1><code>cover/Elixir.DelegatedSpend.Compliance.Meta.html</code></h1>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/compliance/meta.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
 <table>
 <tbody>
 <tr>
 <td class="line" id="L1"><a href="#L1">1</a></td>
 <td class="hits"></td>
-<td class="source"><code>defmodule DelegatedSpend.Evm.Rpc do</code></td>
+<td class="source"><code>defmodule DelegatedSpend.Compliance.Meta do</code></td>
 </tr>
 <tr>
 <td class="line" id="L2"><a href="#L2">2</a></td>
@@ -156,237 +156,237 @@ td.source {
 <tr>
 <td class="line" id="L3"><a href="#L3">3</a></td>
 <td class="hits"></td>
-<td class="source"><code>  Port of a production-proven pure-Elixir EVM module; do not diverge.</code></td>
+<td class="source"><code>  Builds the app-attested request metadata the three-arity intake handlers</code></td>
 </tr>
 <tr>
 <td class="line" id="L4"><a href="#L4">4</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  take, doing the two edge-trust steps that are easy to get wrong once:</code></td>
 </tr>
 <tr>
 <td class="line" id="L5"><a href="#L5">5</a></td>
 <td class="hits"></td>
-<td class="source"><code>  Ethereum JSON-RPC transport over `curl` + `System.cmd` — NOT `:httpc`, which is</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L6"><a href="#L6">6</a></td>
 <td class="hits"></td>
-<td class="source"><code>  unusable in this OTP build (same reason `tg_ingress` shells out to curl).</code></td>
+<td class="source"><code>    * The client IP is picked from `x-forwarded-for` by hop count. With</code></td>
 </tr>
 <tr>
 <td class="line" id="L7"><a href="#L7">7</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>      `trusted_hops: n` reverse proxies in front of the listener, the client</code></td>
 </tr>
 <tr>
 <td class="line" id="L8"><a href="#L8">8</a></td>
 <td class="hits"></td>
-<td class="source"><code>  `call/3` returns `{:ok, result}` | `{:error, reason}`; `call!/3` raises. Typed</code></td>
+<td class="source"><code>      is entry `n + 1` counting backwards from the socket peer; entries</code></td>
 </tr>
 <tr>
 <td class="line" id="L9"><a href="#L9">9</a></td>
 <td class="hits"></td>
-<td class="source"><code>  wrappers (`chain_id`, `gas_price`, `nonce`, `eth_call`, `send_raw`, `receipt`,</code></td>
+<td class="source"><code>      further left are client-supplied noise. `trusted_hops: 0` (default)</code></td>
 </tr>
 <tr>
 <td class="line" id="L10"><a href="#L10">10</a></td>
 <td class="hits"></td>
-<td class="source"><code>  `get_logs`, `block_timestamp`, `estimate_gas`) cover everything the chain layer</code></td>
+<td class="source"><code>      ignores the spoofable header entirely and uses the socket peer. A chain</code></td>
 </tr>
 <tr>
 <td class="line" id="L11"><a href="#L11">11</a></td>
 <td class="hits"></td>
-<td class="source"><code>  needs. No business logic lives here.</code></td>
+<td class="source"><code>      shorter than the hop count yields `ip: nil` — honest missing evidence</code></td>
 </tr>
 <tr>
 <td class="line" id="L12"><a href="#L12">12</a></td>
 <td class="hits"></td>
-<td class="source"><code>  """</code></td>
+<td class="source"><code>      beats recording the proxy's own address.</code></td>
 </tr>
 <tr>
 <td class="line" id="L13"><a href="#L13">13</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>    * The country is read ONLY from the header named in `country_header` —</code></td>
 </tr>
 <tr>
 <td class="line" id="L14"><a href="#L14">14</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @timeout_s "120"</code></td>
+<td class="source"><code>      one the TRUSTED EDGE sets or overwrites (`"cf-ipcountry"` behind</code></td>
 </tr>
 <tr>
 <td class="line" id="L15"><a href="#L15">15</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>      Cloudflare; a GeoIP header your own Caddy/nginx sets otherwise). When</code></td>
 </tr>
 <tr>
 <td class="line" id="L16"><a href="#L16">16</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def call(rpc_url, method, params) do</code></td>
+<td class="source"><code>      several values arrive the last one wins (appended nearest the origin);</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L17"><a href="#L17">17</a></td>
-<td class="hits">21</td>
-<td class="source"><code>    body = Jason.encode!(%{jsonrpc: "2.0", id: 1, method: method, params: params})</code></td>
+<td class="hits"></td>
+<td class="source"><code>      no option or no header means `country: nil`, which the geofence denies.</code></td>
 </tr>
 <tr>
 <td class="line" id="L18"><a href="#L18">18</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L19"><a href="#L19">19</a></td>
-<td class="hits">21</td>
-<td class="source"><code>    args = [</code></td>
+<td class="hits"></td>
+<td class="source"><code>  Pure data in (`conn.remote_ip`, `conn.req_headers`, `conn.req_cookies`),</code></td>
 </tr>
 <tr>
 <td class="line" id="L20"><a href="#L20">20</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "-s",</code></td>
+<td class="source"><code>  normalized meta out — no Plug dependency.</code></td>
 </tr>
 <tr>
 <td class="line" id="L21"><a href="#L21">21</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "--max-time",</code></td>
+<td class="source"><code>  """</code></td>
 </tr>
 <tr>
 <td class="line" id="L22"><a href="#L22">22</a></td>
 <td class="hits"></td>
-<td class="source"><code>      @timeout_s,</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L23"><a href="#L23">23</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "-X",</code></td>
+<td class="source"><code>  alias DelegatedSpend.Compliance.Store</code></td>
 </tr>
 <tr>
 <td class="line" id="L24"><a href="#L24">24</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "POST",</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L25"><a href="#L25">25</a></td>
 <td class="hits"></td>
-<td class="source"><code>      rpc_url,</code></td>
+<td class="source"><code>  @doc """</code></td>
 </tr>
 <tr>
 <td class="line" id="L26"><a href="#L26">26</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "-H",</code></td>
+<td class="source"><code>  Build normalized handler meta from connection data.</code></td>
 </tr>
 <tr>
 <td class="line" id="L27"><a href="#L27">27</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "Content-Type: application/json",</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L28"><a href="#L28">28</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "-d",</code></td>
+<td class="source"><code>  Options: `trusted_hops` (default 0), `country_header` (default none),</code></td>
 </tr>
 <tr>
 <td class="line" id="L29"><a href="#L29">29</a></td>
 <td class="hits"></td>
-<td class="source"><code>      body</code></td>
+<td class="source"><code>  `session_cookie` (default `"spend_session"`).</code></td>
 </tr>
 <tr>
 <td class="line" id="L30"><a href="#L30">30</a></td>
 <td class="hits"></td>
-<td class="source"><code>    ]</code></td>
+<td class="source"><code>  """</code></td>
 </tr>
-<tr>
+<tr class="hit">
 <td class="line" id="L31"><a href="#L31">31</a></td>
-<td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="hits">3</td>
+<td class="source"><code>  def build(remote_ip, headers, cookies, opts \\ []) when is_list(headers) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L32"><a href="#L32">32</a></td>
-<td class="hits">21</td>
-<td class="source"><code>    case System.cmd(curl_bin(), args, stderr_to_stdout: true) do</code></td>
+<td class="hits">20</td>
+<td class="source"><code>    headers = Enum.map(headers, fn {name, value} -&gt; {String.downcase(name), value} end)</code></td>
 </tr>
 <tr>
 <td class="line" id="L33"><a href="#L33">33</a></td>
 <td class="hits"></td>
-<td class="source"><code>      {out, 0} -&gt;</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L34"><a href="#L34">34</a></td>
 <td class="hits">20</td>
-<td class="source"><code>        case Jason.decode(out) do</code></td>
+<td class="source"><code>    Store.normalize_meta(%{</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L35"><a href="#L35">35</a></td>
-<td class="hits">16</td>
-<td class="source"><code>          {:ok, %{"result" =&gt; result}} -&gt; {:ok, result}</code></td>
+<td class="hits"></td>
+<td class="source"><code>      ip: client_ip(remote_ip, headers, Keyword.get(opts, :trusted_hops, 0)),</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L36"><a href="#L36">36</a></td>
-<td class="hits">3</td>
-<td class="source"><code>          {:ok, %{"error" =&gt; err}} -&gt; {:error, {:rpc_error, method, err}}</code></td>
+<td class="hits"></td>
+<td class="source"><code>      country: country(headers, Keyword.get(opts, :country_header)),</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L37"><a href="#L37">37</a></td>
-<td class="hits">1</td>
-<td class="source"><code>          _ -&gt; {:error, {:bad_rpc_response, method, String.slice(out, 0, 200)}}</code></td>
+<td class="hits"></td>
+<td class="source"><code>      user_agent: headers |&gt; header_values("user-agent") |&gt; List.first(),</code></td>
 </tr>
 <tr>
 <td class="line" id="L38"><a href="#L38">38</a></td>
 <td class="hits"></td>
-<td class="source"><code>        end</code></td>
+<td class="source"><code>      session_id: session_id(cookies, Keyword.get(opts, :session_cookie, "spend_session"))</code></td>
 </tr>
 <tr>
 <td class="line" id="L39"><a href="#L39">39</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>    })</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L40"><a href="#L40">40</a></td>
-<td class="hits">1</td>
-<td class="source"><code>      {err, code} -&gt;</code></td>
-</tr>
-<tr>
-<td class="line" id="L41"><a href="#L41">41</a></td>
-<td class="hits"></td>
-<td class="source"><code>        {:error, {:curl_failed, code, String.slice(err, 0, 200)}}</code></td>
-</tr>
-<tr>
-<td class="line" id="L42"><a href="#L42">42</a></td>
-<td class="hits"></td>
-<td class="source"><code>    end</code></td>
-</tr>
-<tr>
-<td class="line" id="L43"><a href="#L43">43</a></td>
 <td class="hits"></td>
 <td class="source"><code>  end</code></td>
 </tr>
 <tr>
-<td class="line" id="L44"><a href="#L44">44</a></td>
+<td class="line" id="L41"><a href="#L41">41</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
 <tr>
-<td class="line" id="L45"><a href="#L45">45</a></td>
+<td class="line" id="L42"><a href="#L42">42</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def call!(rpc_url, method, params) do</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L46"><a href="#L46">46</a></td>
-<td class="hits">13</td>
-<td class="source"><code>    case call(rpc_url, method, params) do</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L47"><a href="#L47">47</a></td>
-<td class="hits">12</td>
-<td class="source"><code>      {:ok, result} -&gt; result</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L48"><a href="#L48">48</a></td>
-<td class="hits">1</td>
-<td class="source"><code>      {:error, reason} -&gt; raise "rpc #{method} failed: #{inspect(reason)}"</code></td>
+<td class="source"><code>  defp client_ip(remote_ip, headers, trusted_hops)</code></td>
 </tr>
 <tr>
-<td class="line" id="L49"><a href="#L49">49</a></td>
+<td class="line" id="L43"><a href="#L43">43</a></td>
 <td class="hits"></td>
-<td class="source"><code>    end</code></td>
+<td class="source"><code>       when is_integer(trusted_hops) and trusted_hops &gt;= 0 do</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L44"><a href="#L44">44</a></td>
+<td class="hits">19</td>
+<td class="source"><code>    chain = forwarded_chain(headers) ++ [remote_ip]</code></td>
+</tr>
+<tr>
+<td class="line" id="L45"><a href="#L45">45</a></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
+</tr>
+<tr>
+<td class="line" id="L46"><a href="#L46">46</a></td>
+<td class="hits"></td>
+<td class="source"><code>    # Right to left: positions 1..trusted_hops are the proxies we operate;</code></td>
+</tr>
+<tr>
+<td class="line" id="L47"><a href="#L47">47</a></td>
+<td class="hits"></td>
+<td class="source"><code>    # the client is the next entry. Enum.at/2 with a negative index past the</code></td>
+</tr>
+<tr>
+<td class="line" id="L48"><a href="#L48">48</a></td>
+<td class="hits"></td>
+<td class="source"><code>    # head returns nil — a chain shorter than expected records no IP.</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L49"><a href="#L49">49</a></td>
+<td class="hits">19</td>
+<td class="source"><code>    chain |&gt; Enum.at(-(trusted_hops + 1)) |&gt; parse_ip()</code></td>
 </tr>
 <tr>
 <td class="line" id="L50"><a href="#L50">50</a></td>
@@ -398,110 +398,110 @@ td.source {
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
-<tr>
+<tr class="hit">
 <td class="line" id="L52"><a href="#L52">52</a></td>
-<td class="hits"></td>
-<td class="source"><code>  # ── typed helpers ─────────────────────────────────────────────────────────────</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L53"><a href="#L53">53</a></td>
 <td class="hits">1</td>
-<td class="source"><code>  def chain_id(rpc), do: call!(rpc, "eth_chainId", []) |&gt; hex_to_int()</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L54"><a href="#L54">54</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def gas_price(rpc), do: call!(rpc, "eth_gasPrice", []) |&gt; hex_to_int()</code></td>
+<td class="source"><code>  defp client_ip(_remote_ip, _headers, _bad_hops), do: nil</code></td>
 </tr>
 <tr>
-<td class="line" id="L55"><a href="#L55">55</a></td>
+<td class="line" id="L53"><a href="#L53">53</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
 <tr>
-<td class="line" id="L56"><a href="#L56">56</a></td>
+<td class="line" id="L54"><a href="#L54">54</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def nonce(rpc, addr),</code></td>
+<td class="source"><code>  defp forwarded_chain(headers) do</code></td>
 </tr>
 <tr class="hit">
+<td class="line" id="L55"><a href="#L55">55</a></td>
+<td class="hits">19</td>
+<td class="source"><code>    for value &lt;- header_values(headers, "x-forwarded-for"),</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L56"><a href="#L56">56</a></td>
+<td class="hits">17</td>
+<td class="source"><code>        entry &lt;- String.split(value, ","),</code></td>
+</tr>
+<tr>
 <td class="line" id="L57"><a href="#L57">57</a></td>
-<td class="hits">1</td>
-<td class="source"><code>    do: call!(rpc, "eth_getTransactionCount", [addr, "pending"]) |&gt; hex_to_int()</code></td>
+<td class="hits"></td>
+<td class="source"><code>        entry = String.trim(entry),</code></td>
 </tr>
 <tr>
 <td class="line" id="L58"><a href="#L58">58</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>        entry != "",</code></td>
 </tr>
 <tr>
 <td class="line" id="L59"><a href="#L59">59</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def block_timestamp(rpc) do</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L60"><a href="#L60">60</a></td>
-<td class="hits">1</td>
-<td class="source"><code>    call!(rpc, "eth_getBlockByNumber", ["latest", false])["timestamp"] |&gt; hex_to_int()</code></td>
+<td class="source"><code>        do: entry</code></td>
 </tr>
 <tr>
-<td class="line" id="L61"><a href="#L61">61</a></td>
+<td class="line" id="L60"><a href="#L60">60</a></td>
 <td class="hits"></td>
 <td class="source"><code>  end</code></td>
 </tr>
 <tr>
-<td class="line" id="L62"><a href="#L62">62</a></td>
+<td class="line" id="L61"><a href="#L61">61</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
+</tr>
+<tr>
+<td class="line" id="L62"><a href="#L62">62</a></td>
+<td class="hits"></td>
+<td class="source"><code>  defp parse_ip(ip) when is_tuple(ip) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L63"><a href="#L63">63</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def block_number(rpc), do: call!(rpc, "eth_blockNumber", []) |&gt; hex_to_int()</code></td>
+<td class="hits">8</td>
+<td class="source"><code>    case :inet.ntoa(ip) do</code></td>
 </tr>
-<tr>
+<tr class="miss">
 <td class="line" id="L64"><a href="#L64">64</a></td>
-<td class="hits"></td>
-<td class="source"><code></code></td>
-</tr>
-<tr>
-<td class="line" id="L65"><a href="#L65">65</a></td>
-<td class="hits"></td>
-<td class="source"><code>  @doc "eth_getBalance — native balance (wei) of `addr`. Used by the health monitor's gas check."</code></td>
+<td class="hits"><pre style="display: inline;">:-(</pre></td>
+<td class="source"><code>      {:error, _} -&gt; nil</code></td>
 </tr>
 <tr class="hit">
+<td class="line" id="L65"><a href="#L65">65</a></td>
+<td class="hits">8</td>
+<td class="source"><code>      chars -&gt; to_string(chars)</code></td>
+</tr>
+<tr>
 <td class="line" id="L66"><a href="#L66">66</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def balance(rpc, addr), do: call!(rpc, "eth_getBalance", [addr, "latest"]) |&gt; hex_to_int()</code></td>
+<td class="hits"></td>
+<td class="source"><code>    end</code></td>
 </tr>
 <tr>
 <td class="line" id="L67"><a href="#L67">67</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  end</code></td>
 </tr>
 <tr>
 <td class="line" id="L68"><a href="#L68">68</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @doc "eth_estimateGas — returns `{:ok, gas_int}` | `{:error, _}` (can revert)."</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L69"><a href="#L69">69</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def estimate_gas(rpc, tx) do</code></td>
+<td class="source"><code>  defp parse_ip(entry) when is_binary(entry) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L70"><a href="#L70">70</a></td>
-<td class="hits">2</td>
-<td class="source"><code>    case call(rpc, "eth_estimateGas", [tx]) do</code></td>
+<td class="hits">9</td>
+<td class="source"><code>    case entry |&gt; strip_port() |&gt; to_charlist() |&gt; :inet.parse_strict_address() do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L71"><a href="#L71">71</a></td>
-<td class="hits">1</td>
-<td class="source"><code>      {:ok, hex} -&gt; {:ok, hex_to_int(hex)}</code></td>
+<td class="hits">8</td>
+<td class="source"><code>      {:ok, addr} -&gt; addr |&gt; :inet.ntoa() |&gt; to_string()</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L72"><a href="#L72">72</a></td>
 <td class="hits">1</td>
-<td class="source"><code>      other -&gt; other</code></td>
+<td class="source"><code>      {:error, _} -&gt; nil</code></td>
 </tr>
 <tr>
 <td class="line" id="L73"><a href="#L73">73</a></td>
@@ -518,85 +518,85 @@ td.source {
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
-<tr>
-<td class="line" id="L76"><a href="#L76">76</a></td>
-<td class="hits"></td>
-<td class="source"><code>  @doc "eth_call a view function; `data` is `0x…` calldata. Returns raw 0x-hex result."</code></td>
-</tr>
 <tr class="hit">
+<td class="line" id="L76"><a href="#L76">76</a></td>
+<td class="hits">2</td>
+<td class="source"><code>  defp parse_ip(_), do: nil</code></td>
+</tr>
+<tr>
 <td class="line" id="L77"><a href="#L77">77</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def eth_call(rpc, to, data), do: call!(rpc, "eth_call", [%{to: to, data: data}, "latest"])</code></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L78"><a href="#L78">78</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  # "[2001:db8::1]:443" → "2001:db8::1"; "1.2.3.4:8080" → "1.2.3.4";</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L79"><a href="#L79">79</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def code(rpc, addr), do: call!(rpc, "eth_getCode", [addr, "latest"])</code></td>
+<td class="hits"></td>
+<td class="source"><code>  # bare IPv6 (many colons) and bare IPv4 pass through untouched.</code></td>
 </tr>
 <tr>
 <td class="line" id="L80"><a href="#L80">80</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  defp strip_port(entry) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L81"><a href="#L81">81</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def send_raw(rpc, raw_hex), do: call(rpc, "eth_sendRawTransaction", [raw_hex])</code></td>
+<td class="hits">9</td>
+<td class="source"><code>    case Regex.run(~r/^\[([^\]]+)\](?::\d+)?$/, entry) do</code></td>
 </tr>
 <tr>
 <td class="line" id="L82"><a href="#L82">82</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
-</tr>
-<tr>
-<td class="line" id="L83"><a href="#L83">83</a></td>
-<td class="hits"></td>
-<td class="source"><code>  @doc "eth_getTransactionReceipt — returns the receipt map, or `nil` if not yet mined."</code></td>
+<td class="source"><code>      [_, inner] -&gt;</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L84"><a href="#L84">84</a></td>
+<td class="line" id="L83"><a href="#L83">83</a></td>
 <td class="hits">1</td>
-<td class="source"><code>  def receipt(rpc, hash), do: call!(rpc, "eth_getTransactionReceipt", [hash])</code></td>
+<td class="source"><code>        inner</code></td>
+</tr>
+<tr>
+<td class="line" id="L84"><a href="#L84">84</a></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L85"><a href="#L85">85</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>      nil -&gt;</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L86"><a href="#L86">86</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def get_logs(rpc, filter), do: call!(rpc, "eth_getLogs", [filter])</code></td>
+<td class="hits">8</td>
+<td class="source"><code>        case String.split(entry, ":") do</code></td>
 </tr>
-<tr>
+<tr class="hit">
 <td class="line" id="L87"><a href="#L87">87</a></td>
-<td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="hits">1</td>
+<td class="source"><code>          [host, port] -&gt; if Regex.match?(~r/^\d+$/, port), do: host, else: entry</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L88"><a href="#L88">88</a></td>
+<td class="hits">7</td>
+<td class="source"><code>          _ -&gt; entry</code></td>
 </tr>
 <tr>
-<td class="line" id="L88"><a href="#L88">88</a></td>
-<td class="hits"></td>
-<td class="source"><code>  # ── hex ───────────────────────────────────────────────────────────────────────</code></td>
-</tr>
-<tr class="hit">
 <td class="line" id="L89"><a href="#L89">89</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def hex_to_int("0x"), do: 0</code></td>
+<td class="hits"></td>
+<td class="source"><code>        end</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L90"><a href="#L90">90</a></td>
-<td class="hits">10</td>
-<td class="source"><code>  def hex_to_int("0x" &lt;&gt; h), do: String.to_integer(h, 16)</code></td>
+<td class="hits"></td>
+<td class="source"><code>    end</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L91"><a href="#L91">91</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def hex_to_int(int) when is_integer(int), do: int</code></td>
+<td class="hits"></td>
+<td class="source"><code>  end</code></td>
 </tr>
 <tr>
 <td class="line" id="L92"><a href="#L92">92</a></td>
@@ -605,8 +605,8 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L93"><a href="#L93">93</a></td>
-<td class="hits">21</td>
-<td class="source"><code>  defp curl_bin, do: System.find_executable("curl") || "/run/current-system/sw/bin/curl"</code></td>
+<td class="hits">17</td>
+<td class="source"><code>  defp country(_headers, nil), do: nil</code></td>
 </tr>
 <tr>
 <td class="line" id="L94"><a href="#L94">94</a></td>
@@ -616,65 +616,40 @@ td.source {
 <tr>
 <td class="line" id="L95"><a href="#L95">95</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @doc "eth_call with an explicit `from` — the simulation gate needs the real sender."</code></td>
-</tr>
-<tr>
-<td class="line" id="L96"><a href="#L96">96</a></td>
-<td class="hits"></td>
-<td class="source"><code>  def eth_call_from(rpc, from, to, data),</code></td>
+<td class="source"><code>  defp country(headers, header_name) when is_binary(header_name),</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L97"><a href="#L97">97</a></td>
-<td class="hits">1</td>
-<td class="source"><code>    do: call(rpc, "eth_call", [%{from: from, to: to, data: data}, "latest"])</code></td>
+<td class="line" id="L96"><a href="#L96">96</a></td>
+<td class="hits">3</td>
+<td class="source"><code>    do: headers |&gt; header_values(String.downcase(header_name)) |&gt; List.last()</code></td>
 </tr>
 <tr>
-<td class="line" id="L98"><a href="#L98">98</a></td>
+<td class="line" id="L97"><a href="#L97">97</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L98"><a href="#L98">98</a></td>
+<td class="hits">42</td>
+<td class="source"><code>  defp header_values(headers, name), do: for({^name, value} &lt;- headers, do: value)</code></td>
 </tr>
 <tr>
 <td class="line" id="L99"><a href="#L99">99</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @doc "Current suggested priority fee (wei)."</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L100"><a href="#L100">100</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def max_priority_fee(rpc), do: call!(rpc, "eth_maxPriorityFeePerGas", []) |&gt; hex_to_int()</code></td>
+<td class="hits">19</td>
+<td class="source"><code>  defp session_id(cookies, name) when is_map(cookies), do: Map.get(cookies, name)</code></td>
 </tr>
-<tr>
+<tr class="hit">
 <td class="line" id="L101"><a href="#L101">101</a></td>
-<td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="hits">1</td>
+<td class="source"><code>  defp session_id(_cookies, _name), do: nil</code></td>
 </tr>
 <tr>
 <td class="line" id="L102"><a href="#L102">102</a></td>
-<td class="hits"></td>
-<td class="source"><code>  @doc "Latest block base fee (wei)."</code></td>
-</tr>
-<tr>
-<td class="line" id="L103"><a href="#L103">103</a></td>
-<td class="hits"></td>
-<td class="source"><code>  def base_fee(rpc) do</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L104"><a href="#L104">104</a></td>
-<td class="hits">1</td>
-<td class="source"><code>    %{"baseFeePerGas" =&gt; hex} = call!(rpc, "eth_getBlockByNumber", ["latest", false])</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L105"><a href="#L105">105</a></td>
-<td class="hits">1</td>
-<td class="source"><code>    hex_to_int(hex)</code></td>
-</tr>
-<tr>
-<td class="line" id="L106"><a href="#L106">106</a></td>
-<td class="hits"></td>
-<td class="source"><code>  end</code></td>
-</tr>
-<tr>
-<td class="line" id="L107"><a href="#L107">107</a></td>
 <td class="hits"></td>
 <td class="source"><code>end</code></td>
 </tr>

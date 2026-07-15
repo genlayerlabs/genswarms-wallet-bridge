@@ -10,6 +10,7 @@
 // the product-side answer to all of them; the wallet dapp only reports.
 
 import { buildPermitTypedData, buildGrantEnvelope } from "./permit.mjs";
+import { buildTermsEnvelope, buildTermsTypedData } from "./terms.mjs";
 
 export async function connectWallet({ provider }) {
   const accounts = await provider.request({ method: "eth_requestAccounts" });
@@ -28,6 +29,64 @@ export function walletDappLink(href, prefix = "https://link.metamask.io/dapp/") 
   return prefix + (prefix.includes("?") ? encodeURIComponent(noScheme) : noScheme);
 }
 
+export async function acceptTerms(deps, { account, vHash, ref }) {
+  const { provider, fetchFn, config } = deps;
+  const issuedAt = Math.floor((deps.nowFn ? deps.nowFn() : Date.now()) / 1000);
+  const typedData = buildTermsTypedData({ chainId: config.chainId, vHash, account, issuedAt });
+
+  let signature;
+  try {
+    signature = await provider.request({
+      method: "eth_signTypedData_v4",
+      params: [account, JSON.stringify(typedData)],
+    });
+  } catch (e) {
+    return { ok: false, reason: e && e.code === 4001 ? "user_rejected" : "sign_failed" };
+  }
+
+  const acceptance = buildTermsEnvelope({
+    version: config.version,
+    chainId: config.chainId,
+    vHash,
+    account,
+    issuedAt,
+    signature,
+  });
+  let res;
+  try {
+    res = await fetchFn(`${config.intakeUrl}/terms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: authBody(deps, { ref, acceptance }),
+    });
+  } catch (_) {
+    return { ok: false, reason: "request_failed" };
+  }
+
+  if (res.status === 451) return { ok: false, reason: "geo_blocked" };
+  if (res.status === 401) return { ok: false, reason: "unauthorized" };
+  let body = {};
+  try {
+    body = (await res.json()) || {};
+  } catch (_) {}
+
+  if (res.status === 200) {
+    if (body.status !== "accepted" || typeof body.v_hash !== "string" || !body.v_hash)
+      return { ok: false, reason: "invalid_response" };
+    return { ok: true, status: "accepted", vHash: body.v_hash };
+  }
+  if (res.status === 409 && body.error === "terms_stale") {
+    const terms = body.terms;
+    if (!terms || typeof terms.v_hash !== "string" || !terms.v_hash ||
+        typeof terms.url !== "string" || !terms.url || body.v_hash !== terms.v_hash)
+      return { ok: false, reason: "invalid_response" };
+    return { ok: false, reason: "terms_stale", terms };
+  }
+  if (res.status === 409) return { ok: false, reason: "version_mismatch" };
+  if (res.status === 422) return { ok: false, reason: "invalid", field: body.field };
+  return { ok: false, reason: body.error || `http_${res.status}` };
+}
+
 /**
  * Config drift (fail-closed, fund-loss class): the order carries the keeper's
  * RUNTIME chain id, while `config.json` is a static file stamped at deploy
@@ -42,6 +101,10 @@ export function configDrift(order, config) {
   const runtime = order && order.chain_id;
   if (runtime == null) return false;
   return runtime !== (config && config.chainId);
+}
+
+export function termsRequired(order) {
+  return order?.terms?.required === true;
 }
 
 /**
@@ -75,6 +138,8 @@ export async function fetchOrder(deps, orderRef) {
   if (res.status === 401) return { ok: false, reason: "unauthorized" };
   if (res.status === 409) return { ok: false, reason: "version_mismatch" };
   if (res.status === 410) return { ok: false, reason: "expired" };
+  if (res.status === 451) return { ok: false, reason: "geo_blocked" };
+  if (res.status === 428) return { ok: false, reason: "terms_required", terms: (await res.json()).terms };
   if (res.status !== 200) return { ok: false, reason: `http_${res.status}` };
   return { ok: true, order: await res.json() };
 }
@@ -135,7 +200,10 @@ export async function signAndSubmit(deps, { orderRef, order, account, nonce }) {
 
   if (res.status === 409) return { ok: false, reason: "version_mismatch" };
   if (res.status === 401) return { ok: false, reason: "unauthorized" };
+  if (res.status === 451) return { ok: false, reason: "geo_blocked" };
   const body = await res.json();
+  if (res.status === 428)
+    return { ok: false, reason: "terms_required", terms: body.terms, account };
   if (res.status !== 200) return { ok: false, reason: body.reason || body.error || `http_${res.status}` };
   return { ok: true, status: body.status, tx: body.tx };
 }
@@ -147,8 +215,8 @@ export async function signAndSubmit(deps, { orderRef, order, account, nonce }) {
  * the order's runtime chain id first. The wallet-vs-config chain check is
  * unchanged — it now runs only when order and config already agree.
  */
-export async function runPermitFlow(deps, orderRef) {
-  const fetched = await fetchOrder(deps, orderRef);
+export async function runPermitFlow(deps, orderRef, fetched = null) {
+  fetched ??= await fetchOrder(deps, orderRef);
   if (!fetched.ok) return fetched;
   if (configDrift(fetched.order, deps.config)) return { ok: false, reason: "config_drift" };
 
@@ -158,6 +226,8 @@ export async function runPermitFlow(deps, orderRef) {
     return { ok: false, reason: "wrong_chain", expected: deps.config.chainId };
   if (ownerMismatch(fetched.order, conn.account))
     return { ok: false, reason: "wrong_wallet", expected: fetched.order.expected_owner };
+  if (termsRequired(fetched.order))
+    return { ok: false, reason: "terms_required", terms: fetched.order.terms, account: conn.account };
 
   const nonce = await fetchPermitNonce(deps, conn.account);
 
@@ -169,10 +239,10 @@ export async function runPermitFlow(deps, orderRef) {
   });
 }
 
-export async function runUserTxFlow(deps, orderRef) {
+export async function runUserTxFlow(deps, orderRef, fetched = null) {
   // Fetch-before-connect, same as runPermitFlow: config drift must block
   // before the wallet is ever touched.
-  const fetched = await fetchOrder(deps, orderRef);
+  fetched ??= await fetchOrder(deps, orderRef);
   if (!fetched.ok) return fetched;
   if (configDrift(fetched.order, deps.config)) return { ok: false, reason: "config_drift" };
   if (fetched.order.kind !== "user_tx") return { ok: false, reason: "wrong_kind" };
@@ -186,6 +256,8 @@ export async function runUserTxFlow(deps, orderRef) {
   // wallet (and sells revert on-chain). Refuse before the wallet ever opens.
   if (ownerMismatch(fetched.order, conn.account))
     return { ok: false, reason: "wrong_wallet", expected: fetched.order.expected_owner };
+  if (termsRequired(fetched.order))
+    return { ok: false, reason: "terms_required", terms: fetched.order.terms, account: conn.account };
 
   let tx;
   try {
@@ -215,13 +287,13 @@ function hexQuantity(value) {
   throw new Error("bad quantity");
 }
 
-export async function runBindFlow(deps, bindRef) {
+export async function runBindFlow(deps, bindRef, fetched = null) {
   // Bind pages consume config too (chain gate below), so the drift guard
   // applies here as well: fetch the bind order's view first and refuse a
   // drifted deployment before the wallet is connected — a healthy-looking
   // bind page on top of an inconsistent deployment feeds wallets into flows
   // that would then pay on the wrong network.
-  const fetched = await fetchOrder(deps, bindRef);
+  fetched ??= await fetchOrder(deps, bindRef);
   if (!fetched.ok) return fetched;
   if (configDrift(fetched.order, deps.config)) return { ok: false, reason: "config_drift" };
 
@@ -229,6 +301,8 @@ export async function runBindFlow(deps, bindRef) {
   if (!conn.ok) return conn;
   if (conn.chainId !== deps.config.chainId)
     return { ok: false, reason: "wrong_chain", expected: deps.config.chainId };
+  if (termsRequired(fetched.order))
+    return { ok: false, reason: "terms_required", terms: fetched.order.terms, account: conn.account };
 
   const res = await deps.fetchFn(`${deps.config.intakeUrl}/wallet`, {
     method: "POST",
@@ -238,7 +312,10 @@ export async function runBindFlow(deps, bindRef) {
   if (res.status === 401) return { ok: false, reason: "unauthorized" };
   if (res.status === 409) return { ok: false, reason: "version_mismatch" };
   if (res.status === 410) return { ok: false, reason: "expired" };
+  if (res.status === 451) return { ok: false, reason: "geo_blocked" };
   const body = await res.json();
+  if (res.status === 428)
+    return { ok: false, reason: "terms_required", terms: body.terms, account: conn.account };
   if (res.status !== 200) return { ok: false, reason: body.error || `http_${res.status}` };
   return { ok: true, address: body.address };
 }

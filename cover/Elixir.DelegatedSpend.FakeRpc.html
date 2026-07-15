@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.FakeRpc.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/test/support/fake_rpc.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-11 at 10:15:16</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/test/support/fake_rpc.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
 <table>
 <tbody>
 <tr>
@@ -185,12 +185,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L9"><a href="#L9">9</a></td>
-<td class="hits">94</td>
+<td class="hits">134</td>
 <td class="source"><code>    {:ok, pid} = Agent.start_link(fn -&gt; Map.merge(%{sent: [], receipts: %{}}, config) end)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L10"><a href="#L10">10</a></td>
-<td class="hits">94</td>
+<td class="hits">134</td>
 <td class="source"><code>    pid</code></td>
 </tr>
 <tr>
@@ -205,12 +205,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L13"><a href="#L13">13</a></td>
-<td class="hits">30</td>
+<td class="hits">38</td>
 <td class="source"><code>  def sent(pid), do: Agent.get(pid, &amp; &amp;1.sent) |&gt; Enum.reverse()</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L14"><a href="#L14">14</a></td>
-<td class="hits">30</td>
+<td class="hits">37</td>
 <td class="source"><code>  def put(pid, key, value), do: Agent.update(pid, &amp;Map.put(&amp;1, key, value))</code></td>
 </tr>
 <tr>
@@ -236,215 +236,280 @@ td.source {
 <tr>
 <td class="line" id="L19"><a href="#L19">19</a></td>
 <td class="hits"></td>
-<td class="source"><code>  #   :receipt_raises → receipt/2 raises (a transient-RPC crash simulation)</code></td>
+<td class="source"><code>  #                     {:accepted, reason} records the tx, then returns the error</code></td>
 </tr>
 <tr>
 <td class="line" id="L20"><a href="#L20">20</a></td>
 <td class="hits"></td>
-<td class="source"><code>  #   :fees_raise     → max_priority_fee raises (fees error path)</code></td>
+<td class="source"><code>  #   :receipt_raises → receipt/2 raises (a transient-RPC crash simulation)</code></td>
 </tr>
 <tr>
 <td class="line" id="L21"><a href="#L21">21</a></td>
 <td class="hits"></td>
+<td class="source"><code>  #   :receipt_failure → :raise | :exit | :throw</code></td>
+</tr>
+<tr>
+<td class="line" id="L22"><a href="#L22">22</a></td>
+<td class="hits"></td>
+<td class="source"><code>  #   :fees_raise     → max_priority_fee raises (fees error path)</code></td>
+</tr>
+<tr>
+<td class="line" id="L23"><a href="#L23">23</a></td>
+<td class="hits"></td>
 <td class="source"><code>  #   :block_timestamp → the value block_timestamp/1 returns (else wall clock)</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L22"><a href="#L22">22</a></td>
-<td class="hits">97</td>
+<td class="line" id="L24"><a href="#L24">24</a></td>
+<td class="hits">137</td>
 <td class="source"><code>  def chain_id(pid), do: Agent.get(pid, &amp; &amp;1.chain_id)</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L23"><a href="#L23">23</a></td>
-<td class="hits">93</td>
+<td class="line" id="L25"><a href="#L25">25</a></td>
+<td class="hits">133</td>
 <td class="source"><code>  def nonce(pid, _addr), do: Agent.get(pid, &amp; &amp;1.nonce)</code></td>
 </tr>
 <tr>
-<td class="line" id="L24"><a href="#L24">24</a></td>
+<td class="line" id="L26"><a href="#L26">26</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
-</tr>
-<tr>
-<td class="line" id="L25"><a href="#L25">25</a></td>
-<td class="hits"></td>
-<td class="source"><code>  def max_priority_fee(pid) do</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L26"><a href="#L26">26</a></td>
-<td class="hits">40</td>
-<td class="source"><code>    if Agent.get(pid, &amp;Map.get(&amp;1, :fees_raise, false)), do: raise("simulated fees RPC failure")</code></td>
 </tr>
 <tr>
 <td class="line" id="L27"><a href="#L27">27</a></td>
 <td class="hits"></td>
-<td class="source"><code>    1_000_000_000</code></td>
+<td class="source"><code>  def max_priority_fee(pid) do</code></td>
 </tr>
-<tr>
+<tr class="hit">
 <td class="line" id="L28"><a href="#L28">28</a></td>
-<td class="hits"></td>
-<td class="source"><code>  end</code></td>
+<td class="hits">53</td>
+<td class="source"><code>    if Agent.get(pid, &amp;Map.get(&amp;1, :fees_raise, false)), do: raise("simulated fees RPC failure")</code></td>
 </tr>
 <tr>
 <td class="line" id="L29"><a href="#L29">29</a></td>
 <td class="hits"></td>
+<td class="source"><code>    1_000_000_000</code></td>
+</tr>
+<tr>
+<td class="line" id="L30"><a href="#L30">30</a></td>
+<td class="hits"></td>
+<td class="source"><code>  end</code></td>
+</tr>
+<tr>
+<td class="line" id="L31"><a href="#L31">31</a></td>
+<td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L30"><a href="#L30">30</a></td>
-<td class="hits">39</td>
+<td class="line" id="L32"><a href="#L32">32</a></td>
+<td class="hits">51</td>
 <td class="source"><code>  def base_fee(_pid), do: 10_000_000_000</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L31"><a href="#L31">31</a></td>
-<td class="hits">41</td>
+<td class="line" id="L33"><a href="#L33">33</a></td>
+<td class="hits">54</td>
 <td class="source"><code>  def estimate_gas(pid, _tx), do: {:ok, Agent.get(pid, &amp;Map.get(&amp;1, :gas, 100_000))}</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L32"><a href="#L32">32</a></td>
+<td class="line" id="L34"><a href="#L34">34</a></td>
 <td class="hits">2</td>
 <td class="source"><code>  def code(pid, addr), do: Agent.get(pid, &amp;Map.fetch!(&amp;1.codes, addr))</code></td>
 </tr>
 <tr>
-<td class="line" id="L33"><a href="#L33">33</a></td>
+<td class="line" id="L35"><a href="#L35">35</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
-</tr>
-<tr>
-<td class="line" id="L34"><a href="#L34">34</a></td>
-<td class="hits"></td>
-<td class="source"><code>  def block_timestamp(pid),</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L35"><a href="#L35">35</a></td>
-<td class="hits">1</td>
-<td class="source"><code>    do: Agent.get(pid, &amp;Map.get(&amp;1, :block_timestamp, System.os_time(:second)))</code></td>
 </tr>
 <tr>
 <td class="line" id="L36"><a href="#L36">36</a></td>
 <td class="hits"></td>
+<td class="source"><code>  def block_timestamp(pid),</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L37"><a href="#L37">37</a></td>
+<td class="hits">1</td>
+<td class="source"><code>    do: Agent.get(pid, &amp;Map.get(&amp;1, :block_timestamp, System.os_time(:second)))</code></td>
+</tr>
+<tr>
+<td class="line" id="L38"><a href="#L38">38</a></td>
+<td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
 <tr>
-<td class="line" id="L37"><a href="#L37">37</a></td>
+<td class="line" id="L39"><a href="#L39">39</a></td>
 <td class="hits"></td>
 <td class="source"><code>  def eth_call_from(pid, _from, _to, _data) do</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L38"><a href="#L38">38</a></td>
-<td class="hits">48</td>
+<td class="line" id="L40"><a href="#L40">40</a></td>
+<td class="hits">65</td>
 <td class="source"><code>    case Agent.get(pid, &amp; &amp;1.simulate) do</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L39"><a href="#L39">39</a></td>
-<td class="hits">40</td>
+<td class="line" id="L41"><a href="#L41">41</a></td>
+<td class="hits">53</td>
 <td class="source"><code>      :ok -&gt; {:ok, "0x"}</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L40"><a href="#L40">40</a></td>
-<td class="hits">8</td>
-<td class="source"><code>      {:revert, info} -&gt; {:error, info}</code></td>
-</tr>
-<tr>
-<td class="line" id="L41"><a href="#L41">41</a></td>
-<td class="hits"></td>
-<td class="source"><code>    end</code></td>
-</tr>
-<tr>
 <td class="line" id="L42"><a href="#L42">42</a></td>
-<td class="hits"></td>
-<td class="source"><code>  end</code></td>
+<td class="hits">12</td>
+<td class="source"><code>      {:revert, info} -&gt; {:error, info}</code></td>
 </tr>
 <tr>
 <td class="line" id="L43"><a href="#L43">43</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>    end</code></td>
 </tr>
 <tr>
 <td class="line" id="L44"><a href="#L44">44</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def send_raw(pid, raw) do</code></td>
+<td class="source"><code>  end</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L45"><a href="#L45">45</a></td>
-<td class="hits">42</td>
-<td class="source"><code>    case Agent.get(pid, &amp;Map.get(&amp;1, :send_raw_fail)) do</code></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L46"><a href="#L46">46</a></td>
 <td class="hits"></td>
-<td class="source"><code>      nil -&gt;</code></td>
+<td class="source"><code>  def send_raw(pid, raw) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L47"><a href="#L47">47</a></td>
-<td class="hits">38</td>
-<td class="source"><code>        Agent.update(pid, &amp;%{&amp;1 | sent: [raw | &amp;1.sent]})</code></td>
+<td class="hits">51</td>
+<td class="source"><code>    case Agent.get(pid, &amp;Map.get(&amp;1, :send_raw_fail)) do</code></td>
 </tr>
 <tr>
 <td class="line" id="L48"><a href="#L48">48</a></td>
 <td class="hits"></td>
-<td class="source"><code>        {:ok, "0x" &lt;&gt; Base.encode16(:crypto.hash(:sha256, raw), case: :lower)}</code></td>
-</tr>
-<tr>
-<td class="line" id="L49"><a href="#L49">49</a></td>
-<td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>      nil -&gt;</code></td>
 </tr>
 <tr class="hit">
+<td class="line" id="L49"><a href="#L49">49</a></td>
+<td class="hits">47</td>
+<td class="source"><code>        Agent.update(pid, &amp;%{&amp;1 | sent: [raw | &amp;1.sent]})</code></td>
+</tr>
+<tr>
 <td class="line" id="L50"><a href="#L50">50</a></td>
-<td class="hits">4</td>
-<td class="source"><code>      reason -&gt;</code></td>
+<td class="hits"></td>
+<td class="source"><code>        {:ok, "0x" &lt;&gt; Base.encode16(:crypto.hash(:sha256, raw), case: :lower)}</code></td>
 </tr>
 <tr>
 <td class="line" id="L51"><a href="#L51">51</a></td>
 <td class="hits"></td>
-<td class="source"><code>        {:error, reason}</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L52"><a href="#L52">52</a></td>
 <td class="hits"></td>
-<td class="source"><code>    end</code></td>
+<td class="source"><code>      {:accepted, reason} -&gt;</code></td>
 </tr>
-<tr>
+<tr class="hit">
 <td class="line" id="L53"><a href="#L53">53</a></td>
-<td class="hits"></td>
-<td class="source"><code>  end</code></td>
+<td class="hits">1</td>
+<td class="source"><code>        Agent.update(pid, &amp;%{&amp;1 | sent: [raw | &amp;1.sent]})</code></td>
 </tr>
 <tr>
 <td class="line" id="L54"><a href="#L54">54</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>        {:error, reason}</code></td>
 </tr>
 <tr>
 <td class="line" id="L55"><a href="#L55">55</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def receipt(pid, hash) do</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L56"><a href="#L56">56</a></td>
-<td class="hits">24</td>
-<td class="source"><code>    if Agent.get(pid, &amp;Map.get(&amp;1, :receipt_raises, false)),</code></td>
+<td class="hits">3</td>
+<td class="source"><code>      reason -&gt;</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L57"><a href="#L57">57</a></td>
-<td class="hits">1</td>
-<td class="source"><code>      do: raise("simulated RPC receipt failure")</code></td>
+<td class="hits"></td>
+<td class="source"><code>        {:error, reason}</code></td>
 </tr>
 <tr>
 <td class="line" id="L58"><a href="#L58">58</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L59"><a href="#L59">59</a></td>
-<td class="hits">23</td>
-<td class="source"><code>    Agent.get(pid, &amp;Map.get(&amp;1.receipts, hash))</code></td>
+<td class="source"><code>    end</code></td>
 </tr>
 <tr>
-<td class="line" id="L60"><a href="#L60">60</a></td>
+<td class="line" id="L59"><a href="#L59">59</a></td>
 <td class="hits"></td>
 <td class="source"><code>  end</code></td>
 </tr>
 <tr>
+<td class="line" id="L60"><a href="#L60">60</a></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
+</tr>
+<tr>
 <td class="line" id="L61"><a href="#L61">61</a></td>
+<td class="hits"></td>
+<td class="source"><code>  def receipt(pid, hash) do</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L62"><a href="#L62">62</a></td>
+<td class="hits">36</td>
+<td class="source"><code>    if Agent.get(pid, &amp;Map.get(&amp;1, :receipt_raises, false)),</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L63"><a href="#L63">63</a></td>
+<td class="hits">1</td>
+<td class="source"><code>      do: raise("simulated RPC receipt failure")</code></td>
+</tr>
+<tr>
+<td class="line" id="L64"><a href="#L64">64</a></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L65"><a href="#L65">65</a></td>
+<td class="hits">35</td>
+<td class="source"><code>    case Agent.get(pid, &amp;Map.get(&amp;1, :receipt_failure)) do</code></td>
+</tr>
+<tr class="miss">
+<td class="line" id="L66"><a href="#L66">66</a></td>
+<td class="hits"><pre style="display: inline;">:-(</pre></td>
+<td class="source"><code>      :raise -&gt; raise("simulated RPC receipt failure")</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L67"><a href="#L67">67</a></td>
+<td class="hits">1</td>
+<td class="source"><code>      :exit -&gt; exit(:simulated_rpc_receipt_failure)</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L68"><a href="#L68">68</a></td>
+<td class="hits">1</td>
+<td class="source"><code>      :throw -&gt; throw(:simulated_rpc_receipt_failure)</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L69"><a href="#L69">69</a></td>
+<td class="hits">33</td>
+<td class="source"><code>      nil -&gt; :ok</code></td>
+</tr>
+<tr>
+<td class="line" id="L70"><a href="#L70">70</a></td>
+<td class="hits"></td>
+<td class="source"><code>    end</code></td>
+</tr>
+<tr>
+<td class="line" id="L71"><a href="#L71">71</a></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L72"><a href="#L72">72</a></td>
+<td class="hits">33</td>
+<td class="source"><code>    Agent.get(pid, &amp;Map.get(&amp;1.receipts, hash))</code></td>
+</tr>
+<tr>
+<td class="line" id="L73"><a href="#L73">73</a></td>
+<td class="hits"></td>
+<td class="source"><code>  end</code></td>
+</tr>
+<tr>
+<td class="line" id="L74"><a href="#L74">74</a></td>
 <td class="hits"></td>
 <td class="source"><code>end</code></td>
 </tr>

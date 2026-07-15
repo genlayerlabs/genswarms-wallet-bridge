@@ -1,5 +1,9 @@
 defmodule DelegatedSpend.IntakeTest do
   use ExUnit.Case
+
+  @moduletag :capture_log
+
+  alias DelegatedSpend.Compliance.MemoryStore, as: ComplianceStore
   alias DelegatedSpend.FakeRpc
   alias DelegatedSpend.Intake
   alias DelegatedSpend.Intake.Rate
@@ -11,6 +15,12 @@ defmodule DelegatedSpend.IntakeTest do
   @router "0x0000000000000000000000000000000000000BbB"
   @token "0x0000000000000000000000000000000000000AaA"
   @user_id 777_000_111
+
+  defmodule FailingEventStore do
+    def record_event(:raise, _event), do: raise("event store down")
+    def record_event(:exit, _event), do: exit(:event_store_down)
+    def record_event(:throw, _event), do: throw(:event_store_down)
+  end
 
   defp init_data(user_id \\ @user_id, token \\ @bot_token) do
     fields = %{
@@ -103,6 +113,113 @@ defmodule DelegatedSpend.IntakeTest do
   end
 
   defp future, do: System.os_time(:second) + 600
+
+  defp audit_meta do
+    %{
+      ip: "203.0.113.4",
+      country: "uS",
+      user_agent: "wallet-test/1.0",
+      session_id: "session-1",
+      raw: "must-not-persist"
+    }
+  end
+
+  defp with_compliance(ctx) do
+    store = ComplianceStore.start()
+
+    {Map.put(ctx, :compliance, %{geo_allow: ["US"], store: {ComplianceStore, store}}), store}
+  end
+
+  describe "compliance geofencing" do
+    test "blocks every handler before version pinning or authentication" do
+      ctx = %{compliance: %{geo_allow: ["US"]}}
+
+      for handler <- [:handle_order, :handle_grant, :handle_wallet, :handle_submitted] do
+        assert {451, %{"error" => "geo_blocked"}} =
+                 apply(Intake, handler, [%{"country" => "US"}, %{country: "CA"}, ctx])
+      end
+    end
+
+    test "blocked requests do not burn rate buckets or reach the keeper store" do
+      ref = String.duplicate("ab", 32)
+      user_ref = "ref-#{@user_id}"
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, user_ref, future())
+
+      requests = [
+        {:handle_order, %{"order_ref" => ref, "token" => token, "v" => "0.2.0"}},
+        {:handle_grant,
+         %{"order_ref" => ref, "token" => token, "permit" => permit_env(25_000_000)}},
+        {:handle_wallet,
+         %{
+           "bind_ref" => ref,
+           "token" => token,
+           "address" => "0x8ba1f109551bd432803012645ac136ddd64dba72",
+           "v" => "0.2.0"
+         }},
+        {:handle_submitted,
+         %{
+           "order_ref" => ref,
+           "token" => token,
+           "tx_hash" => "0x" <> String.duplicate("ef", 32),
+           "v" => "0.2.0"
+         }}
+      ]
+
+      for {handler, params} <- requests do
+        limiter = Rate.start()
+
+        ctx = %{
+          compliance: %{geo_allow: ["US"]},
+          token_secret: "tsecret",
+          pinned: %{chain_id: 84_532, token: @token, router: @router, version: "0.2.0"},
+          rate: {limiter, 1},
+          wallet_fn: fn _user_ref, _address, _bind_ref -> :ok end
+        }
+
+        assert {451, %{"error" => "geo_blocked"}} =
+                 apply(Intake, handler, [params, %{country: "CA"}, ctx])
+
+        assert Rate.allow?(limiter, user_ref, 1)
+      end
+    end
+
+    test "configured two-arity handlers deny because their metadata is empty" do
+      ctx = %{compliance: %{geo_allow: ["US"]}}
+
+      for handler <- [:handle_order, :handle_grant, :handle_wallet, :handle_submitted] do
+        assert {451, %{"error" => "geo_blocked"}} = apply(Intake, handler, [%{}, ctx])
+      end
+    end
+
+    test "configured compliance fails closed on missing or malformed policy metadata" do
+      for {compliance, meta} <- [
+            {%{}, %{country: "US"}},
+            {%{geo_allow: "US"}, %{country: "US"}},
+            {%{geo_allow: ["US"]}, %{}},
+            {%{geo_allow: ["US"]}, %{country: "USA"}}
+          ] do
+        assert {451, %{"error" => "geo_blocked"}} =
+                 Intake.handle_order(%{}, meta, %{compliance: compliance})
+      end
+
+      ctx = %{compliance: %{geo_allow: ["US"]}, bot_token: @bot_token, max_age_s: 900}
+
+      assert {401, %{"error" => "unauthorized"}} =
+               Intake.handle_order(%{"country" => "CA"}, %{country: "US"}, ctx)
+
+      assert {451, %{"error" => "geo_blocked"}} =
+               Intake.handle_order(%{"country" => "US"}, %{}, ctx)
+    end
+
+    test "metadata has no effect when compliance is absent" do
+      %{ctx: ctx, keeper: keeper} = start_stack()
+      ref = register(keeper, @user_id)
+      params = order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref})
+
+      assert {200, body} = Intake.handle_order(params, ctx)
+      assert {200, ^body} = Intake.handle_order(params, %{country: "CA"}, ctx)
+    end
+  end
 
   test "unauthenticated requests are rejected before ANY work" do
     %{ctx: ctx, store: store, keeper: keeper} = start_stack()
@@ -389,6 +506,238 @@ defmodule DelegatedSpend.IntakeTest do
 
       assert {200, %{"status" => "submitted"}} =
                Intake.handle_grant(%{"token" => token, "order_ref" => ref, "permit" => permit_env(25_000_000)}, ctx)
+    end
+  end
+
+  describe "compliance audit events" do
+    test "records wallet_bound only after a successful bind with normalized metadata" do
+      %{ctx: ctx, keeper: keeper} = start_stack()
+      me = self()
+
+      ctx =
+        ctx
+        |> Map.put(:token_secret, "tsecret")
+        |> Map.put(:wallet_fn, fn user_ref, address, bind_ref ->
+          send(me, {:bound, user_ref, address, bind_ref})
+          :ok
+        end)
+
+      {ctx, store} = with_compliance(ctx)
+
+      {:ok, %{order_ref: bind_ref}} =
+        Keeper.register_order(keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "bind"
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", bind_ref, "ref-#{@user_id}", future())
+      before = System.os_time(:second)
+
+      assert {200, %{"status" => "bound", "address" => wallet}} =
+               Intake.handle_wallet(
+                 %{
+                   "bind_ref" => bind_ref,
+                   "token" => token,
+                   "address" => "0x8ba1f109551bd432803012645ac136ddd64dba72",
+                   "v" => ctx.pinned.version
+                 },
+                 audit_meta(),
+                 ctx
+               )
+
+      after_call = System.os_time(:second)
+
+      assert [event] = ComplianceStore.events_for(store, "ref-#{@user_id}")
+      assert event.kind == "wallet_bound"
+      assert event.wallet == wallet
+      assert event.order_ref == bind_ref
+      assert event.user_ref == "ref-#{@user_id}"
+      assert event.at in before..after_call
+
+      assert event.meta == %{
+               ip: "203.0.113.4",
+               country: "US",
+               user_agent: "wallet-test/1.0",
+               session_id: "session-1"
+             }
+    end
+
+    test "records grant_submitted with the validated permit owner" do
+      %{ctx: base_ctx, keeper: keeper} = start_stack()
+      {ctx, store} = with_compliance(base_ctx)
+      ref = register(keeper, @user_id)
+      permit = permit_env(25_000_000)
+
+      assert {200, %{"status" => "submitted"}} =
+               Intake.handle_grant(
+                 %{"init_data" => init_data(), "order_ref" => ref, "permit" => permit},
+                 audit_meta(),
+                 ctx
+               )
+
+      assert [event] = ComplianceStore.events_for(store, "ref-#{@user_id}")
+
+      assert %{
+               kind: "grant_submitted",
+               wallet: wallet,
+               order_ref: ^ref,
+               user_ref: "ref-777000111",
+               meta: %{country: "US", ip: "203.0.113.4"}
+             } = event
+
+      assert wallet == permit["owner"]
+      assert is_integer(event.at)
+    end
+
+    test "records tx_submitted with expected owner and never records order fetches" do
+      %{ctx: base_ctx, keeper: keeper} = start_stack()
+      base_ctx = Map.put(base_ctx, :token_secret, "tsecret")
+      {ctx, store} = with_compliance(base_ctx)
+      owner = "0xF39FD6e51aad88F6F4ce6aB8827279cffFb92266"
+
+      {:ok, %{order_ref: ref}} =
+        Keeper.register_order(keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "user_tx",
+          tx: %{to: "0x" <> String.duplicate("11", 20), data: "0x", value: 0},
+          expected_owner: owner
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
+      params = %{"order_ref" => ref, "token" => token, "v" => ctx.pinned.version}
+
+      assert {200, _body} = Intake.handle_order(params, audit_meta(), ctx)
+      assert ComplianceStore.events_for(store, "ref-#{@user_id}") == []
+
+      assert {200, %{"status" => "noted"}} =
+               Intake.handle_submitted(
+                 Map.put(params, "tx_hash", "0x" <> String.duplicate("ef", 32)),
+                 audit_meta(),
+                 ctx
+               )
+
+      assert [%{kind: "tx_submitted", wallet: ^owner, order_ref: ^ref, meta: %{country: "US"}}] =
+               ComplianceStore.events_for(store, "ref-#{@user_id}")
+    end
+
+    test "tx_submitted records nil when the order has no expected owner" do
+      %{ctx: base_ctx, keeper: keeper} = start_stack()
+      base_ctx = Map.put(base_ctx, :token_secret, "tsecret")
+      {ctx, store} = with_compliance(base_ctx)
+
+      {:ok, %{order_ref: ref}} =
+        Keeper.register_order(keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "user_tx",
+          tx: %{to: "0x" <> String.duplicate("11", 20), data: "0x", value: 0}
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
+
+      assert {200, %{"status" => "noted"}} =
+               Intake.handle_submitted(
+                 %{
+                   "order_ref" => ref,
+                   "token" => token,
+                   "tx_hash" => "0x" <> String.duplicate("ef", 32),
+                   "v" => ctx.pinned.version
+                 },
+                 audit_meta(),
+                 ctx
+               )
+
+      assert [%{kind: "tx_submitted", wallet: nil}] =
+               ComplianceStore.events_for(store, "ref-#{@user_id}")
+    end
+
+    test "failed wallet, grant, and submitted requests do not record events" do
+      %{ctx: base_ctx, keeper: keeper} = start_stack()
+      base_ctx = Map.put(base_ctx, :token_secret, "tsecret")
+      {ctx, store} = with_compliance(base_ctx)
+      ref = register(keeper, @user_id)
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
+
+      assert {409, _} =
+               Intake.handle_grant(
+                 %{"token" => token, "order_ref" => ref, "permit" => %{}},
+                 audit_meta(),
+                 ctx
+               )
+
+      assert {503, _} =
+               Intake.handle_wallet(
+                 %{
+                   "token" => token,
+                   "bind_ref" => ref,
+                   "address" => "bad",
+                   "v" => ctx.pinned.version
+                 },
+                 audit_meta(),
+                 ctx
+               )
+
+      assert {422, _} =
+               Intake.handle_submitted(
+                 %{
+                   "token" => token,
+                   "order_ref" => ref,
+                   "tx_hash" => "bad",
+                   "v" => ctx.pinned.version
+                 },
+                 audit_meta(),
+                 ctx
+               )
+
+      assert ComplianceStore.events_for(store, "ref-#{@user_id}") == []
+    end
+
+    test "absent, missing, raising, exiting, and throwing event stores cannot change success" do
+      %{ctx: base_ctx, keeper: keeper} = start_stack()
+      base_ctx = Map.put(base_ctx, :token_secret, "tsecret")
+
+      {:ok, %{order_ref: ref}} =
+        Keeper.register_order(keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "user_tx",
+          tx: %{to: "0x" <> String.duplicate("11", 20), data: "0x", value: 0}
+        })
+
+      token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
+
+      params = %{
+        "order_ref" => ref,
+        "token" => token,
+        "tx_hash" => "0x" <> String.duplicate("ef", 32),
+        "v" => base_ctx.pinned.version
+      }
+
+      compliance_configs = [
+        :absent,
+        %{geo_allow: ["US"]},
+        %{geo_allow: ["US"], store: :invalid},
+        %{geo_allow: ["US"], store: {DelegatedSpend.MissingComplianceStore, :missing}},
+        %{geo_allow: ["US"], store: {FailingEventStore, :raise}},
+        %{geo_allow: ["US"], store: {FailingEventStore, :exit}},
+        %{geo_allow: ["US"], store: {FailingEventStore, :throw}}
+      ]
+
+      for compliance <- compliance_configs do
+        ctx =
+          if compliance == :absent,
+            do: Map.delete(base_ctx, :compliance),
+            else: Map.put(base_ctx, :compliance, compliance)
+
+        assert {200, %{"status" => "noted"}} =
+                 Intake.handle_submitted(params, audit_meta(), ctx)
+      end
     end
   end
 

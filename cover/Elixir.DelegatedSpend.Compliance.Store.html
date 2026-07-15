@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>cover/Elixir.DelegatedSpend.Evm.Rpc.html</title>
+<title>cover/Elixir.DelegatedSpend.Compliance.Store.html</title>
 <style>/*
  %CopyrightBegin%
 
@@ -139,14 +139,14 @@ td.source {
 </style>
 </head>
 <body>
-<h1><code>cover/Elixir.DelegatedSpend.Evm.Rpc.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/evm/rpc.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<h1><code>cover/Elixir.DelegatedSpend.Compliance.Store.html</code></h1>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/compliance/store.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
 <table>
 <tbody>
 <tr>
 <td class="line" id="L1"><a href="#L1">1</a></td>
 <td class="hits"></td>
-<td class="source"><code>defmodule DelegatedSpend.Evm.Rpc do</code></td>
+<td class="source"><code>defmodule DelegatedSpend.Compliance.Store do</code></td>
 </tr>
 <tr>
 <td class="line" id="L2"><a href="#L2">2</a></td>
@@ -156,7 +156,7 @@ td.source {
 <tr>
 <td class="line" id="L3"><a href="#L3">3</a></td>
 <td class="hits"></td>
-<td class="source"><code>  Port of a production-proven pure-Elixir EVM module; do not diverge.</code></td>
+<td class="source"><code>  Storage behaviour for legal-compliance records.</code></td>
 </tr>
 <tr>
 <td class="line" id="L4"><a href="#L4">4</a></td>
@@ -166,37 +166,37 @@ td.source {
 <tr>
 <td class="line" id="L5"><a href="#L5">5</a></td>
 <td class="hits"></td>
-<td class="source"><code>  Ethereum JSON-RPC transport over `curl` + `System.cmd` — NOT `:httpc`, which is</code></td>
+<td class="source"><code>  Only opaque or blinded `user_ref` values are allowed. Adapters must never</code></td>
 </tr>
 <tr>
 <td class="line" id="L6"><a href="#L6">6</a></td>
 <td class="hits"></td>
-<td class="source"><code>  unusable in this OTP build (same reason `tg_ingress` shells out to curl).</code></td>
+<td class="source"><code>  store or log raw initData, tokens, Telegram or platform ids, or</code></td>
 </tr>
 <tr>
 <td class="line" id="L7"><a href="#L7">7</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  authentication bodies.</code></td>
 </tr>
 <tr>
 <td class="line" id="L8"><a href="#L8">8</a></td>
 <td class="hits"></td>
-<td class="source"><code>  `call/3` returns `{:ok, result}` | `{:error, reason}`; `call!/3` raises. Typed</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L9"><a href="#L9">9</a></td>
 <td class="hits"></td>
-<td class="source"><code>  wrappers (`chain_id`, `gas_price`, `nonce`, `eth_call`, `send_raw`, `receipt`,</code></td>
+<td class="source"><code>  `record_acceptance/2` must be atomic first-write-wins per</code></td>
 </tr>
 <tr>
 <td class="line" id="L10"><a href="#L10">10</a></td>
 <td class="hits"></td>
-<td class="source"><code>  `get_logs`, `block_timestamp`, `estimate_gas`) cover everything the chain layer</code></td>
+<td class="source"><code>  `{user_ref, v_hash}` and must never overwrite the original evidence.</code></td>
 </tr>
 <tr>
 <td class="line" id="L11"><a href="#L11">11</a></td>
 <td class="hits"></td>
-<td class="source"><code>  needs. No business logic lives here.</code></td>
+<td class="source"><code>  `record_event/2` must append each event without replacing earlier events.</code></td>
 </tr>
 <tr>
 <td class="line" id="L12"><a href="#L12">12</a></td>
@@ -211,152 +211,152 @@ td.source {
 <tr>
 <td class="line" id="L14"><a href="#L14">14</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @timeout_s "120"</code></td>
+<td class="source"><code>  @type meta :: %{</code></td>
 </tr>
 <tr>
 <td class="line" id="L15"><a href="#L15">15</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>          required(:ip) =&gt; term | nil,</code></td>
 </tr>
 <tr>
 <td class="line" id="L16"><a href="#L16">16</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def call(rpc_url, method, params) do</code></td>
+<td class="source"><code>          required(:country) =&gt; String.t() | nil,</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L17"><a href="#L17">17</a></td>
-<td class="hits">21</td>
-<td class="source"><code>    body = Jason.encode!(%{jsonrpc: "2.0", id: 1, method: method, params: params})</code></td>
+<td class="hits"></td>
+<td class="source"><code>          required(:user_agent) =&gt; String.t() | nil,</code></td>
 </tr>
 <tr>
 <td class="line" id="L18"><a href="#L18">18</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>          required(:session_id) =&gt; term | nil</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L19"><a href="#L19">19</a></td>
-<td class="hits">21</td>
-<td class="source"><code>    args = [</code></td>
+<td class="hits"></td>
+<td class="source"><code>        }</code></td>
 </tr>
 <tr>
 <td class="line" id="L20"><a href="#L20">20</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "-s",</code></td>
+<td class="source"><code>  @type acceptance :: %{</code></td>
 </tr>
 <tr>
 <td class="line" id="L21"><a href="#L21">21</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "--max-time",</code></td>
+<td class="source"><code>          required(:user_ref) =&gt; term,</code></td>
 </tr>
 <tr>
 <td class="line" id="L22"><a href="#L22">22</a></td>
 <td class="hits"></td>
-<td class="source"><code>      @timeout_s,</code></td>
+<td class="source"><code>          required(:v_hash) =&gt; term,</code></td>
 </tr>
 <tr>
 <td class="line" id="L23"><a href="#L23">23</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "-X",</code></td>
+<td class="source"><code>          required(:account) =&gt; term,</code></td>
 </tr>
 <tr>
 <td class="line" id="L24"><a href="#L24">24</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "POST",</code></td>
+<td class="source"><code>          required(:sig) =&gt; %{required(:v) =&gt; term, required(:r) =&gt; term, required(:s) =&gt; term},</code></td>
 </tr>
 <tr>
 <td class="line" id="L25"><a href="#L25">25</a></td>
 <td class="hits"></td>
-<td class="source"><code>      rpc_url,</code></td>
+<td class="source"><code>          required(:issued_at) =&gt; integer,</code></td>
 </tr>
 <tr>
 <td class="line" id="L26"><a href="#L26">26</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "-H",</code></td>
+<td class="source"><code>          required(:accepted_at) =&gt; integer,</code></td>
 </tr>
 <tr>
 <td class="line" id="L27"><a href="#L27">27</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "Content-Type: application/json",</code></td>
+<td class="source"><code>          required(:meta) =&gt; meta</code></td>
 </tr>
 <tr>
 <td class="line" id="L28"><a href="#L28">28</a></td>
 <td class="hits"></td>
-<td class="source"><code>      "-d",</code></td>
+<td class="source"><code>        }</code></td>
 </tr>
 <tr>
 <td class="line" id="L29"><a href="#L29">29</a></td>
 <td class="hits"></td>
-<td class="source"><code>      body</code></td>
+<td class="source"><code>  @type event :: %{</code></td>
 </tr>
 <tr>
 <td class="line" id="L30"><a href="#L30">30</a></td>
 <td class="hits"></td>
-<td class="source"><code>    ]</code></td>
+<td class="source"><code>          required(:user_ref) =&gt; term,</code></td>
 </tr>
 <tr>
 <td class="line" id="L31"><a href="#L31">31</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>          required(:kind) =&gt; String.t(),</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L32"><a href="#L32">32</a></td>
-<td class="hits">21</td>
-<td class="source"><code>    case System.cmd(curl_bin(), args, stderr_to_stdout: true) do</code></td>
+<td class="hits"></td>
+<td class="source"><code>          required(:at) =&gt; integer,</code></td>
 </tr>
 <tr>
 <td class="line" id="L33"><a href="#L33">33</a></td>
 <td class="hits"></td>
-<td class="source"><code>      {out, 0} -&gt;</code></td>
+<td class="source"><code>          required(:meta) =&gt; meta,</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L34"><a href="#L34">34</a></td>
-<td class="hits">20</td>
-<td class="source"><code>        case Jason.decode(out) do</code></td>
+<td class="hits"></td>
+<td class="source"><code>          required(:wallet) =&gt; term | nil,</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L35"><a href="#L35">35</a></td>
-<td class="hits">16</td>
-<td class="source"><code>          {:ok, %{"result" =&gt; result}} -&gt; {:ok, result}</code></td>
+<td class="hits"></td>
+<td class="source"><code>          required(:order_ref) =&gt; term</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L36"><a href="#L36">36</a></td>
-<td class="hits">3</td>
-<td class="source"><code>          {:ok, %{"error" =&gt; err}} -&gt; {:error, {:rpc_error, method, err}}</code></td>
+<td class="hits"></td>
+<td class="source"><code>        }</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L37"><a href="#L37">37</a></td>
-<td class="hits">1</td>
-<td class="source"><code>          _ -&gt; {:error, {:bad_rpc_response, method, String.slice(out, 0, 200)}}</code></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L38"><a href="#L38">38</a></td>
 <td class="hits"></td>
-<td class="source"><code>        end</code></td>
+<td class="source"><code>  @callback record_acceptance(ref :: term, acceptance) :: :ok</code></td>
 </tr>
 <tr>
 <td class="line" id="L39"><a href="#L39">39</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  @callback get_acceptance(ref :: term, user_ref :: term, v_hash :: term) :: acceptance | nil</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L40"><a href="#L40">40</a></td>
-<td class="hits">1</td>
-<td class="source"><code>      {err, code} -&gt;</code></td>
+<td class="hits"></td>
+<td class="source"><code>  @callback record_event(ref :: term, event) :: :ok</code></td>
 </tr>
 <tr>
 <td class="line" id="L41"><a href="#L41">41</a></td>
 <td class="hits"></td>
-<td class="source"><code>        {:error, {:curl_failed, code, String.slice(err, 0, 200)}}</code></td>
+<td class="source"><code>  @callback events_for(ref :: term, user_ref :: term) :: [event]</code></td>
 </tr>
 <tr>
 <td class="line" id="L42"><a href="#L42">42</a></td>
 <td class="hits"></td>
-<td class="source"><code>    end</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L43"><a href="#L43">43</a></td>
 <td class="hits"></td>
-<td class="source"><code>  end</code></td>
+<td class="source"><code>  @empty_meta %{ip: nil, country: nil, user_agent: nil, session_id: nil}</code></td>
 </tr>
 <tr>
 <td class="line" id="L44"><a href="#L44">44</a></td>
@@ -366,152 +366,152 @@ td.source {
 <tr>
 <td class="line" id="L45"><a href="#L45">45</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def call!(rpc_url, method, params) do</code></td>
+<td class="source"><code>  @doc "Normalizes server-owned request metadata into its persisted shape."</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L46"><a href="#L46">46</a></td>
-<td class="hits">13</td>
-<td class="source"><code>    case call(rpc_url, method, params) do</code></td>
+<td class="hits"></td>
+<td class="source"><code>  def normalize_meta(meta) when is_map(meta) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L47"><a href="#L47">47</a></td>
-<td class="hits">12</td>
-<td class="source"><code>      {:ok, result} -&gt; result</code></td>
+<td class="hits">484</td>
+<td class="source"><code>    %{</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L48"><a href="#L48">48</a></td>
-<td class="hits">1</td>
-<td class="source"><code>      {:error, reason} -&gt; raise "rpc #{method} failed: #{inspect(reason)}"</code></td>
+<td class="hits"></td>
+<td class="source"><code>      ip: meta[:ip],</code></td>
 </tr>
 <tr>
 <td class="line" id="L49"><a href="#L49">49</a></td>
 <td class="hits"></td>
-<td class="source"><code>    end</code></td>
+<td class="source"><code>      country: normalize_country(meta[:country]),</code></td>
 </tr>
 <tr>
 <td class="line" id="L50"><a href="#L50">50</a></td>
 <td class="hits"></td>
-<td class="source"><code>  end</code></td>
+<td class="source"><code>      user_agent: normalize_user_agent(meta[:user_agent]),</code></td>
 </tr>
 <tr>
 <td class="line" id="L51"><a href="#L51">51</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>      session_id: meta[:session_id]</code></td>
 </tr>
 <tr>
 <td class="line" id="L52"><a href="#L52">52</a></td>
 <td class="hits"></td>
-<td class="source"><code>  # ── typed helpers ─────────────────────────────────────────────────────────────</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L53"><a href="#L53">53</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def chain_id(rpc), do: call!(rpc, "eth_chainId", []) |&gt; hex_to_int()</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L54"><a href="#L54">54</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def gas_price(rpc), do: call!(rpc, "eth_gasPrice", []) |&gt; hex_to_int()</code></td>
+<td class="source"><code>    }</code></td>
 </tr>
 <tr>
-<td class="line" id="L55"><a href="#L55">55</a></td>
+<td class="line" id="L53"><a href="#L53">53</a></td>
+<td class="hits"></td>
+<td class="source"><code>  end</code></td>
+</tr>
+<tr>
+<td class="line" id="L54"><a href="#L54">54</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L55"><a href="#L55">55</a></td>
+<td class="hits">2</td>
+<td class="source"><code>  def normalize_meta(_), do: @empty_meta</code></td>
 </tr>
 <tr>
 <td class="line" id="L56"><a href="#L56">56</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def nonce(rpc, addr),</code></td>
+<td class="source"><code></code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L57"><a href="#L57">57</a></td>
-<td class="hits">1</td>
-<td class="source"><code>    do: call!(rpc, "eth_getTransactionCount", [addr, "pending"]) |&gt; hex_to_int()</code></td>
+<td class="hits"></td>
+<td class="source"><code>  defp normalize_country(&lt;&lt;a, b&gt;&gt; = country)</code></td>
 </tr>
 <tr>
 <td class="line" id="L58"><a href="#L58">58</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
-</tr>
-<tr>
-<td class="line" id="L59"><a href="#L59">59</a></td>
-<td class="hits"></td>
-<td class="source"><code>  def block_timestamp(rpc) do</code></td>
+<td class="source"><code>       when (a in ?A..?Z or a in ?a..?z) and (b in ?A..?Z or b in ?a..?z),</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L60"><a href="#L60">60</a></td>
-<td class="hits">1</td>
-<td class="source"><code>    call!(rpc, "eth_getBlockByNumber", ["latest", false])["timestamp"] |&gt; hex_to_int()</code></td>
+<td class="line" id="L59"><a href="#L59">59</a></td>
+<td class="hits">392</td>
+<td class="source"><code>       do: String.upcase(country)</code></td>
 </tr>
 <tr>
-<td class="line" id="L61"><a href="#L61">61</a></td>
+<td class="line" id="L60"><a href="#L60">60</a></td>
 <td class="hits"></td>
-<td class="source"><code>  end</code></td>
+<td class="source"><code></code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L61"><a href="#L61">61</a></td>
+<td class="hits">92</td>
+<td class="source"><code>  defp normalize_country(_), do: nil</code></td>
 </tr>
 <tr>
 <td class="line" id="L62"><a href="#L62">62</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
-<tr class="hit">
-<td class="line" id="L63"><a href="#L63">63</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def block_number(rpc), do: call!(rpc, "eth_blockNumber", []) |&gt; hex_to_int()</code></td>
-</tr>
 <tr>
-<td class="line" id="L64"><a href="#L64">64</a></td>
+<td class="line" id="L63"><a href="#L63">63</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  defp normalize_user_agent(value) when is_binary(value) and byte_size(value) &gt; 256 do</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L64"><a href="#L64">64</a></td>
+<td class="hits">2</td>
+<td class="source"><code>    prefix = binary_part(value, 0, 256)</code></td>
 </tr>
 <tr>
 <td class="line" id="L65"><a href="#L65">65</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @doc "eth_getBalance — native balance (wei) of `addr`. Used by the health monitor's gas check."</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L66"><a href="#L66">66</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def balance(rpc, addr), do: call!(rpc, "eth_getBalance", [addr, "latest"]) |&gt; hex_to_int()</code></td>
+<td class="hits">2</td>
+<td class="source"><code>    case :unicode.characters_to_binary(prefix) do</code></td>
 </tr>
-<tr>
+<tr class="hit">
 <td class="line" id="L67"><a href="#L67">67</a></td>
-<td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="hits">1</td>
+<td class="source"><code>      {:incomplete, valid, _} -&gt; valid</code></td>
 </tr>
-<tr>
+<tr class="hit">
 <td class="line" id="L68"><a href="#L68">68</a></td>
-<td class="hits"></td>
-<td class="source"><code>  @doc "eth_estimateGas — returns `{:ok, gas_int}` | `{:error, _}` (can revert)."</code></td>
+<td class="hits">1</td>
+<td class="source"><code>      _ -&gt; prefix</code></td>
 </tr>
 <tr>
 <td class="line" id="L69"><a href="#L69">69</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def estimate_gas(rpc, tx) do</code></td>
+<td class="source"><code>    end</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L70"><a href="#L70">70</a></td>
-<td class="hits">2</td>
-<td class="source"><code>    case call(rpc, "eth_estimateGas", [tx]) do</code></td>
+<td class="hits"></td>
+<td class="source"><code>  end</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L71"><a href="#L71">71</a></td>
-<td class="hits">1</td>
-<td class="source"><code>      {:ok, hex} -&gt; {:ok, hex_to_int(hex)}</code></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L72"><a href="#L72">72</a></td>
-<td class="hits">1</td>
-<td class="source"><code>      other -&gt; other</code></td>
+<td class="hits">45</td>
+<td class="source"><code>  defp normalize_user_agent(value) when is_binary(value), do: value</code></td>
 </tr>
-<tr>
+<tr class="hit">
 <td class="line" id="L73"><a href="#L73">73</a></td>
-<td class="hits"></td>
-<td class="source"><code>    end</code></td>
+<td class="hits">437</td>
+<td class="source"><code>  defp normalize_user_agent(_), do: nil</code></td>
 </tr>
 <tr>
 <td class="line" id="L74"><a href="#L74">74</a></td>
 <td class="hits"></td>
-<td class="source"><code>  end</code></td>
+<td class="source"><code>end</code></td>
 </tr>
 <tr>
 <td class="line" id="L75"><a href="#L75">75</a></td>
@@ -521,160 +521,190 @@ td.source {
 <tr>
 <td class="line" id="L76"><a href="#L76">76</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @doc "eth_call a view function; `data` is `0x…` calldata. Returns raw 0x-hex result."</code></td>
+<td class="source"><code>defmodule DelegatedSpend.Compliance.MemoryStore do</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L77"><a href="#L77">77</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def eth_call(rpc, to, data), do: call!(rpc, "eth_call", [%{to: to, data: data}, "latest"])</code></td>
+<td class="hits"></td>
+<td class="source"><code>  @moduledoc "Dependency-free Agent reference adapter for compliance records."</code></td>
 </tr>
 <tr>
 <td class="line" id="L78"><a href="#L78">78</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  @behaviour DelegatedSpend.Compliance.Store</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L79"><a href="#L79">79</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def code(rpc, addr), do: call!(rpc, "eth_getCode", [addr, "latest"])</code></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L80"><a href="#L80">80</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  alias DelegatedSpend.Compliance.Store</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L81"><a href="#L81">81</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def send_raw(rpc, raw_hex), do: call(rpc, "eth_sendRawTransaction", [raw_hex])</code></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L82"><a href="#L82">82</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  def start do</code></td>
 </tr>
 <tr>
 <td class="line" id="L83"><a href="#L83">83</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @doc "eth_getTransactionReceipt — returns the receipt map, or `nil` if not yet mined."</code></td>
+<td class="source"><code>    {:ok, pid} = Agent.start_link(fn -&gt; %{acceptances: %{}, events: []} end)</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L84"><a href="#L84">84</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def receipt(rpc, hash), do: call!(rpc, "eth_getTransactionReceipt", [hash])</code></td>
+<td class="hits"></td>
+<td class="source"><code>    pid</code></td>
 </tr>
 <tr>
 <td class="line" id="L85"><a href="#L85">85</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  end</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L86"><a href="#L86">86</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def get_logs(rpc, filter), do: call!(rpc, "eth_getLogs", [filter])</code></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L87"><a href="#L87">87</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  @impl true</code></td>
 </tr>
 <tr>
 <td class="line" id="L88"><a href="#L88">88</a></td>
 <td class="hits"></td>
-<td class="source"><code>  # ── hex ───────────────────────────────────────────────────────────────────────</code></td>
+<td class="source"><code>  def record_acceptance(pid, acceptance) do</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L89"><a href="#L89">89</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def hex_to_int("0x"), do: 0</code></td>
+<td class="hits"></td>
+<td class="source"><code>    acceptance = Map.update!(acceptance, :meta, &amp;Store.normalize_meta/1)</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L90"><a href="#L90">90</a></td>
-<td class="hits">10</td>
-<td class="source"><code>  def hex_to_int("0x" &lt;&gt; h), do: String.to_integer(h, 16)</code></td>
+<td class="hits"></td>
+<td class="source"><code>    key = {acceptance.user_ref, acceptance.v_hash}</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L91"><a href="#L91">91</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def hex_to_int(int) when is_integer(int), do: int</code></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L92"><a href="#L92">92</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>    Agent.update(pid, fn state -&gt;</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L93"><a href="#L93">93</a></td>
-<td class="hits">21</td>
-<td class="source"><code>  defp curl_bin, do: System.find_executable("curl") || "/run/current-system/sw/bin/curl"</code></td>
+<td class="hits"></td>
+<td class="source"><code>      %{state | acceptances: Map.put_new(state.acceptances, key, acceptance)}</code></td>
 </tr>
 <tr>
 <td class="line" id="L94"><a href="#L94">94</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>    end)</code></td>
 </tr>
 <tr>
 <td class="line" id="L95"><a href="#L95">95</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @doc "eth_call with an explicit `from` — the simulation gate needs the real sender."</code></td>
+<td class="source"><code>  end</code></td>
 </tr>
 <tr>
 <td class="line" id="L96"><a href="#L96">96</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def eth_call_from(rpc, from, to, data),</code></td>
+<td class="source"><code></code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L97"><a href="#L97">97</a></td>
-<td class="hits">1</td>
-<td class="source"><code>    do: call(rpc, "eth_call", [%{from: from, to: to, data: data}, "latest"])</code></td>
+<td class="hits"></td>
+<td class="source"><code>  @impl true</code></td>
 </tr>
 <tr>
 <td class="line" id="L98"><a href="#L98">98</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  def get_acceptance(pid, user_ref, v_hash),</code></td>
 </tr>
 <tr>
 <td class="line" id="L99"><a href="#L99">99</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @doc "Current suggested priority fee (wei)."</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L100"><a href="#L100">100</a></td>
-<td class="hits">1</td>
-<td class="source"><code>  def max_priority_fee(rpc), do: call!(rpc, "eth_maxPriorityFeePerGas", []) |&gt; hex_to_int()</code></td>
+<td class="source"><code>    do: Agent.get(pid, &amp; &amp;1.acceptances[{user_ref, v_hash}])</code></td>
 </tr>
 <tr>
-<td class="line" id="L101"><a href="#L101">101</a></td>
+<td class="line" id="L100"><a href="#L100">100</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
 <tr>
+<td class="line" id="L101"><a href="#L101">101</a></td>
+<td class="hits"></td>
+<td class="source"><code>  @impl true</code></td>
+</tr>
+<tr>
 <td class="line" id="L102"><a href="#L102">102</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @doc "Latest block base fee (wei)."</code></td>
+<td class="source"><code>  def record_event(pid, event) do</code></td>
 </tr>
 <tr>
 <td class="line" id="L103"><a href="#L103">103</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def base_fee(rpc) do</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L104"><a href="#L104">104</a></td>
-<td class="hits">1</td>
-<td class="source"><code>    %{"baseFeePerGas" =&gt; hex} = call!(rpc, "eth_getBlockByNumber", ["latest", false])</code></td>
-</tr>
-<tr class="hit">
-<td class="line" id="L105"><a href="#L105">105</a></td>
-<td class="hits">1</td>
-<td class="source"><code>    hex_to_int(hex)</code></td>
+<td class="source"><code>    event = Map.update!(event, :meta, &amp;Store.normalize_meta/1)</code></td>
 </tr>
 <tr>
-<td class="line" id="L106"><a href="#L106">106</a></td>
+<td class="line" id="L104"><a href="#L104">104</a></td>
+<td class="hits"></td>
+<td class="source"><code>    Agent.update(pid, &amp;%{&amp;1 | events: [event | &amp;1.events]})</code></td>
+</tr>
+<tr>
+<td class="line" id="L105"><a href="#L105">105</a></td>
 <td class="hits"></td>
 <td class="source"><code>  end</code></td>
 </tr>
 <tr>
+<td class="line" id="L106"><a href="#L106">106</a></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
+</tr>
+<tr>
 <td class="line" id="L107"><a href="#L107">107</a></td>
+<td class="hits"></td>
+<td class="source"><code>  @impl true</code></td>
+</tr>
+<tr>
+<td class="line" id="L108"><a href="#L108">108</a></td>
+<td class="hits"></td>
+<td class="source"><code>  def events_for(pid, user_ref) do</code></td>
+</tr>
+<tr>
+<td class="line" id="L109"><a href="#L109">109</a></td>
+<td class="hits"></td>
+<td class="source"><code>    Agent.get(pid, fn state -&gt;</code></td>
+</tr>
+<tr>
+<td class="line" id="L110"><a href="#L110">110</a></td>
+<td class="hits"></td>
+<td class="source"><code>      for event &lt;- Enum.reverse(state.events), event.user_ref == user_ref, do: event</code></td>
+</tr>
+<tr>
+<td class="line" id="L111"><a href="#L111">111</a></td>
+<td class="hits"></td>
+<td class="source"><code>    end)</code></td>
+</tr>
+<tr>
+<td class="line" id="L112"><a href="#L112">112</a></td>
+<td class="hits"></td>
+<td class="source"><code>  end</code></td>
+</tr>
+<tr>
+<td class="line" id="L113"><a href="#L113">113</a></td>
 <td class="hits"></td>
 <td class="source"><code>end</code></td>
 </tr>

@@ -372,9 +372,9 @@ Money-lane bookkeeping should not be in-memory-only in production —
   `config.json` disagrees — moving `RPC_URL` to another chain without
   redeploying the dapp is a fund-loss class misdeploy, not a UX nit.
 
-- **Intake mounted.** The package ships PURE handlers —
+- **Intake mounted.** The package ships five PURE handlers —
   `DelegatedSpend.Intake.handle_order/2`, `handle_grant/2`,
-  `handle_wallet/2`, and `handle_submitted/2`, each
+  `handle_wallet/2`, `handle_submitted/2`, and `handle_terms/2`, each
   `params → {status, body_map}` — and YOU supply the HTTP serving and the
   fail-closed bind (loopback unless explicitly published). The ctx:
 
@@ -392,16 +392,172 @@ Money-lane bookkeeping should not be in-memory-only in production —
   ```
 
   The wallet dapp POSTs `{intakeUrl}/orders`, `{intakeUrl}/grants`,
-  `{intakeUrl}/wallet`, and `{intakeUrl}/orders/submitted` with either
-  `token` or `init_data` plus `v` in the body. A ~60-line Plug over Bandit is
-  all the serving glue takes: route first, cap the body (64 kB → 413),
-  decode-error → 400 — auth still happens inside the handlers.
+  `{intakeUrl}/wallet`, `{intakeUrl}/orders/submitted`, and, when compliance
+  is enabled, `{intakeUrl}/terms`, with either `token` or `init_data` plus `v`
+  in the body. A ~60-line Plug over Bandit is all the serving glue takes:
+  route first, cap the body (64 kB → 413), decode-error → 400 — auth still
+  happens inside the handlers.
 
 - **Keeper key provisioned.** The keeper signs with its OWN key
   (`SPEND_KEEPER_PRIVATE_KEY` in the template) — **never** the app's
   bot/treasury key; the compromise blast radii must stay separate. Fund it
   for gas only. See `.env.example` for the full environment template,
   including which values are required vs optional.
+
+## 6. Compliance layer
+
+The consuming app supplies trusted request metadata to every three-arity
+handler. A compact Plug mapping looks like this (the surrounding Plug still
+owns body limits, JSON decoding, and response encoding):
+
+```elixir
+def call(conn, ctx) do
+  conn = Plug.Conn.fetch_cookies(conn)
+
+  meta =
+    DelegatedSpend.Compliance.Meta.build(
+      conn.remote_ip,
+      conn.req_headers,
+      conn.req_cookies,
+      # EXACTLY the number of reverse proxies you operate in front of this
+      # listener (CDN + Caddy/nginx hops). 0 = the socket peer IS the client.
+      trusted_hops: 1,
+      # The header your TRUSTED EDGE sets with the visitor country.
+      country_header: "cf-ipcountry"
+    )
+
+  {status, body} = case {conn.method, conn.path_info} do
+    {"POST", ["spend", "orders"]} -> Intake.handle_order(conn.params, meta, ctx)
+    {"POST", ["spend", "grants"]} -> Intake.handle_grant(conn.params, meta, ctx)
+    {"POST", ["spend", "wallet"]} -> Intake.handle_wallet(conn.params, meta, ctx)
+    {"POST", ["spend", "orders", "submitted"]} -> Intake.handle_submitted(conn.params, meta, ctx)
+    {"POST", ["spend", "terms"]} -> Intake.handle_terms(conn.params, meta, ctx)
+  end
+
+  conn |> Plug.Conn.put_status(status) |> json(body)
+end
+```
+
+The country never comes from the client. Behind Cloudflare, `cf-ipcountry`
+is set by the edge. Behind your own Caddy or nginx you must (a) resolve the
+country at the edge with a GeoIP module (nginx `ngx_http_geoip2_module`, a
+Caddy MaxMind plugin) into a header of your choosing, and (b) strip or
+overwrite that header on every inbound request so a client can never supply
+it. `trusted_hops` must equal the exact number of proxies you operate: too
+low records your own proxy as every user's IP (worthless evidence), too high
+lets clients spoof `x-forwarded-for` entries. `Meta.build/4` refuses to
+guess — a forwarding chain shorter than the hop count records `ip: nil`.
+The package intentionally has no browser-geolocation, blocklist, GeoIP
+database, or network-lookup mode.
+
+> **Compliance warning:** once `ctx.compliance` is configured, calling a
+> two-arity handler supplies no metadata and therefore denies every request
+> (each such call logs a warning naming the mistake); an empty geo allowlist
+> also denies everyone. Use all five three-arity forms, and call
+> `DelegatedSpend.Compliance.check!(ctx)` at boot so a config that would
+> deny-all fails the deploy instead of serving 451/503 to everyone.
+> `record_acceptance` is fail-closed: a failure returns `503`, and acceptance
+> is not acknowledged.
+
+### Session/cookie evidence
+
+The app owns the first-party `spend_session` cookie and should mint it with
+`HttpOnly; Secure; SameSite=Lax; Path=/`. The package only normalizes and
+persists the opaque value passed as `meta.session_id`. This relies on the
+existing same-origin intake assumption (`intakeUrl: "/spend"`), under which
+browser fetches already carry first-party cookies.
+
+`session_id: nil` is accepted because Telegram webviews, ITP, privacy settings,
+or disabled cookies may drop the cookie. Legal must sign off on nullable
+session evidence. Adapters must never store or log raw `initData`, access
+tokens, authentication bodies, or Telegram/other platform identifiers.
+
+### Compliance context
+
+Read and hash the deployed terms file at boot, then serve those exact bytes at
+the configured URL:
+
+```elixir
+terms_bytes = File.read!(System.fetch_env!("SPEND_TERMS_PATH"))
+
+compliance = %{
+  geo_allow: System.fetch_env!("SPEND_GEOFENCE_COUNTRIES") |> String.split(",", trim: true),
+  terms: %{
+    hash: DelegatedSpend.Compliance.Terms.hash_terms(terms_bytes),
+    url: System.fetch_env!("SPEND_TERMS_URL")
+  },
+  store: {MyApp.ComplianceStore, MyApp.Repo}
+}
+
+ctx = Map.put(ctx, :compliance, compliance)
+:ok = DelegatedSpend.Compliance.check!(ctx)
+```
+
+`check!/1` is the `BootCheck` idiom for this config: it validates the
+allowlist, the terms pin, and the store adapter's callbacks at boot, so a
+misconfiguration fails the deploy instead of denying every request.
+
+A hand-copied terms hash is not configuration: hash the bytes read from
+`SPEND_TERMS_PATH`, and make the terms route return those same bytes. Countries
+are comma-separated ISO 3166-1 alpha-2 codes; use an allowlist, not a
+blocklist.
+
+Implement the four `DelegatedSpend.Compliance.Store` callbacks:
+`record_acceptance/2`, `get_acceptance/3`, `record_event/2`, and
+`events_for/2`. The executable adapter specification is
+`test/compliance_store_test.exs`. The app's `tg_ci` is the blinded, opaque
+`user_ref`; it is never a raw Telegram or other platform identifier.
+
+Production adapters must make `record_acceptance/2` atomic first-write-wins
+per `{user_ref, v_hash}` without overwriting the original evidence, and must
+make `record_event/2` append-only.
+
+`record_event` is best-effort because it runs after an already-executed money
+operation. Persist the audit kinds `wallet_bound`, `grant_submitted`, and
+`tx_submitted`. This differs deliberately from request-critical acceptance
+persistence; legal must sign off on that durability asymmetry.
+
+### Terms route and UI states
+
+Mount `POST /spend/terms` on `handle_terms/3`. Its body is the signed
+acceptance envelope plus the active authentication material:
+
+```json
+{
+  "v": "0.5.0",
+  "token": "<ref-scoped token, or send init_data instead>",
+  "ref": "<user-approved active order or bind ref>",
+  "acceptance": {
+    "v": "0.5.0",
+    "chain_id": 84532,
+    "v_hash": "0x...",
+    "account": "0x...",
+    "issued_at": 1900000000,
+    "sig": {"v": 27, "r": "0x...", "s": "0x..."}
+  }
+}
+```
+
+The user-approved top-level `ref` is used only to authenticate the existing
+ref-scoped token. It is not signed and is not persisted. Keep the UI's three
+dead states explicit: `geo_blocked` (`451`, terminal), `terms_required`
+(`428`, prompt acceptance), and `terms_stale` (`409`, reload the current hash
+and require a new signature).
+
+Retention periods, legal export/deletion workflows, and GDPR policy remain the
+consuming app's responsibility.
+
+### Launch checklist
+
+- The trusted edge overwrites the geo header and the origin cannot be reached
+  through a path that preserves a client-supplied value.
+- The app serves the exact terms bytes hashed at boot; the production store
+  passes `test/compliance_store_test.exs` semantics.
+- Legal approved nullable session evidence, audit-event durability, retention,
+  export/deletion, and GDPR policy.
+- **Fail-closed launch warning:** exercise every route through its three-arity
+  handler with a non-empty country allowlist. Two-arity handlers and an empty
+  `SPEND_GEOFENCE_COUNTRIES` deny all users once compliance is configured.
 
 ## The testing bar
 

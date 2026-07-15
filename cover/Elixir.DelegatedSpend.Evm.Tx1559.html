@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Evm.Tx1559.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/objects/spend_keeper/evm/tx1559.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-11 at 10:15:16</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/evm/tx1559.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
 <table>
 <tbody>
 <tr>
@@ -315,7 +315,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L35"><a href="#L35">35</a></td>
-<td class="hits">47</td>
+<td class="hits">61</td>
 <td class="source"><code>    } = params</code></td>
 </tr>
 <tr>
@@ -325,17 +325,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L37"><a href="#L37">37</a></td>
-<td class="hits">47</td>
+<td class="hits">61</td>
 <td class="source"><code>    fields = [cid, nonce, prio, max_fee, gas, to_field(to), value, data, []]</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L38"><a href="#L38">38</a></td>
-<td class="hits">47</td>
+<td class="hits">61</td>
 <td class="source"><code>    digest = Keccak.hash_256(&lt;&lt;2&gt;&gt; &lt;&gt; ExRLP.encode(fields))</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L39"><a href="#L39">39</a></td>
-<td class="hits">47</td>
+<td class="hits">61</td>
 <td class="source"><code>    {r, s, recid} = Secp256k1.sign(digest, priv)</code></td>
 </tr>
 <tr>
@@ -345,7 +345,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L41"><a href="#L41">41</a></td>
-<td class="hits">47</td>
+<td class="hits">61</td>
 <td class="source"><code>    signed =</code></td>
 </tr>
 <tr>
@@ -410,7 +410,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L54"><a href="#L54">54</a></td>
-<td class="hits">43</td>
+<td class="hits">57</td>
 <td class="source"><code>  defp to_field(addr) when is_binary(addr), do: Address.to_bytes(addr)</code></td>
 </tr>
 <tr>

@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Intake.TelegramAuth.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/objects/spend_keeper/intake/telegram_auth.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-11 at 10:15:16</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/intake/telegram_auth.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
 <table>
 <tbody>
 <tr>
@@ -238,9 +238,9 @@ td.source {
 <td class="hits"></td>
 <td class="source"><code>  """</code></td>
 </tr>
-<tr class="hit">
+<tr class="miss">
 <td class="line" id="L20"><a href="#L20">20</a></td>
-<td class="hits">33</td>
+<td class="hits"><pre style="display: inline;">:-(</pre></td>
 <td class="source"><code>  def verify(init_data, bot_token, max_age_s, now_s \\ System.os_time(:second))</code></td>
 </tr>
 <tr>
@@ -260,27 +260,27 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L24"><a href="#L24">24</a></td>
-<td class="hits">42</td>
+<td class="hits">49</td>
 <td class="source"><code>    with {:ok, fields} &lt;- decode(init_data),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L25"><a href="#L25">25</a></td>
-<td class="hits">42</td>
+<td class="hits">49</td>
 <td class="source"><code>         {:ok, hash} &lt;- Map.fetch(fields, "hash") |&gt; ok_or(:malformed),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L26"><a href="#L26">26</a></td>
-<td class="hits">33</td>
+<td class="hits">40</td>
 <td class="source"><code>         :ok &lt;- check_hash(Map.delete(fields, "hash"), hash, bot_token),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L27"><a href="#L27">27</a></td>
-<td class="hits">28</td>
+<td class="hits">35</td>
 <td class="source"><code>         :ok &lt;- check_fresh(fields["auth_date"], max_age_s, now_s),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L28"><a href="#L28">28</a></td>
-<td class="hits">24</td>
+<td class="hits">31</td>
 <td class="source"><code>         {:ok, user_id} &lt;- extract_user(fields["user"]) do</code></td>
 </tr>
 <tr>
@@ -305,7 +305,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L33"><a href="#L33">33</a></td>
-<td class="hits">6</td>
+<td class="hits">15</td>
 <td class="source"><code>  def verify(_, _, _, _), do: {:error, :malformed}</code></td>
 </tr>
 <tr>
@@ -315,7 +315,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L35"><a href="#L35">35</a></td>
-<td class="hits">42</td>
+<td class="hits">49</td>
 <td class="source"><code>  defp decode(init_data) do</code></td>
 </tr>
 <tr>
@@ -350,7 +350,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L42"><a href="#L42">42</a></td>
-<td class="hits">33</td>
+<td class="hits">40</td>
 <td class="source"><code>    dcs =</code></td>
 </tr>
 <tr>
@@ -360,12 +360,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L44"><a href="#L44">44</a></td>
-<td class="hits">100</td>
+<td class="hits">121</td>
 <td class="source"><code>      |&gt; Enum.sort_by(fn {k, _v} -&gt; k end)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L45"><a href="#L45">45</a></td>
-<td class="hits">100</td>
+<td class="hits">121</td>
 <td class="source"><code>      |&gt; Enum.map_join("\n", fn {k, v} -&gt; "#{k}=#{v}" end)</code></td>
 </tr>
 <tr>
@@ -375,12 +375,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L47"><a href="#L47">47</a></td>
-<td class="hits">33</td>
+<td class="hits">40</td>
 <td class="source"><code>    secret = :crypto.mac(:hmac, :sha256, "WebAppData", bot_token)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L48"><a href="#L48">48</a></td>
-<td class="hits">33</td>
+<td class="hits">40</td>
 <td class="source"><code>    expected = :crypto.mac(:hmac, :sha256, secret, dcs) |&gt; Base.encode16(case: :lower)</code></td>
 </tr>
 <tr>
@@ -395,7 +395,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L51"><a href="#L51">51</a></td>
-<td class="hits">33</td>
+<td class="hits">40</td>
 <td class="source"><code>    if byte_size(hash) == byte_size(expected) and :crypto.hash_equals(hash, expected),</code></td>
 </tr>
 <tr>
@@ -425,12 +425,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L57"><a href="#L57">57</a></td>
-<td class="hits">27</td>
+<td class="hits">34</td>
 <td class="source"><code>    case Integer.parse(auth_date) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L58"><a href="#L58">58</a></td>
-<td class="hits">24</td>
+<td class="hits">31</td>
 <td class="source"><code>      {ts, ""} when now_s - ts &lt;= max_age_s -&gt; :ok</code></td>
 </tr>
 <tr class="hit">
@@ -485,12 +485,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L69"><a href="#L69">69</a></td>
-<td class="hits">23</td>
+<td class="hits">30</td>
 <td class="source"><code>    case Jason.decode(json) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L70"><a href="#L70">70</a></td>
-<td class="hits">22</td>
+<td class="hits">29</td>
 <td class="source"><code>      {:ok, %{"id" =&gt; id}} when is_integer(id) -&gt; {:ok, id}</code></td>
 </tr>
 <tr class="hit">
@@ -515,7 +515,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L75"><a href="#L75">75</a></td>
-<td class="hits">33</td>
+<td class="hits">40</td>
 <td class="source"><code>  defp ok_or({:ok, v}, _e), do: {:ok, v}</code></td>
 </tr>
 <tr class="hit">

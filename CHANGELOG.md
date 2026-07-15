@@ -19,6 +19,31 @@ package releases can ship zero contract bytecode changes. `scripts/check-version
   introspection view and the keeper's grant registry stores delegation
   grants, but no redemption path exists yet.
 
+## [0.5.0] - 2026-07-14
+
+Compliance-layer release. No Solidity bytes changed; `CONTRACT_VERSION`
+remains `0.2.0`.
+
+### Added
+
+- Compliance-layer request evidence, a fail-closed country geofence returning
+  `451`, a terms gate returning `428`, and `POST /terms` acceptance.
+- `DelegatedSpend.Compliance.Store` for acceptance and audit-event persistence.
+- `DelegatedSpend.Compliance.Meta.build/4` — edge-metadata builder (client IP
+  by `x-forwarded-for` hop count, country from the trusted edge header only).
+- `DelegatedSpend.Compliance.check!/1` — boot-time validation of
+  `ctx.compliance` (the `BootCheck` idiom: deny-all misconfiguration fails the
+  deploy, not every request).
+
+### Changed
+
+- Intake handlers now expose three-arity request-metadata forms while keeping
+  their two-arity compatibility forms; a two-arity call with compliance
+  configured logs a warning naming the deny-all consequence.
+- `user_tx` order views withhold the executable `tx` payload until the
+  current terms are accepted (the dapp-side gate alone cannot bind callers
+  that replay the fetched payload from external tooling).
+
 ## [0.4.0] - 2026-07-14
 
 Durable execution-status release. No Solidity bytes changed;

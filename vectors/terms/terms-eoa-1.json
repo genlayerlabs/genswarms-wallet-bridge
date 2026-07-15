@@ -1,0 +1,75 @@
+{
+  "version": "0.5.0",
+  "account_state": "eoa",
+  "domain": {
+    "name": "genswarms-wallet-bridge/terms",
+    "version": "1",
+    "chain_id": 31337
+  },
+  "acceptance": {
+    "terms_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "account": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "issued_at": 1900000000
+  },
+  "signature": {
+    "raw": "0x3111ff579343c0e7a01a7c12939cc6604aa49dafdc31211953e35e7cbfd8fcac78b1267e19ac04f22fb3237ef954b3ee99455a9938b030550371d731954ddd931c",
+    "v": 28,
+    "r": "0x3111ff579343c0e7a01a7c12939cc6604aa49dafdc31211953e35e7cbfd8fcac",
+    "s": "0x78b1267e19ac04f22fb3237ef954b3ee99455a9938b030550371d731954ddd93"
+  },
+  "envelope": {
+    "v": "0.5.0",
+    "chain_id": 31337,
+    "v_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "account": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "issued_at": 1900000000,
+    "sig": {
+      "v": 28,
+      "r": "0x3111ff579343c0e7a01a7c12939cc6604aa49dafdc31211953e35e7cbfd8fcac",
+      "s": "0x78b1267e19ac04f22fb3237ef954b3ee99455a9938b030550371d731954ddd93"
+    }
+  },
+  "typed_data": {
+    "types": {
+      "EIP712Domain": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "version",
+          "type": "string"
+        },
+        {
+          "name": "chainId",
+          "type": "uint256"
+        }
+      ],
+      "TermsAcceptance": [
+        {
+          "name": "termsHash",
+          "type": "bytes32"
+        },
+        {
+          "name": "account",
+          "type": "address"
+        },
+        {
+          "name": "issuedAt",
+          "type": "uint256"
+        }
+      ]
+    },
+    "primaryType": "TermsAcceptance",
+    "domain": {
+      "name": "genswarms-wallet-bridge/terms",
+      "version": "1",
+      "chainId": 31337
+    },
+    "message": {
+      "termsHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "account": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "issuedAt": "1900000000"
+    }
+  }
+}
