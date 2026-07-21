@@ -19,7 +19,11 @@ defmodule DelegatedSpend.GrantValidationTest do
         "owner" => "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
         "value" => 25_000_000,
         "deadline" => 4_000_000_000,
-        "sig" => %{"v" => 27, "r" => "0x" <> String.duplicate("11", 32), "s" => "0x" <> String.duplicate("22", 32)}
+        "sig" => %{
+          "v" => 27,
+          "r" => "0x" <> String.duplicate("11", 32),
+          "s" => "0x" <> String.duplicate("22", 32)
+        }
       },
       overrides
     )
@@ -53,14 +57,27 @@ defmodule DelegatedSpend.GrantValidationTest do
   end
 
   test "invalid values reject: zero/negative amount, bad deadline, bad sig shapes" do
-    assert {:error, {:invalid, :value}} = GrantValidation.validate_permit(env(%{"value" => 0}), @pinned)
-    assert {:error, {:invalid, :value}} = GrantValidation.validate_permit(env(%{"value" => "25"}), @pinned)
-    assert {:error, {:invalid, :deadline}} = GrantValidation.validate_permit(env(%{"deadline" => -1}), @pinned)
+    assert {:error, {:invalid, :value}} =
+             GrantValidation.validate_permit(env(%{"value" => 0}), @pinned)
+
+    assert {:error, {:invalid, :value}} =
+             GrantValidation.validate_permit(env(%{"value" => "25"}), @pinned)
+
+    assert {:error, {:invalid, :deadline}} =
+             GrantValidation.validate_permit(env(%{"deadline" => -1}), @pinned)
 
     for bad_sig <- [
-          %{"v" => 26, "r" => "0x" <> String.duplicate("11", 32), "s" => "0x" <> String.duplicate("22", 32)},
+          %{
+            "v" => 26,
+            "r" => "0x" <> String.duplicate("11", 32),
+            "s" => "0x" <> String.duplicate("22", 32)
+          },
           %{"v" => 27, "r" => "0x1111", "s" => "0x" <> String.duplicate("22", 32)},
-          %{"v" => 27, "r" => String.duplicate("11", 32), "s" => "0x" <> String.duplicate("22", 32)},
+          %{
+            "v" => 27,
+            "r" => String.duplicate("11", 32),
+            "s" => "0x" <> String.duplicate("22", 32)
+          },
           %{},
           nil
         ] do

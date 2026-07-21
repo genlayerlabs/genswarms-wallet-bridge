@@ -6,7 +6,10 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
 
   @anvil0 Base.decode16!("AC0974BEC39A17E36BA4A6B4D238FF944BACB478CBED5EFCAE784D7BF4F2FF80")
   @router "0x00000000000000000000000000000000000000e1"
-  @action %{with_permit_name: "payWithPermit", arg_types: [{:bytes, 32}, {:uint, 256}, {:bytes, 32}]}
+  @action %{
+    with_permit_name: "payWithPermit",
+    arg_types: [{:bytes, 32}, {:uint, 256}, {:bytes, 32}]
+  }
 
   @ref String.duplicate("ab", 32)
 
@@ -29,7 +32,13 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
     fake = FakeRpc.start(%{chain_id: 84_532, nonce: 0, simulate: :ok})
 
     {:ok, signer} =
-      Signer.start_link(rpc_url: fake, chain_id: 84_532, priv: @anvil0, rpc_mod: FakeRpc, sweep_ms: 3_600_000)
+      Signer.start_link(
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000
+      )
 
     opts = keeper_opts(fake, signer)
     {:ok, state} = Object.init(Map.merge(%{keeper_opts: opts}, config_overrides))
@@ -48,7 +57,11 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
           "order_ref" => @ref,
           "user_ref" => "u-a",
           "amount" => 25_000_000,
-          "action_args" => ["0x" <> String.duplicate("07", 32), 25_000_000, "0x" <> String.duplicate("09", 32)]
+          "action_args" => [
+            "0x" <> String.duplicate("07", 32),
+            25_000_000,
+            "0x" <> String.duplicate("09", 32)
+          ]
         },
         overrides
       )
@@ -120,7 +133,11 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
         "amount" => 0,
         "action_args" => [],
         "kind" => "user_tx",
-        "tx" => %{"to" => "0x" <> String.duplicate("11", 20), "data" => "0xdeadbeef", "value" => 0},
+        "tx" => %{
+          "to" => "0x" <> String.duplicate("11", 20),
+          "data" => "0xdeadbeef",
+          "value" => 0
+        },
         "display" => %{"summary_lines" => ["Sell YES"]},
         "ttl_s" => 60
       })
@@ -179,7 +196,12 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
   test "register via the door: bad ref shapes and duplicates are typed refusals" do
     %{state: state} = start_object()
 
-    for bad <- [String.upcase(@ref), "0x" <> @ref, String.slice(@ref, 0, 62), "zz" <> String.slice(@ref, 2, 62)] do
+    for bad <- [
+          String.upcase(@ref),
+          "0x" <> @ref,
+          String.slice(@ref, 0, 62),
+          "zz" <> String.slice(@ref, 2, 62)
+        ] do
       {reply, _} = msg(state, :market_phase, register_payload(%{"order_ref" => bad}))
       assert %{"ok" => false, "error" => "bad_order_ref"} = reply, "accepted bad ref #{bad}"
     end
@@ -245,18 +267,37 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
   test "order_status returns unknown and pending through the door" do
     %{state: state, opts: opts} = start_object()
 
-    {%{"ok" => true, "order_id" => order_id}, state} = msg(state, :market_phase, register_payload())
+    {%{"ok" => true, "order_id" => order_id}, state} =
+      msg(state, :market_phase, register_payload())
 
-    {status, state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
+    {status, state} =
+      msg(
+        state,
+        :market_phase,
+        Jason.encode!(%{"action" => "order_status", "order_id" => order_id})
+      )
+
     assert %{"ok" => true, "status" => "unknown"} = status
 
     {MemoryStore, store} = opts.store
     assert {:ok, _} = MemoryStore.begin_execution(store, order_id, "u-a", order_id)
 
-    {pending, state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
+    {pending, state} =
+      msg(
+        state,
+        :market_phase,
+        Jason.encode!(%{"action" => "order_status", "order_id" => order_id})
+      )
+
     assert %{"ok" => true, "status" => "pending"} = pending
 
-    {reset, _} = msg(state, :market_phase, Jason.encode!(%{"action" => "reset_backoff", "user_ref" => "u-a"}))
+    {reset, _} =
+      msg(
+        state,
+        :market_phase,
+        Jason.encode!(%{"action" => "reset_backoff", "user_ref" => "u-a"})
+      )
+
     assert %{"ok" => true} = reset
   end
 
@@ -264,10 +305,13 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
     %{state: state, opts: opts} = start_object()
     fake = opts.rpc
     signer = opts.signer
-    {%{"ok" => true, "order_id" => order_id}, state} = msg(state, :market_phase, register_payload())
+
+    {%{"ok" => true, "order_id" => order_id}, state} =
+      msg(state, :market_phase, register_payload())
 
     {:ok, order} = Keeper.fetch_order_full(state.keeper, @ref, "u-a")
     assert order.order_id == order_id
+
     {:submitted, hash} =
       Keeper.execute_with_permit(state.keeper, @ref, "u-a", %{
         owner: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
@@ -278,21 +322,36 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
         s: <<2::256>>
       })
 
-    {submitted, state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
+    {submitted, state} =
+      msg(
+        state,
+        :market_phase,
+        Jason.encode!(%{"action" => "order_status", "order_id" => order_id})
+      )
+
     assert %{"ok" => true, "status" => "submitted", "tx" => ^hash} = submitted
 
     FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
     Signer.sweep_now(signer)
     Keeper.sweep_now(state.keeper)
 
-    {mined, _state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
+    {mined, _state} =
+      msg(
+        state,
+        :market_phase,
+        Jason.encode!(%{"action" => "order_status", "order_id" => order_id})
+      )
+
     assert %{"ok" => true, "status" => "mined", "tx" => ^hash} = mined
   end
 
   test "order_status returns failed terminal status through the door" do
     %{state: state, opts: opts} = start_object()
     fake = opts.rpc
-    {%{"ok" => true, "order_id" => order_id}, state} = msg(state, :market_phase, register_payload())
+
+    {%{"ok" => true, "order_id" => order_id}, state} =
+      msg(state, :market_phase, register_payload())
+
     FakeRpc.put(fake, :simulate, {:revert, %{"message" => "no"}})
 
     assert {:failed, :reverted} =
@@ -305,7 +364,13 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
                s: <<2::256>>
              })
 
-    {failed, _state} = msg(state, :market_phase, Jason.encode!(%{"action" => "order_status", "order_id" => order_id}))
+    {failed, _state} =
+      msg(
+        state,
+        :market_phase,
+        Jason.encode!(%{"action" => "order_status", "order_id" => order_id})
+      )
+
     assert %{"ok" => true, "status" => "failed", "reason" => "reverted"} = failed
   end
 

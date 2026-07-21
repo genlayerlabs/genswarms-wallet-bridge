@@ -104,7 +104,10 @@ defmodule DelegatedSpend.Keeper.MemoryStore do
 
   @impl true
   def put_grant(pid, grant_ref, user_ref, grant) do
-    Agent.update(pid, &put_in(&1, [:grants, {grant_ref, user_ref}], Map.put(grant, :revoked, false)))
+    Agent.update(
+      pid,
+      &put_in(&1, [:grants, {grant_ref, user_ref}], Map.put(grant, :revoked, false))
+    )
   end
 
   @impl true

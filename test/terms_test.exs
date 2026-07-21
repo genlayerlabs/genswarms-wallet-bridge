@@ -275,4 +275,48 @@ defmodule DelegatedSpend.Compliance.TermsTest do
                {:error, {:invalid, :sig}}
     end
   end
+
+  describe "restricted_countries/1" do
+    test "parses the marker line into normalized codes" do
+      text = "Our terms.\n\nRestricted countries: cu, Ir , KP.\n\nMore prose."
+      assert Terms.restricted_countries(text) == ["CU", "IR", "KP"]
+    end
+
+    test "accepts case-insensitive marker, no trailing period, and CRLF endings" do
+      assert Terms.restricted_countries("RESTRICTED COUNTRIES: sy\r\nrest\r\n") == ["SY"]
+      assert Terms.restricted_countries("  restricted countries: CU") == ["CU"]
+    end
+
+    test "a missing marker line raises naming the derivation" do
+      assert_raise ArgumentError, ~r/no `Restricted countries/, fn ->
+        Terms.restricted_countries("Terms with no such line.")
+      end
+
+      # a mid-line mention is prose, not the marker
+      assert_raise ArgumentError, ~r/no `Restricted countries/, fn ->
+        Terms.restricted_countries(
+          "See the Restricted countries: section below.\nBody. Restricted countries: CU appended mid-line."
+        )
+      end
+    end
+
+    test "multiple marker lines raise as ambiguous" do
+      assert_raise ArgumentError, ~r/multiple/, fn ->
+        Terms.restricted_countries("Restricted countries: CU\nRestricted countries: IR\n")
+      end
+    end
+
+    test "empty or malformed entries raise" do
+      for bad <- [
+            "Restricted countries: .",
+            "Restricted countries: CUB",
+            "Restricted countries: CU, , IR",
+            "Restricted countries: C1"
+          ] do
+        assert_raise ArgumentError, ~r/not an ISO 3166-1 alpha-2 code/, fn ->
+          Terms.restricted_countries(bad)
+        end
+      end
+    end
+  end
 end

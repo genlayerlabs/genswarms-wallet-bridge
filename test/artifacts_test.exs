@@ -7,7 +7,15 @@ defmodule DelegatedSpend.Evm.ArtifactsTest do
     dir = Path.join(root, file)
     File.mkdir_p!(dir)
     path = Path.join(dir, contract <> ".json")
-    File.write!(path, Jason.encode!(%{"abi" => [%{"type" => "constructor"}], "bytecode" => %{"object" => bytecode}}))
+
+    File.write!(
+      path,
+      Jason.encode!(%{
+        "abi" => [%{"type" => "constructor"}],
+        "bytecode" => %{"object" => bytecode}
+      })
+    )
+
     path
   end
 
@@ -53,7 +61,12 @@ defmodule DelegatedSpend.Evm.ArtifactsTest do
   end
 
   defp tmp_dir do
-    dir = Path.join(System.tmp_dir!(), "delegated-spend-artifacts-#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "delegated-spend-artifacts-#{System.unique_integer([:positive])}"
+      )
+
     File.rm_rf!(dir)
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)

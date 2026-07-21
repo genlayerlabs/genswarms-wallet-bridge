@@ -40,9 +40,7 @@ defmodule DelegatedSpend.Evm.Tx1559 do
 
     signed =
       <<2>> <>
-        ExRLP.encode(
-          fields ++ [recid, :binary.decode_unsigned(r), :binary.decode_unsigned(s)]
-        )
+        ExRLP.encode(fields ++ [recid, :binary.decode_unsigned(r), :binary.decode_unsigned(s)])
 
     {"0x" <> Base.encode16(signed, case: :lower),
      "0x" <> Base.encode16(Keccak.hash_256(signed), case: :lower)}

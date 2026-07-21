@@ -60,7 +60,9 @@ ctor =
     [Address.to_bytes(token), anchor_arg, <<0::160>>]
   )
 
-{:ok, _} = Signer.submit(signer, "deploy-echo", %{to: :create, data: unhex.(echo_art.bytecode) <> ctor})
+{:ok, _} =
+  Signer.submit(signer, "deploy-echo", %{to: :create, data: unhex.(echo_art.bytecode) <> ctor})
+
 echo_hash = E2E.await_mined(signer, "deploy-echo")
 %{"contractAddress" => echo} = Rpc.receipt(rpc, echo_hash)
 
@@ -104,8 +106,13 @@ E2E.await_mined(signer, "spend-1")
 
 dest_hex = "0x" <> Base.encode16(dest, case: :lower)
 [dest_bal] = E2E.view(rpc, token, "balanceOf", [:address], [dest], [{:uint, 256}])
-[router_bal] = E2E.view(rpc, token, "balanceOf", [:address], [Address.to_bytes(echo)], [{:uint, 256}])
-[user_bal] = E2E.view(rpc, token, "balanceOf", [:address], [Address.to_bytes(user)], [{:uint, 256}])
+
+[router_bal] =
+  E2E.view(rpc, token, "balanceOf", [:address], [Address.to_bytes(echo)], [{:uint, 256}])
+
+[user_bal] =
+  E2E.view(rpc, token, "balanceOf", [:address], [Address.to_bytes(user)], [{:uint, 256}])
+
 E2E.assert!(dest_bal == 25_000_000, "destination funded")
 E2E.assert!(router_bal == 0, "router residual zero")
 E2E.assert!(user_bal == 75_000_000, "user debited")
@@ -168,7 +175,10 @@ store = MemoryStore.start()
     chain_id: chain_id,
     store: {MemoryStore, store},
     router: echo,
-    action: %{with_permit_name: "payWithPermit", arg_types: [{:bytes, 32}, {:uint, 256}, {:bytes, 32}]},
+    action: %{
+      with_permit_name: "payWithPermit",
+      arg_types: [{:bytes, 32}, {:uint, 256}, {:bytes, 32}]
+    },
     source_allowlist: ["market_phase"],
     order_ttl_s: 600,
     rpc_mod: Rpc,
@@ -213,7 +223,10 @@ E2E.assert!(
 # user signs the REAL permit for exactly the fetched amount
 [nonce2] = E2E.view(rpc, token, "nonces", [:address], [Address.to_bytes(user)], [{:uint, 256}])
 deadline2 = Rpc.block_timestamp(rpc) + 3600
-digest2 = PermitLane.permit_digest(domain_sep, user, echo, order_view["amount"], nonce2, deadline2)
+
+digest2 =
+  PermitLane.permit_digest(domain_sep, user, echo, order_view["amount"], nonce2, deadline2)
+
 {r2, s2, recid2} = Secp256k1.sign(digest2, user_priv)
 
 envelope = %{
@@ -254,7 +267,14 @@ mined_hash = await_mined.(100)
 E2E.assert!(is_binary(mined_hash), "typed mined result")
 
 [dest2] =
-  E2E.view(rpc, echo, "destinationFor", [{:bytes, 32}, :address], [topic2, Address.to_bytes(user)], [:address])
+  E2E.view(
+    rpc,
+    echo,
+    "destinationFor",
+    [{:bytes, 32}, :address],
+    [topic2, Address.to_bytes(user)],
+    [:address]
+  )
 
 [dest2_bal] = E2E.view(rpc, token, "balanceOf", [:address], [dest2], [{:uint, 256}])
 E2E.assert!(dest2_bal == 10_000_000, "registry-path funds landed")
@@ -272,7 +292,10 @@ E2E.assert!(dest2_bal2 == 10_000_000, "replay caused no second spend")
 
 # a different verified user cannot see or spend the order
 {404, _} =
-  Intake.handle_order(%{"init_data" => make_init_data.(666), "order_ref" => order_ref, "v" => "0.4.0"}, ctx)
+  Intake.handle_order(
+    %{"init_data" => make_init_data.(666), "order_ref" => order_ref, "v" => "0.4.0"},
+    ctx
+  )
 
 # expired order: typed failure, zero broadcast (keeper nonce untouched)
 {:ok, keeper_fast} =
@@ -281,7 +304,10 @@ E2E.assert!(dest2_bal2 == 10_000_000, "replay caused no second spend")
     chain_id: chain_id,
     store: {MemoryStore, MemoryStore.start()},
     router: echo,
-    action: %{with_permit_name: "payWithPermit", arg_types: [{:bytes, 32}, {:uint, 256}, {:bytes, 32}]},
+    action: %{
+      with_permit_name: "payWithPermit",
+      arg_types: [{:bytes, 32}, {:uint, 256}, {:bytes, 32}]
+    },
     source_allowlist: ["market_phase"],
     order_ttl_s: 0,
     sweep_ms: 3_600_000
@@ -299,8 +325,7 @@ nonce_before2 = Rpc.nonce(rpc, Signer.address(signer))
 
 {422, %{"reason" => "expired"}} =
   Intake.handle_grant(
-    %{"init_data" => make_init_data.(user_id), "order_ref" => stale_ref,
-      "permit" => envelope},
+    %{"init_data" => make_init_data.(user_id), "order_ref" => stale_ref, "permit" => envelope},
     %{ctx | keeper: keeper_fast}
   )
 

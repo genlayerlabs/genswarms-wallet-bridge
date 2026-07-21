@@ -39,7 +39,10 @@ defmodule DelegatedSpend.Tx1559Test do
       )
 
     <<4, pub::binary>> = Secp256k1.recover(digest, r, s, :binary.decode_unsigned(y))
-    addr = "0x" <> (pub |> Keccak.hash_256() |> binary_part(12, 20) |> Base.encode16(case: :lower))
+
+    addr =
+      "0x" <> (pub |> Keccak.hash_256() |> binary_part(12, 20) |> Base.encode16(case: :lower))
+
     assert String.downcase(Address.from_private_key(@anvil0)) == addr
   end
 
@@ -66,6 +69,7 @@ defmodule DelegatedSpend.Tx1559Test do
 
   test "address helpers cover create, binary pass-through, and 0X equality" do
     sender = "0x000000000000000000000000000000000000dEaD"
+
     expected =
       [Address.to_bytes(sender), 7]
       |> ExRLP.encode()
@@ -75,6 +79,10 @@ defmodule DelegatedSpend.Tx1559Test do
 
     assert Address.create_address(sender, 7) == expected
     assert Address.to_bytes(<<1::160>>) == <<1::160>>
-    assert Address.eq?("0x000000000000000000000000000000000000dead", "0X000000000000000000000000000000000000DEAD")
+
+    assert Address.eq?(
+             "0x000000000000000000000000000000000000dead",
+             "0X000000000000000000000000000000000000DEAD"
+           )
   end
 end

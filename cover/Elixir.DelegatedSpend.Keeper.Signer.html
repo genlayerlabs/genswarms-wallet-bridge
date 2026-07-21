@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Keeper.Signer.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/signer.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/signer.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:43:12</p></footer>
 <table>
 <tbody>
 <tr>
@@ -315,7 +315,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L35"><a href="#L35">35</a></td>
-<td class="hits">134</td>
+<td class="hits">139</td>
 <td class="source"><code>    opts = Map.new(opts)</code></td>
 </tr>
 <tr>
@@ -325,12 +325,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L37"><a href="#L37">37</a></td>
-<td class="hits">134</td>
+<td class="hits">139</td>
 <td class="source"><code>    case Map.get(opts, :name) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L38"><a href="#L38">38</a></td>
-<td class="hits">133</td>
+<td class="hits">138</td>
 <td class="source"><code>      nil -&gt; GenServer.start_link(__MODULE__, opts)</code></td>
 </tr>
 <tr class="hit">
@@ -420,22 +420,22 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L56"><a href="#L56">56</a></td>
-<td class="hits">134</td>
+<td class="hits">139</td>
 <td class="source"><code>    rpc_mod = Map.get(opts, :rpc_mod, Rpc)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L57"><a href="#L57">57</a></td>
-<td class="hits">134</td>
+<td class="hits">139</td>
 <td class="source"><code>    rpc = Map.fetch!(opts, :rpc_url)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L58"><a href="#L58">58</a></td>
-<td class="hits">134</td>
+<td class="hits">139</td>
 <td class="source"><code>    pinned = Map.fetch!(opts, :chain_id)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L59"><a href="#L59">59</a></td>
-<td class="hits">134</td>
+<td class="hits">139</td>
 <td class="source"><code>    priv = Map.fetch!(opts, :priv)</code></td>
 </tr>
 <tr>
@@ -445,7 +445,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L61"><a href="#L61">61</a></td>
-<td class="hits">134</td>
+<td class="hits">139</td>
 <td class="source"><code>    case rpc_mod.chain_id(rpc) do</code></td>
 </tr>
 <tr>
@@ -455,7 +455,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L63"><a href="#L63">63</a></td>
-<td class="hits">133</td>
+<td class="hits">138</td>
 <td class="source"><code>        addr = Address.from_private_key(priv)</code></td>
 </tr>
 <tr>
@@ -465,7 +465,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L65"><a href="#L65">65</a></td>
-<td class="hits">133</td>
+<td class="hits">138</td>
 <td class="source"><code>        state = %{</code></td>
 </tr>
 <tr>
@@ -530,7 +530,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L78"><a href="#L78">78</a></td>
-<td class="hits">133</td>
+<td class="hits">138</td>
 <td class="source"><code>        Process.send_after(self(), :sweep, state.sweep_ms)</code></td>
 </tr>
 <tr>

@@ -28,10 +28,20 @@ defmodule DelegatedSpend.UserTxVectorTest do
       })
 
     token = DelegatedSpend.Intake.Token.mint("s", fixture["order_ref"], user_ref, 2_000_000_000)
-    ctx = %{keeper: keeper, token_secret: "s", bot_token: "unused", max_age_s: 60, user_ref_fn: & &1}
+
+    ctx = %{
+      keeper: keeper,
+      token_secret: "s",
+      bot_token: "unused",
+      max_age_s: 60,
+      user_ref_fn: & &1
+    }
 
     assert {200, body} =
-             DelegatedSpend.Intake.handle_order(%{"order_ref" => fixture["order_ref"], "token" => token}, ctx)
+             DelegatedSpend.Intake.handle_order(
+               %{"order_ref" => fixture["order_ref"], "token" => token},
+               ctx
+             )
 
     for key <- ["order_ref", "kind", "amount", "display", "tx"] do
       assert body[key] == fixture[key], "field #{key} diverged from the golden vector"

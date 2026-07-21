@@ -19,7 +19,10 @@ defmodule DelegatedSpend.AbiTest do
 
   test "constructor encoding is ABI args without a selector" do
     assert Abi.encode_constructor([:address, {:uint, 256}], [<<1::160>>, 7]) ==
-             ABI.TypeEncoder.encode([<<1::160>>, 7], %ABI.FunctionSelector{function: nil, types: [:address, {:uint, 256}]})
+             ABI.TypeEncoder.encode([<<1::160>>, 7], %ABI.FunctionSelector{
+               function: nil,
+               types: [:address, {:uint, 256}]
+             })
   end
 
   test "event topic0" do

@@ -34,7 +34,9 @@ defmodule DelegatedSpend.StoreTest do
 
     results =
       1..20
-      |> Enum.map(fn _ -> Task.async(fn -> MemoryStore.consume_order(store, "oid-1", "u-a") end) end)
+      |> Enum.map(fn _ ->
+        Task.async(fn -> MemoryStore.consume_order(store, "oid-1", "u-a") end)
+      end)
       |> Enum.map(&Task.await/1)
 
     assert Enum.count(results, &match?({:ok, _}, &1)) == 1
@@ -47,12 +49,15 @@ defmodule DelegatedSpend.StoreTest do
 
     results =
       1..20
-      |> Enum.map(fn _ -> Task.async(fn -> MemoryStore.begin_execution(store, "oid-1", "u-a", "ak-1") end) end)
+      |> Enum.map(fn _ ->
+        Task.async(fn -> MemoryStore.begin_execution(store, "oid-1", "u-a", "ak-1") end)
+      end)
       |> Enum.map(&Task.await/1)
 
     assert Enum.count(results, &match?({:ok, _}, &1)) == 1
     assert Enum.count(results, &(&1 == :already_consumed)) == 19
     assert :pending = MemoryStore.get_execution_status(store, "oid-1")
+
     assert [%{order_id: "oid-1", action_key: "ak-1", tx_hashes: []}] =
              MemoryStore.list_inflight(store)
   end

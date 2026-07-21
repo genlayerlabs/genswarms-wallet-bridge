@@ -5,7 +5,10 @@ defmodule DelegatedSpend.Evm.RpcTest do
 
   setup do
     old_path = System.get_env("PATH") || ""
-    bin = Path.join(System.tmp_dir!(), "delegated-spend-curl-#{System.unique_integer([:positive])}")
+
+    bin =
+      Path.join(System.tmp_dir!(), "delegated-spend-curl-#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(bin)
 
     File.write!(Path.join(bin, "curl"), """
@@ -33,11 +36,14 @@ defmodule DelegatedSpend.Evm.RpcTest do
     assert {:ok, "0x2a"} = Rpc.call("http://rpc", "eth_chainId", [])
 
     System.put_env("RPC_OUT", ~s({"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"no"}}))
+
     assert {:error, {:rpc_error, "eth_chainId", %{"code" => -1, "message" => "no"}}} =
              Rpc.call("http://rpc", "eth_chainId", [])
 
     System.put_env("RPC_OUT", "not json")
-    assert {:error, {:bad_rpc_response, "eth_chainId", "not json"}} = Rpc.call("http://rpc", "eth_chainId", [])
+
+    assert {:error, {:bad_rpc_response, "eth_chainId", "not json"}} =
+             Rpc.call("http://rpc", "eth_chainId", [])
 
     System.put_env("RPC_OUT", "curl sad")
     System.put_env("RPC_STATUS", "7")
@@ -72,12 +78,17 @@ defmodule DelegatedSpend.Evm.RpcTest do
     assert {:ok, "0x14a34"} = Rpc.eth_call_from("http://rpc", "0xfrom", "0xto", "0xdata")
 
     System.put_env("RPC_OUT", ~s({"jsonrpc":"2.0","id":1,"error":{"code":-32000}}))
+
     assert {:error, {:rpc_error, "eth_estimateGas", %{"code" => -32000}}} =
              Rpc.estimate_gas("http://rpc", %{to: "0xabc"})
   end
 
   test "block, receipt, and log helpers preserve structured RPC results" do
-    System.put_env("RPC_OUT", ~s({"jsonrpc":"2.0","id":1,"result":{"timestamp":"0x64","baseFeePerGas":"0x5"}}))
+    System.put_env(
+      "RPC_OUT",
+      ~s({"jsonrpc":"2.0","id":1,"result":{"timestamp":"0x64","baseFeePerGas":"0x5"}})
+    )
+
     assert Rpc.block_timestamp("http://rpc") == 100
     assert Rpc.base_fee("http://rpc") == 5
 

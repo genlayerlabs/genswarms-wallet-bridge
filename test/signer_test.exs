@@ -219,7 +219,10 @@ defmodule DelegatedSpend.SignerTest do
     assert [raw_create] = FakeRpc.sent(fake)
 
     FakeRpc.put(fake, :simulate, :ok)
-    assert {:ok, _} = Signer.submit(signer, "raw-address", %{to: <<0x11::160>>, data: <<4>>, value: 0})
+
+    assert {:ok, _} =
+             Signer.submit(signer, "raw-address", %{to: <<0x11::160>>, data: <<4>>, value: 0})
+
     assert [_raw_create, raw_address] = FakeRpc.sent(fake)
     assert raw_create != raw_address
   end
@@ -247,8 +250,12 @@ defmodule DelegatedSpend.SignerTest do
 
     {:ok, signer2} =
       Signer.start_link(
-        rpc_url: fake, chain_id: 84_532, priv: @anvil0, rpc_mod: FakeRpc,
-        sweep_ms: 3_600_000, bump_after_ms: 0
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000,
+        bump_after_ms: 0
       )
 
     {:ok, hash} = Signer.submit(signer2, "k1", @tx)

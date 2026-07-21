@@ -50,7 +50,12 @@ defmodule DelegatedSpend.Intake.TokenTest do
              )
 
     assert {:error, :bad_token} =
-             Token.verify(@secret, @ref, Enum.join([v, exp, ur, String.duplicate("0", 64)], "."), 0)
+             Token.verify(
+               @secret,
+               @ref,
+               Enum.join([v, exp, ur, String.duplicate("0", 64)], "."),
+               0
+             )
   end
 
   test "wrong secret and malformed tokens are :bad_token, never a crash" do

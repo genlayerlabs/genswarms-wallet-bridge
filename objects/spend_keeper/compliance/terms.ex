@@ -1,6 +1,7 @@
 defmodule DelegatedSpend.Compliance.Terms do
   @moduledoc "Pure EIP-712 hashing and verification for terms acceptance evidence."
 
+  alias DelegatedSpend.Compliance.Store
   alias DelegatedSpend.Evm.{Address, Secp256k1}
   alias DelegatedSpend.Keccak
 
@@ -15,6 +16,42 @@ defmodule DelegatedSpend.Compliance.Terms do
 
   @doc "Keccak-256 of the exact terms document bytes as canonical `0x` hex."
   def hash_terms(text) when is_binary(text), do: encode_hex(Keccak.hash_256(text))
+
+  @doc """
+  Parse the geofence blocklist from the terms document bytes.
+
+  The terms must contain exactly one line of the form
+  `Restricted countries: CU, IR, KP.` (case-insensitive marker, optional
+  trailing period). Deriving `ctx.compliance.geo_block` from the same bytes
+  that are hashed for acceptance makes terms↔geofence drift impossible: a
+  terms update changes the accepted hash and the blocklist in one step.
+  Raises on a missing, duplicated, empty, or malformed line, so a terms
+  rewrite that breaks the marker fails the deploy, not the geofence.
+  """
+  def restricted_countries(text) when is_binary(text) do
+    case Regex.scan(~r/^[ \t]*restricted countries:[ \t]*(.+?)[ \t]*\r?$/im, text) do
+      [[_, list]] ->
+        list
+        |> String.trim_trailing(".")
+        |> String.split(",")
+        |> Enum.map(fn code ->
+          Store.normalize_meta(%{country: String.trim(code)}).country ||
+            raise ArgumentError,
+                  "terms restricted-countries entry #{inspect(String.trim(code))} " <>
+                    "is not an ISO 3166-1 alpha-2 code"
+        end)
+
+      [] ->
+        raise ArgumentError,
+              "terms document has no `Restricted countries: XX, YY` line — " <>
+                "ctx.compliance.geo_block is derived from the served terms bytes"
+
+      _many ->
+        raise ArgumentError,
+              "terms document has multiple `Restricted countries:` lines — " <>
+                "the geofence blocklist would be ambiguous"
+    end
+  end
 
   @doc "Raw EIP-712 domain separator for the pinned chain ID."
   def domain_separator(chain_id) do

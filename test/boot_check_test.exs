@@ -33,6 +33,9 @@ defmodule DelegatedSpend.BootCheckTest do
     fake = FakeRpc.start(%{chain_id: 84_532, codes: %{@addr => "0xdeadbeef"}})
 
     assert {:error, {:codehash_mismatch, @addr, _}} =
-             BootCheck.verify(FakeRpc, fake, %{chain_id: 84_532, codehashes: %{@addr => @codehash}})
+             BootCheck.verify(FakeRpc, fake, %{
+               chain_id: 84_532,
+               codehashes: %{@addr => @codehash}
+             })
   end
 end

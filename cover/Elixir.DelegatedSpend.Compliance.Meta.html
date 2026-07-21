@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Compliance.Meta.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/compliance/meta.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/compliance/meta.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:43:12</p></footer>
 <table>
 <tbody>
 <tr>
@@ -300,7 +300,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L32"><a href="#L32">32</a></td>
-<td class="hits">20</td>
+<td class="hits">23</td>
 <td class="source"><code>    headers = Enum.map(headers, fn {name, value} -&gt; {String.downcase(name), value} end)</code></td>
 </tr>
 <tr>
@@ -310,7 +310,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L34"><a href="#L34">34</a></td>
-<td class="hits">20</td>
+<td class="hits">23</td>
 <td class="source"><code>    Store.normalize_meta(%{</code></td>
 </tr>
 <tr>
@@ -360,7 +360,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L44"><a href="#L44">44</a></td>
-<td class="hits">19</td>
+<td class="hits">22</td>
 <td class="source"><code>    chain = forwarded_chain(headers) ++ [remote_ip]</code></td>
 </tr>
 <tr>
@@ -385,7 +385,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L49"><a href="#L49">49</a></td>
-<td class="hits">19</td>
+<td class="hits">22</td>
 <td class="source"><code>    chain |&gt; Enum.at(-(trusted_hops + 1)) |&gt; parse_ip()</code></td>
 </tr>
 <tr>
@@ -415,12 +415,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L55"><a href="#L55">55</a></td>
-<td class="hits">19</td>
+<td class="hits">22</td>
 <td class="source"><code>    for value &lt;- header_values(headers, "x-forwarded-for"),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L56"><a href="#L56">56</a></td>
-<td class="hits">17</td>
+<td class="hits">20</td>
 <td class="source"><code>        entry &lt;- String.split(value, ","),</code></td>
 </tr>
 <tr>
@@ -490,12 +490,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L70"><a href="#L70">70</a></td>
-<td class="hits">9</td>
+<td class="hits">12</td>
 <td class="source"><code>    case entry |&gt; strip_port() |&gt; to_charlist() |&gt; :inet.parse_strict_address() do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L71"><a href="#L71">71</a></td>
-<td class="hits">8</td>
+<td class="hits">11</td>
 <td class="source"><code>      {:ok, addr} -&gt; addr |&gt; :inet.ntoa() |&gt; to_string()</code></td>
 </tr>
 <tr class="hit">
@@ -545,7 +545,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L81"><a href="#L81">81</a></td>
-<td class="hits">9</td>
+<td class="hits">12</td>
 <td class="source"><code>    case Regex.run(~r/^\[([^\]]+)\](?::\d+)?$/, entry) do</code></td>
 </tr>
 <tr>
@@ -570,7 +570,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L86"><a href="#L86">86</a></td>
-<td class="hits">8</td>
+<td class="hits">11</td>
 <td class="source"><code>        case String.split(entry, ":") do</code></td>
 </tr>
 <tr class="hit">
@@ -580,7 +580,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L88"><a href="#L88">88</a></td>
-<td class="hits">7</td>
+<td class="hits">10</td>
 <td class="source"><code>          _ -&gt; entry</code></td>
 </tr>
 <tr>
@@ -620,7 +620,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L96"><a href="#L96">96</a></td>
-<td class="hits">3</td>
+<td class="hits">6</td>
 <td class="source"><code>    do: headers |&gt; header_values(String.downcase(header_name)) |&gt; List.last()</code></td>
 </tr>
 <tr>
@@ -630,7 +630,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L98"><a href="#L98">98</a></td>
-<td class="hits">42</td>
+<td class="hits">51</td>
 <td class="source"><code>  defp header_values(headers, name), do: for({^name, value} &lt;- headers, do: value)</code></td>
 </tr>
 <tr>
@@ -640,7 +640,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L100"><a href="#L100">100</a></td>
-<td class="hits">19</td>
+<td class="hits">22</td>
 <td class="source"><code>  defp session_id(cookies, name) when is_map(cookies), do: Map.get(cookies, name)</code></td>
 </tr>
 <tr class="hit">

@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Evm.Tx1559.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/evm/tx1559.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/evm/tx1559.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:43:12</p></footer>
 <table>
 <tbody>
 <tr>
@@ -356,65 +356,55 @@ td.source {
 <tr>
 <td class="line" id="L43"><a href="#L43">43</a></td>
 <td class="hits"></td>
-<td class="source"><code>        ExRLP.encode(</code></td>
+<td class="source"><code>        ExRLP.encode(fields ++ [recid, :binary.decode_unsigned(r), :binary.decode_unsigned(s)])</code></td>
 </tr>
 <tr>
 <td class="line" id="L44"><a href="#L44">44</a></td>
 <td class="hits"></td>
-<td class="source"><code>          fields ++ [recid, :binary.decode_unsigned(r), :binary.decode_unsigned(s)]</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L45"><a href="#L45">45</a></td>
 <td class="hits"></td>
-<td class="source"><code>        )</code></td>
+<td class="source"><code>    {"0x" &lt;&gt; Base.encode16(signed, case: :lower),</code></td>
 </tr>
 <tr>
 <td class="line" id="L46"><a href="#L46">46</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>     "0x" &lt;&gt; Base.encode16(Keccak.hash_256(signed), case: :lower)}</code></td>
 </tr>
 <tr>
 <td class="line" id="L47"><a href="#L47">47</a></td>
 <td class="hits"></td>
-<td class="source"><code>    {"0x" &lt;&gt; Base.encode16(signed, case: :lower),</code></td>
+<td class="source"><code>  end</code></td>
 </tr>
 <tr>
 <td class="line" id="L48"><a href="#L48">48</a></td>
 <td class="hits"></td>
-<td class="source"><code>     "0x" &lt;&gt; Base.encode16(Keccak.hash_256(signed), case: :lower)}</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L49"><a href="#L49">49</a></td>
 <td class="hits"></td>
-<td class="source"><code>  end</code></td>
-</tr>
-<tr>
-<td class="line" id="L50"><a href="#L50">50</a></td>
-<td class="hits"></td>
-<td class="source"><code></code></td>
-</tr>
-<tr>
-<td class="line" id="L51"><a href="#L51">51</a></td>
-<td class="hits"></td>
 <td class="source"><code>  # Empty string for a contract creation; 20 raw bytes for a call.</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L52"><a href="#L52">52</a></td>
+<td class="line" id="L50"><a href="#L50">50</a></td>
 <td class="hits">2</td>
 <td class="source"><code>  defp to_field(:create), do: ""</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L53"><a href="#L53">53</a></td>
+<td class="line" id="L51"><a href="#L51">51</a></td>
 <td class="hits">2</td>
 <td class="source"><code>  defp to_field(&lt;&lt;_::binary-size(20)&gt;&gt; = bin), do: bin</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L54"><a href="#L54">54</a></td>
+<td class="line" id="L52"><a href="#L52">52</a></td>
 <td class="hits">57</td>
 <td class="source"><code>  defp to_field(addr) when is_binary(addr), do: Address.to_bytes(addr)</code></td>
 </tr>
 <tr>
-<td class="line" id="L55"><a href="#L55">55</a></td>
+<td class="line" id="L53"><a href="#L53">53</a></td>
 <td class="hits"></td>
 <td class="source"><code>end</code></td>
 </tr>

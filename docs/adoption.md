@@ -447,17 +447,18 @@ it. `trusted_hops` must equal the exact number of proxies you operate: too
 low records your own proxy as every user's IP (worthless evidence), too high
 lets clients spoof `x-forwarded-for` entries. `Meta.build/4` refuses to
 guess — a forwarding chain shorter than the hop count records `ip: nil`.
-The package intentionally has no browser-geolocation, blocklist, GeoIP
-database, or network-lookup mode.
+The package intentionally has no browser-geolocation, GeoIP-database, or
+network-lookup mode.
 
 > **Compliance warning:** once `ctx.compliance` is configured, calling a
 > two-arity handler supplies no metadata and therefore denies every request
-> (each such call logs a warning naming the mistake); an empty geo allowlist
-> also denies everyone. Use all five three-arity forms, and call
-> `DelegatedSpend.Compliance.check!(ctx)` at boot so a config that would
-> deny-all fails the deploy instead of serving 451/503 to everyone.
-> `record_acceptance` is fail-closed: a failure returns `503`, and acceptance
-> is not acknowledged.
+> (each such call logs a warning naming the mistake); a missing, empty, or
+> malformed geo blocklist also denies everyone, and so does missing country
+> evidence — the blocklist only widens access when it is well-formed. Use all
+> five three-arity forms, and call `DelegatedSpend.Compliance.check!(ctx)` at
+> boot so a config that would deny-all fails the deploy instead of serving
+> 451/503 to everyone. `record_acceptance` is fail-closed: a failure returns
+> `503`, and acceptance is not acknowledged.
 
 ### Session/cookie evidence
 
@@ -481,7 +482,10 @@ the configured URL:
 terms_bytes = File.read!(System.fetch_env!("SPEND_TERMS_PATH"))
 
 compliance = %{
-  geo_allow: System.fetch_env!("SPEND_GEOFENCE_COUNTRIES") |> String.split(",", trim: true),
+  # Derived from the SAME bytes that are hashed for acceptance: a terms
+  # update changes the accepted hash and the blocklist in one atomic step,
+  # so the geofence can never drift from the served terms.
+  geo_block: DelegatedSpend.Compliance.Terms.restricted_countries(terms_bytes),
   terms: %{
     hash: DelegatedSpend.Compliance.Terms.hash_terms(terms_bytes),
     url: System.fetch_env!("SPEND_TERMS_URL")
@@ -494,13 +498,26 @@ ctx = Map.put(ctx, :compliance, compliance)
 ```
 
 `check!/1` is the `BootCheck` idiom for this config: it validates the
-allowlist, the terms pin, and the store adapter's callbacks at boot, so a
-misconfiguration fails the deploy instead of denying every request.
+blocklist, the terms pin, and the store adapter's callbacks at boot, so a
+misconfiguration fails the deploy instead of denying every request. A stale
+`:geo_allow` key (the pre-0.6 allowlist) is rejected by name.
 
 A hand-copied terms hash is not configuration: hash the bytes read from
-`SPEND_TERMS_PATH`, and make the terms route return those same bytes. Countries
-are comma-separated ISO 3166-1 alpha-2 codes; use an allowlist, not a
-blocklist.
+`SPEND_TERMS_PATH`, and make the terms route return those same bytes. The
+blocklist is likewise not hand-copied: the terms document must contain exactly
+one line of the form `Restricted countries: CU, IR, KP.` (case-insensitive
+marker, ISO 3166-1 alpha-2 codes, optional trailing period), and
+`Terms.restricted_countries/1` parses it from the same bytes. The geofence and
+the terms are one legal statement updated in one step; a terms rewrite that
+breaks the marker line fails the deploy.
+
+Two consequences to plan for, deliberately coupled: changing the blocklist
+changes the terms bytes, so the accepted hash rotates and EVERY user must
+re-accept the terms (the restriction is a term — users re-consent to it), and
+there is no way to change the blocklist without deploying a terms update.
+Whoever owns the terms document must know the marker line is machine-read:
+rewording it is a config change, and boot will refuse it loudly rather than
+guess.
 
 Implement the four `DelegatedSpend.Compliance.Store` callbacks:
 `record_acceptance/2`, `get_acceptance/3`, `record_event/2`, and
@@ -513,9 +530,18 @@ per `{user_ref, v_hash}` without overwriting the original evidence, and must
 make `record_event/2` append-only.
 
 `record_event` is best-effort because it runs after an already-executed money
-operation. Persist the audit kinds `wallet_bound`, `grant_submitted`, and
-`tx_submitted`. This differs deliberately from request-critical acceptance
-persistence; legal must sign off on that durability asymmetry.
+operation. Persist the audit kinds `wallet_bound`, `grant_submitted`,
+`tx_submitted`, and `geo_denied`. This differs deliberately from
+request-critical acceptance persistence; legal must sign off on that
+durability asymmetry.
+
+`geo_denied` events are the evidence that the geofence enforces the terms:
+each 451 appends one with `user_ref: nil` (denials run before
+authentication, deliberately) and the request meta. Because this is an
+unauthenticated path, writes are capped per country per `ctx.rate` window;
+denials beyond the cap still return 451 but are not recorded. Without a
+configured store (or `ctx.rate`), denials are still served — just uncapped
+or unrecorded.
 
 ### Terms route and UI states
 
@@ -554,10 +580,13 @@ consuming app's responsibility.
 - The app serves the exact terms bytes hashed at boot; the production store
   passes `test/compliance_store_test.exs` semantics.
 - Legal approved nullable session evidence, audit-event durability, retention,
-  export/deletion, and GDPR policy.
+  export/deletion, and GDPR policy — explicitly including `geo_denied`
+  evidence, which records the IP and user agent of visitors who were refused
+  service and therefore have no user relationship with the app.
 - **Fail-closed launch warning:** exercise every route through its three-arity
-  handler with a non-empty country allowlist. Two-arity handlers and an empty
-  `SPEND_GEOFENCE_COUNTRIES` deny all users once compliance is configured.
+  handler with a well-formed country blocklist. Two-arity handlers and an
+  empty or malformed restricted-countries line in the terms deny all users
+  once compliance is configured.
 
 ## The testing bar
 

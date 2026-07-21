@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Keeper.Object.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/object.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/object.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:43:12</p></footer>
 <table>
 <tbody>
 <tr>
@@ -1271,255 +1271,260 @@ td.source {
 <tr>
 <td class="line" id="L226"><a href="#L226">226</a></td>
 <td class="hits"></td>
-<td class="source"><code>      {"expected_owner", :expected_owner, &amp;is_binary/1, "expected_owner must be a string address"},</code></td>
+<td class="source"><code>      {"expected_owner", :expected_owner, &amp;is_binary/1,</code></td>
 </tr>
 <tr>
 <td class="line" id="L227"><a href="#L227">227</a></td>
 <td class="hits"></td>
-<td class="source"><code>      {"kind", :kind, &amp;is_binary/1, "kind must be a string"},</code></td>
+<td class="source"><code>       "expected_owner must be a string address"},</code></td>
 </tr>
 <tr>
 <td class="line" id="L228"><a href="#L228">228</a></td>
 <td class="hits"></td>
-<td class="source"><code>      {"tx", :tx, &amp;is_map/1, "tx must be a map"},</code></td>
+<td class="source"><code>      {"kind", :kind, &amp;is_binary/1, "kind must be a string"},</code></td>
 </tr>
 <tr>
 <td class="line" id="L229"><a href="#L229">229</a></td>
 <td class="hits"></td>
+<td class="source"><code>      {"tx", :tx, &amp;is_map/1, "tx must be a map"},</code></td>
+</tr>
+<tr>
+<td class="line" id="L230"><a href="#L230">230</a></td>
+<td class="hits"></td>
 <td class="source"><code>      {"display", :display, &amp;is_map/1, "display must be a map"},</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L230"><a href="#L230">230</a></td>
+<td class="line" id="L231"><a href="#L231">231</a></td>
 <td class="hits">2</td>
 <td class="source"><code>      {"ttl_s", :ttl_s, fn v -&gt; is_integer(v) and v &gt; 0 end, "ttl_s must be a positive integer"}</code></td>
 </tr>
 <tr>
-<td class="line" id="L231"><a href="#L231">231</a></td>
+<td class="line" id="L232"><a href="#L232">232</a></td>
 <td class="hits"></td>
 <td class="source"><code>    ]</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L232"><a href="#L232">232</a></td>
+<td class="line" id="L233"><a href="#L233">233</a></td>
 <td class="hits">20</td>
 <td class="source"><code>    |&gt; Enum.reduce_while({:ok, req}, fn {json_key, atom_key, valid?, error}, {:ok, acc} -&gt;</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L233"><a href="#L233">233</a></td>
+<td class="line" id="L234"><a href="#L234">234</a></td>
 <td class="hits">90</td>
 <td class="source"><code>      case Map.get(order, json_key) do</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L234"><a href="#L234">234</a></td>
+<td class="line" id="L235"><a href="#L235">235</a></td>
 <td class="hits">79</td>
 <td class="source"><code>        nil -&gt;</code></td>
 </tr>
 <tr>
-<td class="line" id="L235"><a href="#L235">235</a></td>
+<td class="line" id="L236"><a href="#L236">236</a></td>
 <td class="hits"></td>
 <td class="source"><code>          {:cont, {:ok, acc}}</code></td>
 </tr>
 <tr>
-<td class="line" id="L236"><a href="#L236">236</a></td>
+<td class="line" id="L237"><a href="#L237">237</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
 <tr>
-<td class="line" id="L237"><a href="#L237">237</a></td>
+<td class="line" id="L238"><a href="#L238">238</a></td>
 <td class="hits"></td>
 <td class="source"><code>        value -&gt;</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L238"><a href="#L238">238</a></td>
+<td class="line" id="L239"><a href="#L239">239</a></td>
 <td class="hits">11</td>
 <td class="source"><code>          if valid?.(value),</code></td>
 </tr>
 <tr>
-<td class="line" id="L239"><a href="#L239">239</a></td>
+<td class="line" id="L240"><a href="#L240">240</a></td>
 <td class="hits"></td>
 <td class="source"><code>            do: {:cont, {:ok, Map.put(acc, atom_key, normalize_order_option(atom_key, value))}},</code></td>
 </tr>
 <tr>
-<td class="line" id="L240"><a href="#L240">240</a></td>
+<td class="line" id="L241"><a href="#L241">241</a></td>
 <td class="hits"></td>
 <td class="source"><code>            else: {:halt, {:error, error}}</code></td>
 </tr>
 <tr>
-<td class="line" id="L241"><a href="#L241">241</a></td>
+<td class="line" id="L242"><a href="#L242">242</a></td>
 <td class="hits"></td>
 <td class="source"><code>      end</code></td>
 </tr>
 <tr>
-<td class="line" id="L242"><a href="#L242">242</a></td>
+<td class="line" id="L243"><a href="#L243">243</a></td>
 <td class="hits"></td>
 <td class="source"><code>    end)</code></td>
 </tr>
 <tr>
-<td class="line" id="L243"><a href="#L243">243</a></td>
-<td class="hits"></td>
-<td class="source"><code>  end</code></td>
-</tr>
-<tr>
 <td class="line" id="L244"><a href="#L244">244</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  end</code></td>
 </tr>
 <tr>
 <td class="line" id="L245"><a href="#L245">245</a></td>
 <td class="hits"></td>
-<td class="source"><code>  defp normalize_order_option(:tx, tx) do</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L246"><a href="#L246">246</a></td>
 <td class="hits"></td>
-<td class="source"><code>    tx</code></td>
+<td class="source"><code>  defp normalize_order_option(:tx, tx) do</code></td>
 </tr>
 <tr>
 <td class="line" id="L247"><a href="#L247">247</a></td>
 <td class="hits"></td>
-<td class="source"><code>    |&gt; take_string("to", :to)</code></td>
+<td class="source"><code>    tx</code></td>
 </tr>
 <tr>
 <td class="line" id="L248"><a href="#L248">248</a></td>
 <td class="hits"></td>
+<td class="source"><code>    |&gt; take_string("to", :to)</code></td>
+</tr>
+<tr>
+<td class="line" id="L249"><a href="#L249">249</a></td>
+<td class="hits"></td>
 <td class="source"><code>    |&gt; take_string("data", :data)</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L249"><a href="#L249">249</a></td>
+<td class="line" id="L250"><a href="#L250">250</a></td>
 <td class="hits">2</td>
 <td class="source"><code>    |&gt; take_int("value", :value)</code></td>
 </tr>
 <tr>
-<td class="line" id="L250"><a href="#L250">250</a></td>
+<td class="line" id="L251"><a href="#L251">251</a></td>
 <td class="hits"></td>
 <td class="source"><code>  end</code></td>
 </tr>
 <tr>
-<td class="line" id="L251"><a href="#L251">251</a></td>
+<td class="line" id="L252"><a href="#L252">252</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L252"><a href="#L252">252</a></td>
+<td class="line" id="L253"><a href="#L253">253</a></td>
 <td class="hits">4</td>
 <td class="source"><code>  defp normalize_order_option(_key, value), do: value</code></td>
 </tr>
 <tr>
-<td class="line" id="L253"><a href="#L253">253</a></td>
+<td class="line" id="L254"><a href="#L254">254</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
 <tr>
-<td class="line" id="L254"><a href="#L254">254</a></td>
+<td class="line" id="L255"><a href="#L255">255</a></td>
 <td class="hits"></td>
 <td class="source"><code>  defp take_string(tx, key, atom_key) do</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L255"><a href="#L255">255</a></td>
+<td class="line" id="L256"><a href="#L256">256</a></td>
 <td class="hits">4</td>
 <td class="source"><code>    case Map.get(tx, key) do</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L256"><a href="#L256">256</a></td>
+<td class="line" id="L257"><a href="#L257">257</a></td>
 <td class="hits">3</td>
 <td class="source"><code>      value when is_binary(value) -&gt; Map.put(tx, atom_key, value)</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L257"><a href="#L257">257</a></td>
+<td class="line" id="L258"><a href="#L258">258</a></td>
 <td class="hits">1</td>
 <td class="source"><code>      _ -&gt; tx</code></td>
-</tr>
-<tr>
-<td class="line" id="L258"><a href="#L258">258</a></td>
-<td class="hits"></td>
-<td class="source"><code>    end</code></td>
 </tr>
 <tr>
 <td class="line" id="L259"><a href="#L259">259</a></td>
 <td class="hits"></td>
-<td class="source"><code>  end</code></td>
+<td class="source"><code>    end</code></td>
 </tr>
 <tr>
 <td class="line" id="L260"><a href="#L260">260</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  end</code></td>
 </tr>
 <tr>
 <td class="line" id="L261"><a href="#L261">261</a></td>
 <td class="hits"></td>
+<td class="source"><code></code></td>
+</tr>
+<tr>
+<td class="line" id="L262"><a href="#L262">262</a></td>
+<td class="hits"></td>
 <td class="source"><code>  defp take_int(tx, key, atom_key) do</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L262"><a href="#L262">262</a></td>
+<td class="line" id="L263"><a href="#L263">263</a></td>
 <td class="hits">2</td>
 <td class="source"><code>    case Map.get(tx, key) do</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L263"><a href="#L263">263</a></td>
+<td class="line" id="L264"><a href="#L264">264</a></td>
 <td class="hits">1</td>
 <td class="source"><code>      value when is_integer(value) and value &gt;= 0 -&gt; Map.put(tx, atom_key, value)</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L264"><a href="#L264">264</a></td>
+<td class="line" id="L265"><a href="#L265">265</a></td>
 <td class="hits">1</td>
 <td class="source"><code>      _ -&gt; tx</code></td>
 </tr>
 <tr>
-<td class="line" id="L265"><a href="#L265">265</a></td>
+<td class="line" id="L266"><a href="#L266">266</a></td>
 <td class="hits"></td>
 <td class="source"><code>    end</code></td>
 </tr>
 <tr>
-<td class="line" id="L266"><a href="#L266">266</a></td>
+<td class="line" id="L267"><a href="#L267">267</a></td>
 <td class="hits"></td>
 <td class="source"><code>  end</code></td>
 </tr>
 <tr>
-<td class="line" id="L267"><a href="#L267">267</a></td>
-<td class="hits"></td>
-<td class="source"><code></code></td>
-</tr>
-<tr>
 <td class="line" id="L268"><a href="#L268">268</a></td>
 <td class="hits"></td>
-<td class="source"><code>  # ── helpers ───────────────────────────────────────────────────────────────</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L269"><a href="#L269">269</a></td>
 <td class="hits"></td>
+<td class="source"><code>  # ── helpers ───────────────────────────────────────────────────────────────</code></td>
+</tr>
+<tr>
+<td class="line" id="L270"><a href="#L270">270</a></td>
+<td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L270"><a href="#L270">270</a></td>
+<td class="line" id="L271"><a href="#L271">271</a></td>
 <td class="hits">20</td>
 <td class="source"><code>  defp allow_set(list), do: MapSet.new(Enum.map(List.wrap(list), &amp;to_string/1))</code></td>
 </tr>
 <tr>
-<td class="line" id="L271"><a href="#L271">271</a></td>
+<td class="line" id="L272"><a href="#L272">272</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
 <tr>
-<td class="line" id="L272"><a href="#L272">272</a></td>
+<td class="line" id="L273"><a href="#L273">273</a></td>
 <td class="hits"></td>
 <td class="source"><code>  defp jsonable(map),</code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L273"><a href="#L273">273</a></td>
+<td class="line" id="L274"><a href="#L274">274</a></td>
 <td class="hits">8</td>
 <td class="source"><code>    do: Map.new(map, fn {k, v} -&gt; {to_string(k), v} end)</code></td>
 </tr>
 <tr>
-<td class="line" id="L274"><a href="#L274">274</a></td>
+<td class="line" id="L275"><a href="#L275">275</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
 <tr class="hit">
-<td class="line" id="L275"><a href="#L275">275</a></td>
+<td class="line" id="L276"><a href="#L276">276</a></td>
 <td class="hits">23</td>
 <td class="source"><code>  defp err(code, detail), do: %{"ok" =&gt; false, "error" =&gt; code, "detail" =&gt; detail}</code></td>
 </tr>
 <tr>
-<td class="line" id="L276"><a href="#L276">276</a></td>
+<td class="line" id="L277"><a href="#L277">277</a></td>
 <td class="hits"></td>
 <td class="source"><code>end</code></td>
 </tr>

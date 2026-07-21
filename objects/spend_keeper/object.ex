@@ -223,7 +223,8 @@ defmodule DelegatedSpend.Keeper.Object do
 
   defp pass_order_options(order, req) do
     [
-      {"expected_owner", :expected_owner, &is_binary/1, "expected_owner must be a string address"},
+      {"expected_owner", :expected_owner, &is_binary/1,
+       "expected_owner must be a string address"},
       {"kind", :kind, &is_binary/1, "kind must be a string"},
       {"tx", :tx, &is_map/1, "tx must be a map"},
       {"display", :display, &is_map/1, "display must be a map"},

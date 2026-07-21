@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Keeper.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/keeper.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/keeper.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:43:12</p></footer>
 <table>
 <tbody>
 <tr>
@@ -360,12 +360,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L44"><a href="#L44">44</a></td>
-<td class="hits">121</td>
+<td class="hits">126</td>
 <td class="source"><code>    opts = Map.new(opts)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L45"><a href="#L45">45</a></td>
-<td class="hits">121</td>
+<td class="hits">126</td>
 <td class="source"><code>    Enum.each(@enforce_opts, &amp;Map.fetch!(opts, &amp;1))</code></td>
 </tr>
 <tr>
@@ -375,12 +375,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L47"><a href="#L47">47</a></td>
-<td class="hits">120</td>
+<td class="hits">125</td>
 <td class="source"><code>    case Map.get(opts, :name) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L48"><a href="#L48">48</a></td>
-<td class="hits">118</td>
+<td class="hits">123</td>
 <td class="source"><code>      nil -&gt; GenServer.start_link(__MODULE__, opts)</code></td>
 </tr>
 <tr class="hit">
@@ -410,7 +410,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L54"><a href="#L54">54</a></td>
-<td class="hits">136</td>
+<td class="hits">139</td>
 <td class="source"><code>    do: GenServer.call(keeper, {:register_order, source, order_req})</code></td>
 </tr>
 <tr>
@@ -425,7 +425,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L57"><a href="#L57">57</a></td>
-<td class="hits">46</td>
+<td class="hits">48</td>
 <td class="source"><code>    do: GenServer.call(keeper, {:fetch_order, order_ref, user_ref})</code></td>
 </tr>
 <tr>
@@ -555,7 +555,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L83"><a href="#L83">83</a></td>
-<td class="hits">119</td>
+<td class="hits">124</td>
 <td class="source"><code>    state = %{</code></td>
 </tr>
 <tr>
@@ -580,12 +580,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L88"><a href="#L88">88</a></td>
-<td class="hits">119</td>
+<td class="hits">124</td>
 <td class="source"><code>      chain_id: opts.chain_id,</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L89"><a href="#L89">89</a></td>
-<td class="hits">119</td>
+<td class="hits">124</td>
 <td class="source"><code>      store: opts.store,</code></td>
 </tr>
 <tr>
@@ -600,12 +600,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L92"><a href="#L92">92</a></td>
-<td class="hits">119</td>
+<td class="hits">124</td>
 <td class="source"><code>      allowlist: MapSet.new(opts.source_allowlist),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L93"><a href="#L93">93</a></td>
-<td class="hits">119</td>
+<td class="hits">124</td>
 <td class="source"><code>      order_ttl_s: opts.order_ttl_s,</code></td>
 </tr>
 <tr>
@@ -720,7 +720,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L116"><a href="#L116">116</a></td>
-<td class="hits">119</td>
+<td class="hits">124</td>
 <td class="source"><code>    Process.send_after(self(), :sweep, state.sweep_ms)</code></td>
 </tr>
 <tr>
@@ -745,7 +745,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L121"><a href="#L121">121</a></td>
-<td class="hits">119</td>
+<td class="hits">124</td>
 <td class="source"><code>    if Map.get(opts, :reconcile_on_init, false), do: send(self(), :reconcile_boot)</code></td>
 </tr>
 <tr>
@@ -780,27 +780,27 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L128"><a href="#L128">128</a></td>
-<td class="hits">136</td>
+<td class="hits">139</td>
 <td class="source"><code>    with true &lt;- MapSet.member?(state.allowlist, source) || {:error, {:unknown_source, source}},</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L129"><a href="#L129">129</a></td>
-<td class="hits">133</td>
+<td class="hits">136</td>
 <td class="source"><code>         %{user_ref: user_ref, amount: amount, action_args: args} = req,</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L130"><a href="#L130">130</a></td>
-<td class="hits">133</td>
+<td class="hits">136</td>
 <td class="source"><code>         {:ok, kind} &lt;- order_kind(req),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L131"><a href="#L131">131</a></td>
-<td class="hits">127</td>
+<td class="hits">130</td>
 <td class="source"><code>         {:ok, order_ref} &lt;- order_ref(state, req, user_ref) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L132"><a href="#L132">132</a></td>
-<td class="hits">117</td>
+<td class="hits">120</td>
 <td class="source"><code>      order = %{</code></td>
 </tr>
 <tr>
@@ -885,7 +885,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L149"><a href="#L149">149</a></td>
-<td class="hits">117</td>
+<td class="hits">120</td>
 <td class="source"><code>      :ok = store(state).put_order(store_ref(state), order)</code></td>
 </tr>
 <tr>
@@ -895,7 +895,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L151"><a href="#L151">151</a></td>
-<td class="hits">117</td>
+<td class="hits">120</td>
 <td class="source"><code>      {:reply, {:ok, Map.take(order, [:order_id, :order_ref, :expires_at, :amount])}, state}</code></td>
 </tr>
 <tr>
@@ -930,7 +930,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L158"><a href="#L158">158</a></td>
-<td class="hits">46</td>
+<td class="hits">48</td>
 <td class="source"><code>    case store(state).get_order_by_ref(store_ref(state), order_ref, user_ref) do</code></td>
 </tr>
 <tr>
@@ -955,7 +955,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L163"><a href="#L163">163</a></td>
-<td class="hits">40</td>
+<td class="hits">42</td>
 <td class="source"><code>        {:reply, {:ok, order_view(order, state)}, state}</code></td>
 </tr>
 <tr>
@@ -2095,7 +2095,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L391"><a href="#L391">391</a></td>
-<td class="hits">133</td>
+<td class="hits">136</td>
 <td class="source"><code>    case Map.get(req, :kind, "permit") do</code></td>
 </tr>
 <tr class="hit">
@@ -2115,7 +2115,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L395"><a href="#L395">395</a></td>
-<td class="hits">23</td>
+<td class="hits">26</td>
 <td class="source"><code>      "bind" -&gt;</code></td>
 </tr>
 <tr>
@@ -2215,7 +2215,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L415"><a href="#L415">415</a></td>
-<td class="hits">117</td>
+<td class="hits">120</td>
 <td class="source"><code>    case Map.get(req, :ttl_s) do</code></td>
 </tr>
 <tr class="hit">
@@ -2225,7 +2225,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L417"><a href="#L417">417</a></td>
-<td class="hits">115</td>
+<td class="hits">118</td>
 <td class="source"><code>      _ -&gt; state.order_ttl_s</code></td>
 </tr>
 <tr>
@@ -2250,7 +2250,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L422"><a href="#L422">422</a></td>
-<td class="hits">40</td>
+<td class="hits">42</td>
 <td class="source"><code>    base =</code></td>
 </tr>
 <tr>
@@ -2310,7 +2310,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L434"><a href="#L434">434</a></td>
-<td class="hits">40</td>
+<td class="hits">42</td>
 <td class="source"><code>        chain_id: state.chain_id</code></td>
 </tr>
 <tr>
@@ -2345,7 +2345,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L441"><a href="#L441">441</a></td>
-<td class="hits">40</td>
+<td class="hits">42</td>
 <td class="source"><code>    base =</code></td>
 </tr>
 <tr>
@@ -2355,7 +2355,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L443"><a href="#L443">443</a></td>
-<td class="hits">37</td>
+<td class="hits">39</td>
 <td class="source"><code>        nil -&gt; base</code></td>
 </tr>
 <tr class="hit">
@@ -2375,7 +2375,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L447"><a href="#L447">447</a></td>
-<td class="hits">40</td>
+<td class="hits">42</td>
 <td class="source"><code>    if base.kind == "user_tx", do: Map.put(base, :tx, order.tx), else: base</code></td>
 </tr>
 <tr>
@@ -2680,12 +2680,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L508"><a href="#L508">508</a></td>
-<td class="hits">127</td>
+<td class="hits">130</td>
 <td class="source"><code>    case Map.get(req, :order_ref) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L509"><a href="#L509">509</a></td>
-<td class="hits">107</td>
+<td class="hits">110</td>
 <td class="source"><code>      nil -&gt;</code></td>
 </tr>
 <tr>
@@ -2785,22 +2785,22 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L529"><a href="#L529">529</a></td>
-<td class="hits">499</td>
+<td class="hits">504</td>
 <td class="source"><code>  defp store(%{store: {mod, _ref}}), do: mod</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L530"><a href="#L530">530</a></td>
-<td class="hits">499</td>
+<td class="hits">504</td>
 <td class="source"><code>  defp store_ref(%{store: {_mod, ref}}), do: ref</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L531"><a href="#L531">531</a></td>
-<td class="hits">224</td>
+<td class="hits">230</td>
 <td class="source"><code>  defp hex(bin), do: Base.encode16(bin, case: :lower)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L532"><a href="#L532">532</a></td>
-<td class="hits">192</td>
+<td class="hits">195</td>
 <td class="source"><code>  defp now_s, do: System.os_time(:second)</code></td>
 </tr>
 <tr>

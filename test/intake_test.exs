@@ -127,16 +127,16 @@ defmodule DelegatedSpend.IntakeTest do
   defp with_compliance(ctx) do
     store = ComplianceStore.start()
 
-    {Map.put(ctx, :compliance, %{geo_allow: ["US"], store: {ComplianceStore, store}}), store}
+    {Map.put(ctx, :compliance, %{geo_block: ["CU"], store: {ComplianceStore, store}}), store}
   end
 
   describe "compliance geofencing" do
     test "blocks every handler before version pinning or authentication" do
-      ctx = %{compliance: %{geo_allow: ["US"]}}
+      ctx = %{compliance: %{geo_block: ["CU"]}}
 
       for handler <- [:handle_order, :handle_grant, :handle_wallet, :handle_submitted] do
         assert {451, %{"error" => "geo_blocked"}} =
-                 apply(Intake, handler, [%{"country" => "US"}, %{country: "CA"}, ctx])
+                 apply(Intake, handler, [%{"country" => "US"}, %{country: "CU"}, ctx])
       end
     end
 
@@ -169,7 +169,7 @@ defmodule DelegatedSpend.IntakeTest do
         limiter = Rate.start()
 
         ctx = %{
-          compliance: %{geo_allow: ["US"]},
+          compliance: %{geo_block: ["CU"]},
           token_secret: "tsecret",
           pinned: %{chain_id: 84_532, token: @token, router: @router, version: "0.2.0"},
           rate: {limiter, 1},
@@ -177,14 +177,14 @@ defmodule DelegatedSpend.IntakeTest do
         }
 
         assert {451, %{"error" => "geo_blocked"}} =
-                 apply(Intake, handler, [params, %{country: "CA"}, ctx])
+                 apply(Intake, handler, [params, %{country: "CU"}, ctx])
 
         assert Rate.allow?(limiter, user_ref, 1)
       end
     end
 
     test "configured two-arity handlers deny because their metadata is empty" do
-      ctx = %{compliance: %{geo_allow: ["US"]}}
+      ctx = %{compliance: %{geo_block: ["CU"]}}
 
       for handler <- [:handle_order, :handle_grant, :handle_wallet, :handle_submitted] do
         assert {451, %{"error" => "geo_blocked"}} = apply(Intake, handler, [%{}, ctx])
@@ -194,21 +194,32 @@ defmodule DelegatedSpend.IntakeTest do
     test "configured compliance fails closed on missing or malformed policy metadata" do
       for {compliance, meta} <- [
             {%{}, %{country: "US"}},
-            {%{geo_allow: "US"}, %{country: "US"}},
-            {%{geo_allow: ["US"]}, %{}},
-            {%{geo_allow: ["US"]}, %{country: "USA"}}
+            {%{geo_block: "US"}, %{country: "US"}},
+            {%{geo_block: []}, %{country: "US"}},
+            {%{geo_block: ["CU", "XYZ"]}, %{country: "US"}},
+            {%{geo_block: ["CU"]}, %{}},
+            {%{geo_block: ["CU"]}, %{country: "USA"}}
           ] do
         assert {451, %{"error" => "geo_blocked"}} =
                  Intake.handle_order(%{}, meta, %{compliance: compliance})
       end
 
-      ctx = %{compliance: %{geo_allow: ["US"]}, bot_token: @bot_token, max_age_s: 900}
+      ctx = %{compliance: %{geo_block: ["CU"]}, bot_token: @bot_token, max_age_s: 900}
 
       assert {401, %{"error" => "unauthorized"}} =
                Intake.handle_order(%{"country" => "CA"}, %{country: "US"}, ctx)
 
       assert {451, %{"error" => "geo_blocked"}} =
                Intake.handle_order(%{"country" => "US"}, %{}, ctx)
+    end
+
+    test "denial recording never changes the 451 when the event store fails" do
+      for failure <- [:raise, :exit, :throw] do
+        ctx = %{compliance: %{geo_block: ["CU"], store: {FailingEventStore, failure}}}
+
+        assert {451, %{"error" => "geo_blocked"}} =
+                 Intake.handle_order(%{}, %{country: "CU"}, ctx)
+      end
     end
 
     test "metadata has no effect when compliance is absent" do
@@ -227,7 +238,10 @@ defmodule DelegatedSpend.IntakeTest do
 
     for bad <- [nil, "", "garbage", init_data(@user_id, "999:WRONG")] do
       assert {401, %{"error" => "unauthorized"}} =
-               Intake.handle_order(order_params(ctx, %{"init_data" => bad, "order_ref" => ref}), ctx)
+               Intake.handle_order(
+                 order_params(ctx, %{"init_data" => bad, "order_ref" => ref}),
+                 ctx
+               )
 
       assert {401, _} =
                Intake.handle_grant(
@@ -246,7 +260,10 @@ defmodule DelegatedSpend.IntakeTest do
     ref = register(keeper, @user_id)
 
     assert {200, body} =
-             Intake.handle_order(order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}), ctx)
+             Intake.handle_order(
+               order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}),
+               ctx
+             )
 
     assert body["amount"] == 25_000_000
     assert body["order_ref"] == ref
@@ -255,7 +272,12 @@ defmodule DelegatedSpend.IntakeTest do
     assert body["chain_id"] == 84_532
 
     other = init_data(666_000_000)
-    assert {404, _} = Intake.handle_order(order_params(ctx, %{"init_data" => other, "order_ref" => ref}), ctx)
+
+    assert {404, _} =
+             Intake.handle_order(
+               order_params(ctx, %{"init_data" => other, "order_ref" => ref}),
+               ctx
+             )
   end
 
   test "order view exposes expected_owner ONLY when the order is owner-bound" do
@@ -265,7 +287,10 @@ defmodule DelegatedSpend.IntakeTest do
     ref = register(keeper, @user_id)
 
     assert {200, body} =
-             Intake.handle_order(order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}), ctx)
+             Intake.handle_order(
+               order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}),
+               ctx
+             )
 
     refute Map.has_key?(body, "expected_owner")
 
@@ -282,7 +307,10 @@ defmodule DelegatedSpend.IntakeTest do
       })
 
     assert {200, body} =
-             Intake.handle_order(order_params(ctx, %{"init_data" => init_data(), "order_ref" => bref}), ctx)
+             Intake.handle_order(
+               order_params(ctx, %{"init_data" => init_data(), "order_ref" => bref}),
+               ctx
+             )
 
     assert body["expected_owner"] == bound
   end
@@ -345,7 +373,11 @@ defmodule DelegatedSpend.IntakeTest do
 
     assert {200, %{"status" => "submitted", "tx" => "0x" <> _}} =
              Intake.handle_grant(
-               %{"init_data" => init_data(), "order_ref" => ref, "permit" => permit_env(25_000_000)},
+               %{
+                 "init_data" => init_data(),
+                 "order_ref" => ref,
+                 "permit" => permit_env(25_000_000)
+               },
                ctx
              )
   end
@@ -377,7 +409,11 @@ defmodule DelegatedSpend.IntakeTest do
 
     assert {200, %{"status" => "pending"}} =
              Intake.handle_grant(
-               %{"init_data" => init_data(), "order_ref" => ref, "permit" => permit_env(25_000_000)},
+               %{
+                 "init_data" => init_data(),
+                 "order_ref" => ref,
+                 "permit" => permit_env(25_000_000)
+               },
                ctx
              )
 
@@ -398,7 +434,11 @@ defmodule DelegatedSpend.IntakeTest do
 
     assert {404, %{"error" => "not found"}} =
              Intake.handle_grant(
-               %{"init_data" => init_data(), "order_ref" => ref, "permit" => permit_env(25_000_000)},
+               %{
+                 "init_data" => init_data(),
+                 "order_ref" => ref,
+                 "permit" => permit_env(25_000_000)
+               },
                ctx
              )
   end
@@ -442,11 +482,17 @@ defmodule DelegatedSpend.IntakeTest do
 
     for _ <- 1..3 do
       assert {401, _} =
-               Intake.handle_order(order_params(ctx, %{"init_data" => "garbage", "order_ref" => ref}), ctx)
+               Intake.handle_order(
+                 order_params(ctx, %{"init_data" => "garbage", "order_ref" => ref}),
+                 ctx
+               )
     end
 
     assert {200, _} =
-             Intake.handle_order(order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}), ctx)
+             Intake.handle_order(
+               order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}),
+               ctx
+             )
   end
 
   describe "token auth + version pin" do
@@ -457,7 +503,10 @@ defmodule DelegatedSpend.IntakeTest do
       ctx = Map.put(ctx, :token_secret, "tsecret")
 
       assert {200, %{"order_ref" => ^ref}} =
-               Intake.handle_order(%{"order_ref" => ref, "token" => token, "v" => ctx.pinned.version}, ctx)
+               Intake.handle_order(
+                 %{"order_ref" => ref, "token" => token, "v" => ctx.pinned.version},
+                 ctx
+               )
     end
 
     test "a token for ref A cannot fetch ref B; expired token is 401" do
@@ -468,12 +517,18 @@ defmodule DelegatedSpend.IntakeTest do
       token_a = DelegatedSpend.Intake.Token.mint("tsecret", ref_a, "ref-#{@user_id}", future())
 
       assert {401, _} =
-               Intake.handle_order(%{"order_ref" => ref_b, "token" => token_a, "v" => ctx.pinned.version}, ctx)
+               Intake.handle_order(
+                 %{"order_ref" => ref_b, "token" => token_a, "v" => ctx.pinned.version},
+                 ctx
+               )
 
       stale = DelegatedSpend.Intake.Token.mint("tsecret", ref_a, "ref-#{@user_id}", 1)
 
       assert {401, _} =
-               Intake.handle_order(%{"order_ref" => ref_a, "token" => stale, "v" => ctx.pinned.version}, ctx)
+               Intake.handle_order(
+                 %{"order_ref" => ref_a, "token" => stale, "v" => ctx.pinned.version},
+                 ctx
+               )
     end
 
     test "token param without ctx.token_secret falls through to initData auth and 401s" do
@@ -482,7 +537,10 @@ defmodule DelegatedSpend.IntakeTest do
       token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
 
       assert {401, _} =
-               Intake.handle_order(%{"order_ref" => ref, "token" => token, "v" => ctx.pinned.version}, ctx)
+               Intake.handle_order(
+                 %{"order_ref" => ref, "token" => token, "v" => ctx.pinned.version},
+                 ctx
+               )
     end
 
     test "missing or wrong v is a 409 stale-build rejection before auth work" do
@@ -505,7 +563,10 @@ defmodule DelegatedSpend.IntakeTest do
       token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
 
       assert {200, %{"status" => "submitted"}} =
-               Intake.handle_grant(%{"token" => token, "order_ref" => ref, "permit" => permit_env(25_000_000)}, ctx)
+               Intake.handle_grant(
+                 %{"token" => token, "order_ref" => ref, "permit" => permit_env(25_000_000)},
+                 ctx
+               )
     end
   end
 
@@ -721,12 +782,12 @@ defmodule DelegatedSpend.IntakeTest do
 
       compliance_configs = [
         :absent,
-        %{geo_allow: ["US"]},
-        %{geo_allow: ["US"], store: :invalid},
-        %{geo_allow: ["US"], store: {DelegatedSpend.MissingComplianceStore, :missing}},
-        %{geo_allow: ["US"], store: {FailingEventStore, :raise}},
-        %{geo_allow: ["US"], store: {FailingEventStore, :exit}},
-        %{geo_allow: ["US"], store: {FailingEventStore, :throw}}
+        %{geo_block: ["CU"]},
+        %{geo_block: ["CU"], store: :invalid},
+        %{geo_block: ["CU"], store: {DelegatedSpend.MissingComplianceStore, :missing}},
+        %{geo_block: ["CU"], store: {FailingEventStore, :raise}},
+        %{geo_block: ["CU"], store: {FailingEventStore, :exit}},
+        %{geo_block: ["CU"], store: {FailingEventStore, :throw}}
       ]
 
       for compliance <- compliance_configs do
@@ -753,7 +814,9 @@ defmodule DelegatedSpend.IntakeTest do
           send(me, {:bound, user_ref, addr, bind_ref})
           :ok
         end)
-        |> Map.put(:wallet_view_fn, fn _user_ref -> "0xAbCd000000000000000000000000000000000001" end)
+        |> Map.put(:wallet_view_fn, fn _user_ref ->
+          "0xAbCd000000000000000000000000000000000001"
+        end)
         |> Map.put(:submitted_fn, fn order_id, tx ->
           send(me, {:submitted, order_id, tx})
           :ok
@@ -762,7 +825,9 @@ defmodule DelegatedSpend.IntakeTest do
       {:ok, Map.put(c, :ctx, ctx)}
     end
 
-    test "bind fetch returns kind+current_wallet; POST /wallet binds via wallet_fn single-use", %{ctx: ctx} do
+    test "bind fetch returns kind+current_wallet; POST /wallet binds via wallet_fn single-use", %{
+      ctx: ctx
+    } do
       {:ok, %{order_ref: bind_ref}} =
         Keeper.register_order(ctx.keeper, "market_phase", %{
           user_ref: "ref-#{@user_id}",
@@ -774,7 +839,9 @@ defmodule DelegatedSpend.IntakeTest do
       token = DelegatedSpend.Intake.Token.mint("tsecret", bind_ref, "ref-#{@user_id}", future())
       v = ctx.pinned.version
 
-      assert {200, body} = Intake.handle_order(%{"order_ref" => bind_ref, "token" => token, "v" => v}, ctx)
+      assert {200, body} =
+               Intake.handle_order(%{"order_ref" => bind_ref, "token" => token, "v" => v}, ctx)
+
       assert body["kind"] == "bind"
       assert body["current_wallet"] == "0xAbCd000000000000000000000000000000000001"
       # bind views carry the runtime chain id too — bind pages consume config
@@ -783,14 +850,20 @@ defmodule DelegatedSpend.IntakeTest do
       addr = "0x8ba1f109551bd432803012645ac136ddd64dba72"
 
       assert {200, %{"status" => "bound", "address" => bound}} =
-               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v}, ctx)
+               Intake.handle_wallet(
+                 %{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v},
+                 ctx
+               )
 
       assert String.downcase(bound) == addr
       user_ref = "ref-#{@user_id}"
       assert_received {:bound, ^user_ref, ^bound, ^bind_ref}
 
       assert {410, _} =
-               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v}, ctx)
+               Intake.handle_wallet(
+                 %{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v},
+                 ctx
+               )
     end
 
     test "bad address is 422; wrong-kind ref is 422; missing wallet_fn is 503", %{ctx: ctx} do
@@ -807,10 +880,16 @@ defmodule DelegatedSpend.IntakeTest do
       token = DelegatedSpend.Intake.Token.mint("tsecret", bind_ref, "ref-#{@user_id}", future())
 
       assert {422, %{"field" => "address"}} =
-               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => "nonsense", "v" => v}, ctx)
+               Intake.handle_wallet(
+                 %{"bind_ref" => bind_ref, "token" => token, "address" => "nonsense", "v" => v},
+                 ctx
+               )
 
       assert {422, %{"field" => "address"}} =
-               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => 42, "v" => v}, ctx)
+               Intake.handle_wallet(
+                 %{"bind_ref" => bind_ref, "token" => token, "address" => 42, "v" => v},
+                 ctx
+               )
 
       assert {422, %{"field" => "address"}} =
                Intake.handle_wallet(
@@ -824,7 +903,9 @@ defmodule DelegatedSpend.IntakeTest do
                )
 
       permit_ref = register(ctx.keeper, @user_id)
-      ptoken = DelegatedSpend.Intake.Token.mint("tsecret", permit_ref, "ref-#{@user_id}", future())
+
+      ptoken =
+        DelegatedSpend.Intake.Token.mint("tsecret", permit_ref, "ref-#{@user_id}", future())
 
       assert {422, %{"field" => "kind"}} =
                Intake.handle_wallet(
@@ -875,9 +956,13 @@ defmodule DelegatedSpend.IntakeTest do
       ctx_no_view = Map.delete(ctx, :wallet_view_fn)
 
       assert {200, %{"current_wallet" => nil}} =
-               Intake.handle_order(%{"order_ref" => bind_ref, "token" => token, "v" => v}, ctx_no_view)
+               Intake.handle_order(
+                 %{"order_ref" => bind_ref, "token" => token, "v" => v},
+                 ctx_no_view
+               )
 
-      reject_ctx = Map.put(ctx, :wallet_fn, fn _user_ref, _address, _bind_ref -> {:error, :nope} end)
+      reject_ctx =
+        Map.put(ctx, :wallet_fn, fn _user_ref, _address, _bind_ref -> {:error, :nope} end)
 
       assert {422, %{"error" => "bind rejected"}} =
                Intake.handle_wallet(
@@ -906,7 +991,9 @@ defmodule DelegatedSpend.IntakeTest do
 
       token = DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())
 
-      assert {200, body} = Intake.handle_order(%{"order_ref" => ref, "token" => token, "v" => v}, ctx)
+      assert {200, body} =
+               Intake.handle_order(%{"order_ref" => ref, "token" => token, "v" => v}, ctx)
+
       assert body["kind"] == "user_tx"
       assert body["tx"]["data"] == "0xdeadbeef"
       assert body["display"]["summary_lines"] == ["Sell YES"]
@@ -914,17 +1001,26 @@ defmodule DelegatedSpend.IntakeTest do
       tx_hash = "0x" <> String.duplicate("ef", 32)
 
       assert {200, %{"status" => "noted"}} =
-               Intake.handle_submitted(%{"order_ref" => ref, "token" => token, "tx_hash" => tx_hash, "v" => v}, ctx)
+               Intake.handle_submitted(
+                 %{"order_ref" => ref, "token" => token, "tx_hash" => tx_hash, "v" => v},
+                 ctx
+               )
 
       assert_received {:submitted, _order_id, ^tx_hash}
 
       assert {422, %{"field" => "tx_hash"}} =
-               Intake.handle_submitted(%{"order_ref" => ref, "token" => token, "tx_hash" => "zzz", "v" => v}, ctx)
+               Intake.handle_submitted(
+                 %{"order_ref" => ref, "token" => token, "tx_hash" => "zzz", "v" => v},
+                 ctx
+               )
 
       bad_hex = "0x" <> String.duplicate("zz", 32)
 
       assert {422, %{"field" => "tx_hash"}} =
-               Intake.handle_submitted(%{"order_ref" => ref, "token" => token, "tx_hash" => bad_hex, "v" => v}, ctx)
+               Intake.handle_submitted(
+                 %{"order_ref" => ref, "token" => token, "tx_hash" => bad_hex, "v" => v},
+                 ctx
+               )
     end
 
     test "submitted-report without callback is noted and expired or missing orders are typed",
@@ -954,7 +1050,12 @@ defmodule DelegatedSpend.IntakeTest do
                  %{
                    "order_ref" => String.duplicate("cd", 32),
                    "token" =>
-                     DelegatedSpend.Intake.Token.mint("tsecret", String.duplicate("cd", 32), "ref-#{@user_id}", future()),
+                     DelegatedSpend.Intake.Token.mint(
+                       "tsecret",
+                       String.duplicate("cd", 32),
+                       "ref-#{@user_id}",
+                       future()
+                     ),
                    "tx_hash" => tx_hash,
                    "v" => v
                  },
@@ -978,7 +1079,8 @@ defmodule DelegatedSpend.IntakeTest do
           expires_at: System.os_time(:second) - 5
         })
 
-      etoken = DelegatedSpend.Intake.Token.mint("tsecret", expired_ref, "ref-#{@user_id}", future())
+      etoken =
+        DelegatedSpend.Intake.Token.mint("tsecret", expired_ref, "ref-#{@user_id}", future())
 
       assert {410, %{"error" => "expired"}} =
                Intake.handle_submitted(
@@ -1005,7 +1107,8 @@ defmodule DelegatedSpend.IntakeTest do
           expires_at: System.os_time(:second) - 5
         })
 
-      token = DelegatedSpend.Intake.Token.mint("tsecret", expired_ref, "ref-#{@user_id}", future())
+      token =
+        DelegatedSpend.Intake.Token.mint("tsecret", expired_ref, "ref-#{@user_id}", future())
 
       assert {410, %{"error" => "expired"}} =
                Intake.handle_order(%{"order_ref" => expired_ref, "token" => token, "v" => v}, ctx)
@@ -1028,12 +1131,18 @@ defmodule DelegatedSpend.IntakeTest do
       ctx = Map.put(ctx, :submitted_fn, fn _order_id, _tx -> raise "scanner offline" end)
 
       assert {200, %{"status" => "noted"}} =
-               Intake.handle_submitted(%{"order_ref" => ref, "token" => token, "tx_hash" => tx_hash, "v" => v}, ctx)
+               Intake.handle_submitted(
+                 %{"order_ref" => ref, "token" => token, "tx_hash" => tx_hash, "v" => v},
+                 ctx
+               )
 
       exit_ctx = Map.put(ctx, :submitted_fn, fn _order_id, _tx -> exit(:watcher_down) end)
 
       assert {200, %{"status" => "noted"}} =
-               Intake.handle_submitted(%{"order_ref" => ref, "token" => token, "tx_hash" => tx_hash, "v" => v}, exit_ctx)
+               Intake.handle_submitted(
+                 %{"order_ref" => ref, "token" => token, "tx_hash" => tx_hash, "v" => v},
+                 exit_ctx
+               )
     end
 
     test "unauthenticated /wallet and /orders/submitted are 401 before ANY work", %{ctx: ctx} do
@@ -1059,14 +1168,26 @@ defmodule DelegatedSpend.IntakeTest do
         })
 
       # a token minted for ANOTHER ref must not open these
-      wrong = DelegatedSpend.Intake.Token.mint("tsecret", String.duplicate("cd", 32), "ref-#{@user_id}", future())
+      wrong =
+        DelegatedSpend.Intake.Token.mint(
+          "tsecret",
+          String.duplicate("cd", 32),
+          "ref-#{@user_id}",
+          future()
+        )
 
       for bad <- [nil, "", "garbage", wrong] do
         assert {401, %{"error" => "unauthorized"}} =
-                 Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => bad, "address" => addr, "v" => v}, ctx)
+                 Intake.handle_wallet(
+                   %{"bind_ref" => bind_ref, "token" => bad, "address" => addr, "v" => v},
+                   ctx
+                 )
 
         assert {401, %{"error" => "unauthorized"}} =
-                 Intake.handle_submitted(%{"order_ref" => tx_ref, "token" => bad, "tx_hash" => tx_hash, "v" => v}, ctx)
+                 Intake.handle_submitted(
+                   %{"order_ref" => tx_ref, "token" => bad, "tx_hash" => tx_hash, "v" => v},
+                   ctx
+                 )
       end
 
       refute_received {:bound, _, _, _}
@@ -1076,22 +1197,32 @@ defmodule DelegatedSpend.IntakeTest do
       token = DelegatedSpend.Intake.Token.mint("tsecret", bind_ref, "ref-#{@user_id}", future())
 
       assert {200, %{"status" => "bound"}} =
-               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v}, ctx)
+               Intake.handle_wallet(
+                 %{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v},
+                 ctx
+               )
     end
 
-    test "submitted-report against a non-user_tx order is 422 and never reaches submitted_fn", %{ctx: ctx} do
+    test "submitted-report against a non-user_tx order is 422 and never reaches submitted_fn", %{
+      ctx: ctx
+    } do
       v = ctx.pinned.version
       permit_ref = register(ctx.keeper, @user_id)
       token = DelegatedSpend.Intake.Token.mint("tsecret", permit_ref, "ref-#{@user_id}", future())
       tx_hash = "0x" <> String.duplicate("ef", 32)
 
       assert {422, %{"error" => "invalid", "field" => "kind"}} =
-               Intake.handle_submitted(%{"order_ref" => permit_ref, "token" => token, "tx_hash" => tx_hash, "v" => v}, ctx)
+               Intake.handle_submitted(
+                 %{"order_ref" => permit_ref, "token" => token, "tx_hash" => tx_hash, "v" => v},
+                 ctx
+               )
 
       refute_received {:submitted, _, _}
     end
 
-    test "crashing wallet_fn is a 422 bind rejection and still burns the single-use ref", %{ctx: ctx} do
+    test "crashing wallet_fn is a 422 bind rejection and still burns the single-use ref", %{
+      ctx: ctx
+    } do
       v = ctx.pinned.version
       addr = "0x8ba1f109551bd432803012645ac136ddd64dba72"
 
@@ -1104,10 +1235,15 @@ defmodule DelegatedSpend.IntakeTest do
         })
 
       token = DelegatedSpend.Intake.Token.mint("tsecret", bind_ref, "ref-#{@user_id}", future())
-      crash_ctx = Map.put(ctx, :wallet_fn, fn _user_ref, _address, _bind_ref -> raise "db down" end)
+
+      crash_ctx =
+        Map.put(ctx, :wallet_fn, fn _user_ref, _address, _bind_ref -> raise "db down" end)
 
       assert {422, %{"error" => "bind rejected"}} =
-               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v}, crash_ctx)
+               Intake.handle_wallet(
+                 %{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v},
+                 crash_ctx
+               )
 
       # a dead persistence GenServer EXITS rather than raises — same contract
       {:ok, %{order_ref: bind_ref2}} =
@@ -1122,11 +1258,17 @@ defmodule DelegatedSpend.IntakeTest do
       exit_ctx = Map.put(ctx, :wallet_fn, fn _user_ref, _address, _bind_ref -> exit(:db_down) end)
 
       assert {422, %{"error" => "bind rejected"}} =
-               Intake.handle_wallet(%{"bind_ref" => bind_ref2, "token" => token2, "address" => addr, "v" => v}, exit_ctx)
+               Intake.handle_wallet(
+                 %{"bind_ref" => bind_ref2, "token" => token2, "address" => addr, "v" => v},
+                 exit_ctx
+               )
 
       # fail-closed single-use: the ref is consumed even though the bind failed
       assert {410, _} =
-               Intake.handle_wallet(%{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v}, ctx)
+               Intake.handle_wallet(
+                 %{"bind_ref" => bind_ref, "token" => token, "address" => addr, "v" => v},
+                 ctx
+               )
     end
   end
 
@@ -1150,6 +1292,18 @@ defmodule DelegatedSpend.IntakeTest do
     refute Rate.allow?(:spend_rate_named_test, "u", 1)
   end
 
+  test "Rate windows roll over — an exhausted bucket refills in the next fixed window" do
+    pid = Rate.start(60)
+
+    assert Rate.allow?(pid, "u", 1, 100)
+    # same window (div 60): still exhausted at its last second
+    refute Rate.allow?(pid, "u", 1, 119)
+    # next window refills; the one after does too
+    assert Rate.allow?(pid, "u", 1, 120)
+    refute Rate.allow?(pid, "u", 1, 121)
+    assert Rate.allow?(pid, "u", 1, 180)
+  end
+
   test "expired order surfaces as the typed 422 failure contract on handle_grant" do
     # order_ttl_s: 0 → the order expires immediately; the keeper's {:failed,
     # :expired} must map to the documented {422, status: failed, reason: expired}.
@@ -1160,7 +1314,11 @@ defmodule DelegatedSpend.IntakeTest do
 
     assert {422, %{"status" => "failed", "reason" => "expired"}} =
              Intake.handle_grant(
-               %{"init_data" => init_data(), "order_ref" => ref, "permit" => permit_env(25_000_000)},
+               %{
+                 "init_data" => init_data(),
+                 "order_ref" => ref,
+                 "permit" => permit_env(25_000_000)
+               },
                ctx
              )
   end

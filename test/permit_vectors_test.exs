@@ -22,13 +22,20 @@ defmodule DelegatedSpend.PermitVectorsTest do
     |> Enum.map(&(&1 |> File.read!() |> Jason.decode!()))
   end
 
-  defp domain_separator(%{"name" => name, "version" => version, "chain_id" => cid, "token" => token}) do
+  defp domain_separator(%{
+         "name" => name,
+         "version" => version,
+         "chain_id" => cid,
+         "token" => token
+       }) do
     Keccak.hash_256(
-      Keccak.hash_256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)") <>
+      Keccak.hash_256(
+        "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+      ) <>
         Keccak.hash_256(name) <>
         Keccak.hash_256(version) <>
         <<cid::256>> <>
-        (<<0::96>> <> Address.to_bytes(token))
+        <<0::96>> <> Address.to_bytes(token)
     )
   end
 
@@ -47,7 +54,14 @@ defmodule DelegatedSpend.PermitVectorsTest do
       ds = domain_separator(v["domain"])
 
       digest =
-        PermitLane.permit_digest(ds, p["owner"], p["spender"], p["value"], p["nonce"], p["deadline"])
+        PermitLane.permit_digest(
+          ds,
+          p["owner"],
+          p["spender"],
+          p["value"],
+          p["nonce"],
+          p["deadline"]
+        )
 
       sig = v["signature"]
       recid = sig["v"] - 27
@@ -100,7 +114,16 @@ defmodule DelegatedSpend.PermitVectorsTest do
     [v | _] = vectors()
     p = v["permit"]
     ds = domain_separator(v["domain"])
-    digest = PermitLane.permit_digest(ds, p["owner"], p["spender"], p["value"], p["nonce"], p["deadline"])
+
+    digest =
+      PermitLane.permit_digest(
+        ds,
+        p["owner"],
+        p["spender"],
+        p["value"],
+        p["nonce"],
+        p["deadline"]
+      )
 
     sig = v["signature"]
     <<first, rest::binary>> = unhex(sig["r"])
