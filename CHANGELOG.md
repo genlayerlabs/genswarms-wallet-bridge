@@ -11,8 +11,22 @@ package releases can ship zero contract bytecode changes. `scripts/check-version
 
 ## [Unreleased]
 
+### Changed
+
+- **The geofence is now a country blocklist.** `ctx.compliance.geo_allow`
+  (allowlist) is replaced by `:geo_block`, mirroring how the terms name the
+  restricted countries; the reference env var is now
+  `SPEND_GEOFENCE_BLOCKED_COUNTRIES`. The fail-closed posture is unchanged:
+  missing country evidence, a missing/empty/malformed blocklist, and a
+  malformed blocklist entry all still deny with `451`, and
+  `Compliance.check!/1` rejects a stale `:geo_allow` key by name at boot.
+
 ### Added
 
+- Geofence denials append a `geo_denied` audit event (`user_ref: nil` — the
+  denial deliberately precedes authentication) through the configured
+  compliance store, capped per country per `ctx.rate` window because the
+  denial path is unauthenticated. Recording never changes the `451`.
 - Wallet dapp network auto-switch: a wallet-vs-config chain mismatch now asks
   the wallet to switch (EIP-3326 `wallet_switchEthereumChain`), adds the chain
   from the new optional `config.json` `chain` block on 4902 (EIP-3085, plain

@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Compliance.MemoryStore.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/compliance/store.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/compliance/store.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:07:30</p></footer>
 <table>
 <tbody>
 <tr>
@@ -555,12 +555,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L83"><a href="#L83">83</a></td>
-<td class="hits">27</td>
+<td class="hits">29</td>
 <td class="source"><code>    {:ok, pid} = Agent.start_link(fn -&gt; %{acceptances: %{}, events: []} end)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L84"><a href="#L84">84</a></td>
-<td class="hits">27</td>
+<td class="hits">29</td>
 <td class="source"><code>    pid</code></td>
 </tr>
 <tr>
@@ -655,12 +655,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L103"><a href="#L103">103</a></td>
-<td class="hits">8</td>
+<td class="hits">12</td>
 <td class="source"><code>    event = Map.update!(event, :meta, &amp;Store.normalize_meta/1)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L104"><a href="#L104">104</a></td>
-<td class="hits">8</td>
+<td class="hits">12</td>
 <td class="source"><code>    Agent.update(pid, &amp;%{&amp;1 | events: [event | &amp;1.events]})</code></td>
 </tr>
 <tr>
@@ -685,12 +685,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L109"><a href="#L109">109</a></td>
-<td class="hits">18</td>
+<td class="hits">21</td>
 <td class="source"><code>    Agent.get(pid, fn state -&gt;</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L110"><a href="#L110">110</a></td>
-<td class="hits">18</td>
+<td class="hits">21</td>
 <td class="source"><code>      for event &lt;- Enum.reverse(state.events), event.user_ref == user_ref, do: event</code></td>
 </tr>
 <tr>

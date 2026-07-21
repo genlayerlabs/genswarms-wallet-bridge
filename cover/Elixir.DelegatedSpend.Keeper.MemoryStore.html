@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Keeper.MemoryStore.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/store.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/store.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:07:30</p></footer>
 <table>
 <tbody>
 <tr>
@@ -585,7 +585,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L89"><a href="#L89">89</a></td>
-<td class="hits">126</td>
+<td class="hits">128</td>
 <td class="source"><code>    {:ok, pid} =</code></td>
 </tr>
 <tr>
@@ -595,7 +595,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L91"><a href="#L91">91</a></td>
-<td class="hits">126</td>
+<td class="hits">128</td>
 <td class="source"><code>        %{</code></td>
 </tr>
 <tr>
@@ -650,7 +650,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L102"><a href="#L102">102</a></td>
-<td class="hits">126</td>
+<td class="hits">128</td>
 <td class="source"><code>    pid</code></td>
 </tr>
 <tr>
@@ -870,7 +870,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L146"><a href="#L146">146</a></td>
-<td class="hits">128</td>
+<td class="hits">130</td>
 <td class="source"><code>    Agent.update(pid, fn s -&gt;</code></td>
 </tr>
 <tr>
@@ -880,12 +880,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L148"><a href="#L148">148</a></td>
-<td class="hits">128</td>
+<td class="hits">130</td>
 <td class="source"><code>      |&gt; put_in([:orders, order.order_id], order)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L149"><a href="#L149">149</a></td>
-<td class="hits">128</td>
+<td class="hits">130</td>
 <td class="source"><code>      |&gt; put_in([:by_ref, {order.order_ref, order.user_ref}], order.order_id)</code></td>
 </tr>
 <tr>
@@ -930,17 +930,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L158"><a href="#L158">158</a></td>
-<td class="hits">149</td>
+<td class="hits">150</td>
 <td class="source"><code>    Agent.get(pid, fn s -&gt;</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L159"><a href="#L159">159</a></td>
-<td class="hits">149</td>
+<td class="hits">150</td>
 <td class="source"><code>      with id when is_binary(id) &lt;- get_in(s, [:by_ref, {order_ref, user_ref}]) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L160"><a href="#L160">160</a></td>
-<td class="hits">130</td>
+<td class="hits">131</td>
 <td class="source"><code>        s.orders[id]</code></td>
 </tr>
 <tr>

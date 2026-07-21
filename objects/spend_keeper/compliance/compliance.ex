@@ -13,7 +13,14 @@ defmodule DelegatedSpend.Compliance do
 
   @doc "Validates `ctx.compliance` (no-op when absent). Raises on misconfiguration."
   def check!(%{compliance: compliance}) when is_map(compliance) do
-    check_geo_allow!(Map.get(compliance, :geo_allow))
+    if Map.has_key?(compliance, :geo_allow) do
+      raise ArgumentError,
+            "ctx.compliance.geo_allow (allowlist) was replaced by :geo_block — " <>
+              "the geofence is now a blocklist; list the restricted countries " <>
+              "from the terms under :geo_block"
+    end
+
+    check_geo_block!(Map.get(compliance, :geo_block))
     check_terms!(Map.get(compliance, :terms), Map.get(compliance, :store))
     check_store!(Map.get(compliance, :store))
     :ok
@@ -25,20 +32,20 @@ defmodule DelegatedSpend.Compliance do
 
   def check!(ctx) when is_map(ctx), do: :ok
 
-  defp check_geo_allow!(allow) when is_list(allow) and allow != [] do
-    for entry <- allow, Store.normalize_meta(%{country: entry}).country == nil do
+  defp check_geo_block!(block) when is_list(block) and block != [] do
+    for entry <- block, Store.normalize_meta(%{country: entry}).country == nil do
       raise ArgumentError,
-            "ctx.compliance.geo_allow entry #{inspect(entry)} is not an " <>
+            "ctx.compliance.geo_block entry #{inspect(entry)} is not an " <>
               "ISO 3166-1 alpha-2 code — the geofence would deny every request"
     end
 
     :ok
   end
 
-  defp check_geo_allow!(allow) do
+  defp check_geo_block!(block) do
     raise ArgumentError,
-          "ctx.compliance.geo_allow must be a non-empty country allowlist " <>
-            "(got: #{inspect(allow)}) — the geofence denies every request without one"
+          "ctx.compliance.geo_block must be a non-empty country blocklist " <>
+            "(got: #{inspect(block)}) — the geofence denies every request without one"
   end
 
   defp check_terms!(nil, _store), do: :ok

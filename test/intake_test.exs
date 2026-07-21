@@ -127,16 +127,16 @@ defmodule DelegatedSpend.IntakeTest do
   defp with_compliance(ctx) do
     store = ComplianceStore.start()
 
-    {Map.put(ctx, :compliance, %{geo_allow: ["US"], store: {ComplianceStore, store}}), store}
+    {Map.put(ctx, :compliance, %{geo_block: ["CU"], store: {ComplianceStore, store}}), store}
   end
 
   describe "compliance geofencing" do
     test "blocks every handler before version pinning or authentication" do
-      ctx = %{compliance: %{geo_allow: ["US"]}}
+      ctx = %{compliance: %{geo_block: ["CU"]}}
 
       for handler <- [:handle_order, :handle_grant, :handle_wallet, :handle_submitted] do
         assert {451, %{"error" => "geo_blocked"}} =
-                 apply(Intake, handler, [%{"country" => "US"}, %{country: "CA"}, ctx])
+                 apply(Intake, handler, [%{"country" => "US"}, %{country: "CU"}, ctx])
       end
     end
 
@@ -169,7 +169,7 @@ defmodule DelegatedSpend.IntakeTest do
         limiter = Rate.start()
 
         ctx = %{
-          compliance: %{geo_allow: ["US"]},
+          compliance: %{geo_block: ["CU"]},
           token_secret: "tsecret",
           pinned: %{chain_id: 84_532, token: @token, router: @router, version: "0.2.0"},
           rate: {limiter, 1},
@@ -177,14 +177,14 @@ defmodule DelegatedSpend.IntakeTest do
         }
 
         assert {451, %{"error" => "geo_blocked"}} =
-                 apply(Intake, handler, [params, %{country: "CA"}, ctx])
+                 apply(Intake, handler, [params, %{country: "CU"}, ctx])
 
         assert Rate.allow?(limiter, user_ref, 1)
       end
     end
 
     test "configured two-arity handlers deny because their metadata is empty" do
-      ctx = %{compliance: %{geo_allow: ["US"]}}
+      ctx = %{compliance: %{geo_block: ["CU"]}}
 
       for handler <- [:handle_order, :handle_grant, :handle_wallet, :handle_submitted] do
         assert {451, %{"error" => "geo_blocked"}} = apply(Intake, handler, [%{}, ctx])
@@ -194,21 +194,32 @@ defmodule DelegatedSpend.IntakeTest do
     test "configured compliance fails closed on missing or malformed policy metadata" do
       for {compliance, meta} <- [
             {%{}, %{country: "US"}},
-            {%{geo_allow: "US"}, %{country: "US"}},
-            {%{geo_allow: ["US"]}, %{}},
-            {%{geo_allow: ["US"]}, %{country: "USA"}}
+            {%{geo_block: "US"}, %{country: "US"}},
+            {%{geo_block: []}, %{country: "US"}},
+            {%{geo_block: ["CU", "XYZ"]}, %{country: "US"}},
+            {%{geo_block: ["CU"]}, %{}},
+            {%{geo_block: ["CU"]}, %{country: "USA"}}
           ] do
         assert {451, %{"error" => "geo_blocked"}} =
                  Intake.handle_order(%{}, meta, %{compliance: compliance})
       end
 
-      ctx = %{compliance: %{geo_allow: ["US"]}, bot_token: @bot_token, max_age_s: 900}
+      ctx = %{compliance: %{geo_block: ["CU"]}, bot_token: @bot_token, max_age_s: 900}
 
       assert {401, %{"error" => "unauthorized"}} =
                Intake.handle_order(%{"country" => "CA"}, %{country: "US"}, ctx)
 
       assert {451, %{"error" => "geo_blocked"}} =
                Intake.handle_order(%{"country" => "US"}, %{}, ctx)
+    end
+
+    test "denial recording never changes the 451 when the event store fails" do
+      for failure <- [:raise, :exit, :throw] do
+        ctx = %{compliance: %{geo_block: ["CU"], store: {FailingEventStore, failure}}}
+
+        assert {451, %{"error" => "geo_blocked"}} =
+                 Intake.handle_order(%{}, %{country: "CU"}, ctx)
+      end
     end
 
     test "metadata has no effect when compliance is absent" do
@@ -721,12 +732,12 @@ defmodule DelegatedSpend.IntakeTest do
 
       compliance_configs = [
         :absent,
-        %{geo_allow: ["US"]},
-        %{geo_allow: ["US"], store: :invalid},
-        %{geo_allow: ["US"], store: {DelegatedSpend.MissingComplianceStore, :missing}},
-        %{geo_allow: ["US"], store: {FailingEventStore, :raise}},
-        %{geo_allow: ["US"], store: {FailingEventStore, :exit}},
-        %{geo_allow: ["US"], store: {FailingEventStore, :throw}}
+        %{geo_block: ["CU"]},
+        %{geo_block: ["CU"], store: :invalid},
+        %{geo_block: ["CU"], store: {DelegatedSpend.MissingComplianceStore, :missing}},
+        %{geo_block: ["CU"], store: {FailingEventStore, :raise}},
+        %{geo_block: ["CU"], store: {FailingEventStore, :exit}},
+        %{geo_block: ["CU"], store: {FailingEventStore, :throw}}
       ]
 
       for compliance <- compliance_configs do

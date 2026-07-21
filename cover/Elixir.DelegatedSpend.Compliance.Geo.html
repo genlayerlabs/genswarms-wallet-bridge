@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Compliance.Geo.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/compliance/geo.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/compliance/geo.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:07:30</p></footer>
 <table>
 <tbody>
 <tr>
@@ -151,70 +151,110 @@ td.source {
 <tr>
 <td class="line" id="L2"><a href="#L2">2</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @moduledoc "Country allowlist checks for server-owned request metadata."</code></td>
+<td class="source"><code>  @moduledoc """</code></td>
 </tr>
 <tr>
 <td class="line" id="L3"><a href="#L3">3</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  Country blocklist checks for server-owned request metadata.</code></td>
 </tr>
 <tr>
 <td class="line" id="L4"><a href="#L4">4</a></td>
 <td class="hits"></td>
-<td class="source"><code>  alias DelegatedSpend.Compliance.Store</code></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L5"><a href="#L5">5</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  A request passes only with valid country evidence, a well-formed non-empty</code></td>
 </tr>
 <tr>
 <td class="line" id="L6"><a href="#L6">6</a></td>
 <td class="hits"></td>
-<td class="source"><code>  @spec allowed?(term(), term()) :: boolean()</code></td>
+<td class="source"><code>  blocklist, and the country not on it. Everything else — missing or</code></td>
 </tr>
 <tr>
 <td class="line" id="L7"><a href="#L7">7</a></td>
 <td class="hits"></td>
-<td class="source"><code>  def allowed?(allow, country) when is_list(allow) do</code></td>
+<td class="source"><code>  malformed country, malformed blocklist entry, empty or non-list blocklist —</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L8"><a href="#L8">8</a></td>
-<td class="hits">130</td>
-<td class="source"><code>    allow = Enum.map(allow, &amp;Store.normalize_meta(%{country: &amp;1}).country)</code></td>
+<td class="hits"></td>
+<td class="source"><code>  fails closed: without trustworthy evidence and a trustworthy list, "not in</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L9"><a href="#L9">9</a></td>
-<td class="hits">130</td>
-<td class="source"><code>    country = Store.normalize_meta(%{country: country}).country</code></td>
+<td class="hits"></td>
+<td class="source"><code>  a restricted region" cannot be shown.</code></td>
 </tr>
 <tr>
 <td class="line" id="L10"><a href="#L10">10</a></td>
 <td class="hits"></td>
-<td class="source"><code></code></td>
+<td class="source"><code>  """</code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L11"><a href="#L11">11</a></td>
-<td class="hits">130</td>
-<td class="source"><code>    country != nil and allow != [] and nil not in allow and country in allow</code></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
 </tr>
 <tr>
 <td class="line" id="L12"><a href="#L12">12</a></td>
 <td class="hits"></td>
-<td class="source"><code>  end</code></td>
+<td class="source"><code>  alias DelegatedSpend.Compliance.Store</code></td>
 </tr>
 <tr>
 <td class="line" id="L13"><a href="#L13">13</a></td>
 <td class="hits"></td>
 <td class="source"><code></code></td>
 </tr>
-<tr class="hit">
+<tr>
 <td class="line" id="L14"><a href="#L14">14</a></td>
-<td class="hits">6</td>
-<td class="source"><code>  def allowed?(_allow, _country), do: false</code></td>
+<td class="hits"></td>
+<td class="source"><code>  @spec allowed?(term(), term()) :: boolean()</code></td>
 </tr>
 <tr>
 <td class="line" id="L15"><a href="#L15">15</a></td>
+<td class="hits"></td>
+<td class="source"><code>  def allowed?(block, country) when is_list(block) do</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L16"><a href="#L16">16</a></td>
+<td class="hits">140</td>
+<td class="source"><code>    block = Enum.map(block, &amp;Store.normalize_meta(%{country: &amp;1}).country)</code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L17"><a href="#L17">17</a></td>
+<td class="hits">140</td>
+<td class="source"><code>    country = Store.normalize_meta(%{country: country}).country</code></td>
+</tr>
+<tr>
+<td class="line" id="L18"><a href="#L18">18</a></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L19"><a href="#L19">19</a></td>
+<td class="hits">140</td>
+<td class="source"><code>    country != nil and block != [] and nil not in block and country not in block</code></td>
+</tr>
+<tr>
+<td class="line" id="L20"><a href="#L20">20</a></td>
+<td class="hits"></td>
+<td class="source"><code>  end</code></td>
+</tr>
+<tr>
+<td class="line" id="L21"><a href="#L21">21</a></td>
+<td class="hits"></td>
+<td class="source"><code></code></td>
+</tr>
+<tr class="hit">
+<td class="line" id="L22"><a href="#L22">22</a></td>
+<td class="hits">6</td>
+<td class="source"><code>  def allowed?(_block, _country), do: false</code></td>
+</tr>
+<tr>
+<td class="line" id="L23"><a href="#L23">23</a></td>
 <td class="hits"></td>
 <td class="source"><code>end</code></td>
 </tr>

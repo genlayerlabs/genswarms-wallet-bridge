@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Evm.Artifacts.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/evm/artifacts.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/evm/artifacts.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:07:30</p></footer>
 <table>
 <tbody>
 <tr>
@@ -285,7 +285,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L29"><a href="#L29">29</a></td>
-<td class="hits">7</td>
+<td class="hits">6</td>
 <td class="source"><code>    path = Path.join([out_dir, file, contract &lt;&gt; ".json"])</code></td>
 </tr>
 <tr>
@@ -295,7 +295,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L31"><a href="#L31">31</a></td>
-<td class="hits">7</td>
+<td class="hits">6</td>
 <td class="source"><code>    data =</code></td>
 </tr>
 <tr>
@@ -310,7 +310,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L34"><a href="#L34">34</a></td>
-<td class="hits">6</td>
+<td class="hits">4</td>
 <td class="source"><code>          Jason.decode!(json)</code></td>
 </tr>
 <tr>
@@ -325,7 +325,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L37"><a href="#L37">37</a></td>
-<td class="hits">1</td>
+<td class="hits">2</td>
 <td class="source"><code>          raise "missing artifact #{path} (#{inspect(r)}) — run `cd contracts &amp;&amp; forge build`"</code></td>
 </tr>
 <tr>
@@ -340,7 +340,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L40"><a href="#L40">40</a></td>
-<td class="hits">6</td>
+<td class="hits">4</td>
 <td class="source"><code>    bytecode = get_in(data, ["bytecode", "object"]) || ""</code></td>
 </tr>
 <tr>
@@ -350,7 +350,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L42"><a href="#L42">42</a></td>
-<td class="hits">6</td>
+<td class="hits">4</td>
 <td class="source"><code>    if bytecode == "" or not String.starts_with?(bytecode, "0x") do</code></td>
 </tr>
 <tr class="hit">
@@ -370,7 +370,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L46"><a href="#L46">46</a></td>
-<td class="hits">5</td>
+<td class="hits">3</td>
 <td class="source"><code>    %{abi: data["abi"], bytecode: bytecode}</code></td>
 </tr>
 <tr>

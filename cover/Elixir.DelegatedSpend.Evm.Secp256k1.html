@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Evm.Secp256k1.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/guangzhou/objects/spend_keeper/evm/secp256k1.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-15 at 10:27:29</p></footer>
+<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/evm/secp256k1.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:07:30</p></footer>
 <table>
 <tbody>
 <tr>
@@ -330,12 +330,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L38"><a href="#L38">38</a></td>
-<td class="hits">151</td>
+<td class="hits">153</td>
 <td class="source"><code>    {pub, ^priv} = :crypto.generate_key(:ecdh, :secp256k1, priv)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L39"><a href="#L39">39</a></td>
-<td class="hits">151</td>
+<td class="hits">153</td>
 <td class="source"><code>    pub</code></td>
 </tr>
 <tr>
@@ -700,7 +700,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L112"><a href="#L112">112</a></td>
-<td class="hits">57</td>
+<td class="hits">54</td>
 <td class="source"><code>        true -&gt; {:ok, r, s, recid}</code></td>
 </tr>
 <tr>
@@ -795,22 +795,22 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L131"><a href="#L131">131</a></td>
-<td class="hits">11338</td>
+<td class="hits">11839</td>
 <td class="source"><code>    cond do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L132"><a href="#L132">132</a></td>
-<td class="hits">11338</td>
+<td class="hits">11839</td>
 <td class="source"><code>      x1 == x2 and mod(y1 + y2, @p) == 0 -&gt; :inf</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L133"><a href="#L133">133</a></td>
-<td class="hits">11337</td>
+<td class="hits">11838</td>
 <td class="source"><code>      x1 == x2 and y1 == y2 -&gt; double({x1, y1})</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L134"><a href="#L134">134</a></td>
-<td class="hits">11337</td>
+<td class="hits">11838</td>
 <td class="source"><code>      true -&gt; chord({x1, y1}, {x2, y2})</code></td>
 </tr>
 <tr>
@@ -835,12 +835,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L139"><a href="#L139">139</a></td>
-<td class="hits">11337</td>
+<td class="hits">11838</td>
 <td class="source"><code>    m = mod((y2 - y1) * powmod(mod(x2 - x1, @p), @p - 2, @p), @p)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L140"><a href="#L140">140</a></td>
-<td class="hits">11337</td>
+<td class="hits">11838</td>
 <td class="source"><code>    x3 = mod(m * m - x1 - x2, @p)</code></td>
 </tr>
 <tr>
@@ -865,12 +865,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L145"><a href="#L145">145</a></td>
-<td class="hits">22906</td>
+<td class="hits">22953</td>
 <td class="source"><code>    m = mod(3 * x * x * powmod(mod(2 * y, @p), @p - 2, @p), @p)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L146"><a href="#L146">146</a></td>
-<td class="hits">22906</td>
+<td class="hits">22953</td>
 <td class="source"><code>    x3 = mod(m * m - 2 * x, @p)</code></td>
 </tr>
 <tr>
@@ -920,12 +920,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L156"><a href="#L156">156</a></td>
-<td class="hits">22907</td>
+<td class="hits">22954</td>
 <td class="source"><code>    acc = if (k &amp;&amp;&amp; 1) == 1, do: add(acc, point), else: acc</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L157"><a href="#L157">157</a></td>
-<td class="hits">22907</td>
+<td class="hits">22954</td>
 <td class="source"><code>    mul(k &gt;&gt;&gt; 1, double(point), acc)</code></td>
 </tr>
 <tr>
@@ -940,12 +940,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L160"><a href="#L160">160</a></td>
-<td class="hits">34394</td>
+<td class="hits">34942</td>
 <td class="source"><code>  defp powmod(b, e, m), do: :crypto.mod_pow(b, e, m) |&gt; :binary.decode_unsigned()</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L161"><a href="#L161">161</a></td>
-<td class="hits">137213</td>
+<td class="hits">139405</td>
 <td class="source"><code>  defp mod(a, m), do: Integer.mod(a, m)</code></td>
 </tr>
 <tr class="hit">

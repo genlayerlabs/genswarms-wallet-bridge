@@ -335,25 +335,25 @@ defmodule DelegatedSpend.IntakeComplianceTest do
 
     invalid_compliance = [
       nil,
-      %{geo_allow: ["US"]},
-      %{geo_allow: ["US"], terms: nil, store: {ComplianceStore, store}},
-      %{geo_allow: ["US"], terms: %{}, store: {ComplianceStore, store}},
-      %{geo_allow: ["US"], terms: %{hash: @terms_hash}, store: {ComplianceStore, store}},
+      %{geo_block: ["CU"]},
+      %{geo_block: ["CU"], terms: nil, store: {ComplianceStore, store}},
+      %{geo_block: ["CU"], terms: %{}, store: {ComplianceStore, store}},
+      %{geo_block: ["CU"], terms: %{hash: @terms_hash}, store: {ComplianceStore, store}},
       %{
-        geo_allow: ["US"],
+        geo_block: ["CU"],
         terms: %{hash: "0x1234", url: @terms.url},
         store: {ComplianceStore, store}
       },
       %{
-        geo_allow: ["US"],
+        geo_block: ["CU"],
         terms: %{hash: "0x" <> String.duplicate("zz", 32), url: @terms.url},
         store: {ComplianceStore, store}
       },
-      %{geo_allow: ["US"], terms: %{hash: @terms_hash, url: ""}, store: {ComplianceStore, store}},
-      %{geo_allow: ["US"], terms: @terms},
-      %{geo_allow: ["US"], terms: @terms, store: :invalid},
-      %{geo_allow: ["US"], terms: @terms, store: {"not-a-module", :ignored}},
-      %{geo_allow: ["US"], terms: @terms, store: {MissingAcceptanceStore, :ignored}}
+      %{geo_block: ["CU"], terms: %{hash: @terms_hash, url: ""}, store: {ComplianceStore, store}},
+      %{geo_block: ["CU"], terms: @terms},
+      %{geo_block: ["CU"], terms: @terms, store: :invalid},
+      %{geo_block: ["CU"], terms: @terms, store: {"not-a-module", :ignored}},
+      %{geo_block: ["CU"], terms: @terms, store: {MissingAcceptanceStore, :ignored}}
     ]
 
     for compliance <- invalid_compliance do
@@ -379,7 +379,7 @@ defmodule DelegatedSpend.IntakeComplianceTest do
     for failure <- [:non_ok, :raise, :exit, :throw] do
       ctx =
         Map.put(base_ctx, :compliance, %{
-          geo_allow: ["US"],
+          geo_block: ["CU"],
           terms: @terms,
           store: {FailingAcceptanceStore, failure}
         })
@@ -401,7 +401,7 @@ defmodule DelegatedSpend.IntakeComplianceTest do
     invalid_ctx =
       base_ctx
       |> Map.put(:rate, {limiter, 1})
-      |> Map.put(:compliance, %{geo_allow: ["US"], terms: nil, store: {ComplianceStore, store}})
+      |> Map.put(:compliance, %{geo_block: ["CU"], terms: nil, store: {ComplianceStore, store}})
 
     assert {503, %{"error" => "unavailable"}} =
              Intake.handle_terms(params, %{country: "US"}, invalid_ctx)
@@ -423,7 +423,7 @@ defmodule DelegatedSpend.IntakeComplianceTest do
     assert response = {200, body} = Intake.handle_order(params, ctx)
     refute Map.has_key?(body, "terms")
 
-    off_ctx = Map.put(ctx, :compliance, %{geo_allow: ["US"]})
+    off_ctx = Map.put(ctx, :compliance, %{geo_block: ["CU"]})
     assert ^response = Intake.handle_order(params, %{country: "US"}, off_ctx)
   end
 
@@ -610,18 +610,18 @@ defmodule DelegatedSpend.IntakeComplianceTest do
     params = order_params(ctx, ref)
 
     invalid_compliance = [
-      %{geo_allow: ["US"], terms: nil},
-      %{geo_allow: ["US"], terms: %{}},
-      %{geo_allow: ["US"], terms: %{hash: @terms_hash}},
-      %{geo_allow: ["US"], terms: %{hash: "0x1234", url: @terms.url}},
-      %{geo_allow: ["US"], terms: %{hash: @terms_hash, url: ""}},
-      %{geo_allow: ["US"], terms: @terms},
-      %{geo_allow: ["US"], terms: @terms, store: :invalid},
-      %{geo_allow: ["US"], terms: @terms, store: {"not-a-module", :ignored}},
-      %{geo_allow: ["US"], terms: @terms, store: {MissingAcceptanceStore, :ignored}},
-      %{geo_allow: ["US"], terms: @terms, store: {FailingAcceptanceStore, :raise}},
-      %{geo_allow: ["US"], terms: @terms, store: {FailingAcceptanceStore, :exit}},
-      %{geo_allow: ["US"], terms: @terms, store: {FailingAcceptanceStore, :throw}}
+      %{geo_block: ["CU"], terms: nil},
+      %{geo_block: ["CU"], terms: %{}},
+      %{geo_block: ["CU"], terms: %{hash: @terms_hash}},
+      %{geo_block: ["CU"], terms: %{hash: "0x1234", url: @terms.url}},
+      %{geo_block: ["CU"], terms: %{hash: @terms_hash, url: ""}},
+      %{geo_block: ["CU"], terms: @terms},
+      %{geo_block: ["CU"], terms: @terms, store: :invalid},
+      %{geo_block: ["CU"], terms: @terms, store: {"not-a-module", :ignored}},
+      %{geo_block: ["CU"], terms: @terms, store: {MissingAcceptanceStore, :ignored}},
+      %{geo_block: ["CU"], terms: @terms, store: {FailingAcceptanceStore, :raise}},
+      %{geo_block: ["CU"], terms: @terms, store: {FailingAcceptanceStore, :exit}},
+      %{geo_block: ["CU"], terms: @terms, store: {FailingAcceptanceStore, :throw}}
     ]
 
     for compliance <- invalid_compliance do
@@ -644,7 +644,7 @@ defmodule DelegatedSpend.IntakeComplianceTest do
       base_ctx
       |> Map.put(:rate, {Rate.start(60), 1})
       |> Map.put(:compliance, %{
-        geo_allow: ["US"],
+        geo_block: ["CU"],
         terms: @terms,
         store: {FailingAcceptanceStore, :raise}
       })
@@ -657,7 +657,7 @@ defmodule DelegatedSpend.IntakeComplianceTest do
           :handle_terms
         ] do
       assert {451, %{"error" => "geo_blocked"}} =
-               apply(Intake, handler, [%{}, %{country: "CA"}, ctx])
+               apply(Intake, handler, [%{}, %{country: "CU"}, ctx])
 
       assert {451, %{"error" => "geo_blocked"}} = apply(Intake, handler, [%{}, ctx])
     end
@@ -671,6 +671,63 @@ defmodule DelegatedSpend.IntakeComplianceTest do
 
     assert {503, %{"error" => "unavailable"}} =
              Intake.handle_order(params, %{country: "US"}, ctx)
+  end
+
+  test "denied requests append a geo_denied audit event, capped per country", %{
+    base_ctx: base_ctx,
+    compliance_store: store
+  } do
+    ctx =
+      base_ctx
+      |> Map.put(:rate, {Rate.start(60), 2})
+      |> Map.put(:compliance, %{geo_block: ["CU"], store: {ComplianceStore, store}})
+
+    meta = %{ip: "203.0.113.9", country: "cu", user_agent: "wallet-test/1.0", session_id: "s-1"}
+
+    for _ <- 1..3 do
+      assert {451, %{"error" => "geo_blocked"}} = Intake.handle_order(%{}, meta, ctx)
+    end
+
+    # the third denial is over the per-country budget and is not recorded
+    assert [event, %{kind: "geo_denied"}] = ComplianceStore.events_for(store, nil)
+
+    assert %{
+             user_ref: nil,
+             kind: "geo_denied",
+             wallet: nil,
+             order_ref: nil,
+             meta: %{
+               ip: "203.0.113.9",
+               country: "CU",
+               user_agent: "wallet-test/1.0",
+               session_id: "s-1"
+             }
+           } = event
+
+    # allowed requests never write denial evidence
+    assert {200, _} =
+             Intake.handle_order(
+               order_params(ctx, register_order(base_ctx.keeper)),
+               %{country: "US"},
+               ctx
+             )
+
+    assert [_, _] = ComplianceStore.events_for(store, nil)
+  end
+
+  test "two-arity denials record the missing-meta evidence", %{
+    ctx: ctx,
+    compliance_store: store,
+    keeper: keeper
+  } do
+    params = order_params(ctx, register_order(keeper))
+
+    capture_log(fn ->
+      assert {451, %{"error" => "geo_blocked"}} = Intake.handle_order(params, ctx)
+    end)
+
+    assert [%{kind: "geo_denied", user_ref: nil, meta: %{country: nil}}] =
+             ComplianceStore.events_for(store, nil)
   end
 
   test "rate limiting remains before the terms gate", %{ctx: ctx, compliance_store: store} do
@@ -688,7 +745,7 @@ defmodule DelegatedSpend.IntakeComplianceTest do
 
   defp with_terms(ctx, store) do
     Map.put(ctx, :compliance, %{
-      geo_allow: ["US"],
+      geo_block: ["CU"],
       terms: @terms,
       store: {ComplianceStore, store}
     })
