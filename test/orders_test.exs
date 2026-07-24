@@ -27,6 +27,29 @@ defmodule DelegatedSpend.OrdersTest do
       assert Orders.transfer_calldata(lower, 2_500_000) == @expected_calldata
     end
 
+    test "accepts valid-checksum, all-lowercase, and all-uppercase recipients" do
+      uppercase = "0x" <> (@recipient |> String.slice(2, 40) |> String.upcase())
+
+      assert Orders.transfer_calldata(@recipient, 2_500_000) == @expected_calldata
+
+      assert Orders.transfer_calldata(String.downcase(@recipient), 2_500_000) ==
+               @expected_calldata
+
+      assert Orders.transfer_calldata(uppercase, 2_500_000) == @expected_calldata
+    end
+
+    test "rejects the zero address and a wrong-checksum mixed-case recipient" do
+      wrong_checksum = "0x9858efFD232B4033E47d90003D41EC34EcaEda94"
+
+      assert_raise ArgumentError, ~r/zero address/, fn ->
+        Orders.transfer_calldata("0x" <> String.duplicate("0", 40), 1)
+      end
+
+      assert_raise ArgumentError, ~r/EIP-55 checksum/, fn ->
+        Orders.transfer_calldata(wrong_checksum, 1)
+      end
+    end
+
     test "raises on malformed addresses" do
       for bad <- [
             "9858EfFD232B4033E47d90003D41EC34EcaEda94",
@@ -92,6 +115,27 @@ defmodule DelegatedSpend.OrdersTest do
         Orders.erc20_transfer_order("0xnope", @recipient, 1)
       end
     end
+
+    test "applies zero and EIP-55 validation to token addresses" do
+      uppercase = "0x" <> (@token |> String.slice(2, 40) |> String.upcase())
+
+      assert Orders.erc20_transfer_order(String.downcase(@token), @recipient, 1).to ==
+               String.downcase(@token)
+
+      assert Orders.erc20_transfer_order(uppercase, @recipient, 1).to == uppercase
+
+      assert_raise ArgumentError, ~r/zero address/, fn ->
+        Orders.erc20_transfer_order("0x" <> String.duplicate("0", 40), @recipient, 1)
+      end
+
+      assert_raise ArgumentError, ~r/EIP-55 checksum/, fn ->
+        Orders.erc20_transfer_order(
+          "0x036Cbd53842c5426634e7929541eC2318f3dCF7e",
+          @recipient,
+          1
+        )
+      end
+    end
   end
 
   describe "parse_token_amount/3" do
@@ -102,8 +146,7 @@ defmodule DelegatedSpend.OrdersTest do
             {"0.1", 100_000},
             {"0.000001", 1},
             {"100", 100_000_000},
-            {"0.10", 100_000},
-            {" 5 ", 5_000_000}
+            {"0.10", 100_000}
           ] do
         assert Orders.parse_token_amount(text, 6, max_units: @max_units) == {:ok, units},
                "expected #{inspect(text)} -> #{units}"
@@ -129,23 +172,45 @@ defmodule DelegatedSpend.OrdersTest do
             "  ",
             "2,5",
             "1.2.3",
-            "0x10"
+            "0x10",
+            " 1",
+            "1 ",
+            " 5 ",
+            "01",
+            "00",
+            "00.1",
+            "00.5"
           ] do
         assert Orders.parse_token_amount(text, 6, max_units: @max_units) == :error,
                "expected #{inspect(text)} -> :error"
       end
     end
 
-    test "without a max_units cap only positivity bounds acceptance" do
-      assert Orders.parse_token_amount("1000000000", 6) == {:ok, 1_000_000_000_000_000}
-      assert Orders.parse_token_amount("0", 6) == :error
+    test "missing or invalid max_units raises as a caller configuration bug" do
+      for opts <- [
+            [],
+            [max_units: nil],
+            [max_units: 1.5],
+            [max_units: :unlimited],
+            [max_units: 0],
+            [max_units: -1]
+          ] do
+        assert_raise ArgumentError, ~r/max_units must be a positive integer/, fn ->
+          Orders.parse_token_amount("1", 6, opts)
+        end
+      end
+    end
+
+    test "a valid max_units cap is enforced" do
+      assert Orders.parse_token_amount("1", 0, max_units: 1) == {:ok, 1}
+      assert Orders.parse_token_amount("2", 0, max_units: 1) == :error
     end
 
     test "decimals bound the fractional digits" do
-      assert Orders.parse_token_amount("1.55", 2) == {:ok, 155}
-      assert Orders.parse_token_amount("1.555", 2) == :error
-      assert Orders.parse_token_amount("5", 0) == {:ok, 5}
-      assert Orders.parse_token_amount("5.1", 0) == :error
+      assert Orders.parse_token_amount("1.55", 2, max_units: 1_000) == {:ok, 155}
+      assert Orders.parse_token_amount("1.555", 2, max_units: 1_000) == :error
+      assert Orders.parse_token_amount("5", 0, max_units: 10) == {:ok, 5}
+      assert Orders.parse_token_amount("5.1", 0, max_units: 10) == :error
     end
 
     test "non-binary text and bad decimals are :error" do

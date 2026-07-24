@@ -20,6 +20,8 @@ defmodule DelegatedSpend.Orders do
   changing it changes every ref.
   """
 
+  alias DelegatedSpend.Evm.Address
+
   # ERC-20 transfer(address,uint256)
   @transfer_selector "a9059cbb"
   @uint256_max Integer.pow(2, 256) - 1
@@ -71,16 +73,17 @@ defmodule DelegatedSpend.Orders do
   Parse a decimal token amount ("5", "2.5", "0.10") into integer units at
   `decimals`. Integer math only — no floats ever touch a money amount.
 
-  Accepts only `digits` or `digits.digits` with at most `decimals`
+  Accepts only canonical `digits` or `digits.digits` with at most `decimals`
   fractional digits; the result must be `> 0`. Rejections (`:error`): empty,
-  non-numeric, exponent forms, signs, a bare or trailing dot, a leading dot
-  (".5"), more fractional digits than `decimals`, zero, and anything above
-  the cap.
+  surrounding whitespace, redundant leading zeros, non-numeric, exponent
+  forms, signs, a bare or trailing dot, a leading dot (".5"), more fractional
+  digits than `decimals`, zero, and anything above the cap.
 
   The cap is the `:max_units` option (integer, in UNITS — compose it with
   `decimals` yourself, e.g. 100 whole 6-decimal tokens = `100_000_000`).
   There is deliberately NO default cap: the bound is business policy, so the
-  consumer must state it.
+  consumer must state it as a positive integer. A missing or invalid cap raises
+  `ArgumentError` because that is a caller configuration bug.
   """
   @spec parse_token_amount(String.t(), non_neg_integer, keyword) ::
           {:ok, pos_integer} | :error
@@ -90,7 +93,11 @@ defmodule DelegatedSpend.Orders do
       when is_binary(text) and is_integer(decimals) and decimals >= 0 do
     max_units = Keyword.get(opts, :max_units)
 
-    case Regex.run(~r/^(\d+)(?:\.(\d+))?$/, String.trim(text)) do
+    unless is_integer(max_units) and max_units > 0 do
+      raise ArgumentError, "parse_token_amount: max_units must be a positive integer"
+    end
+
+    case Regex.run(~r/^(0|[1-9]\d*)(?:\.(\d+))?$/, text) do
       [_, whole] -> to_units(whole, "", decimals, max_units)
       [_, whole, frac] -> to_units(whole, frac, decimals, max_units)
       _ -> :error
@@ -112,7 +119,7 @@ defmodule DelegatedSpend.Orders do
 
     cond do
       units <= 0 -> :error
-      is_integer(max_units) and units > max_units -> :error
+      units > max_units -> :error
       true -> {:ok, units}
     end
   end
@@ -183,14 +190,26 @@ defmodule DelegatedSpend.Orders do
 
   # ── helpers ───────────────────────────────────────────────────────────────
 
-  # Returns the LOWERCASED 40-hex body; raises unless the input is 0x + 40 hex.
+  # Returns the LOWERCASED 40-hex body; rejects zero and invalid mixed-case
+  # EIP-55 checksums. Per EIP-55, uniformly lower/uppercase bodies are exempt.
   defp validate_address!("0x" <> hex, label) when byte_size(hex) == 40 do
     body = String.downcase(hex)
 
-    if Regex.match?(~r/^[0-9a-f]{40}$/, body) do
-      body
-    else
-      raise ArgumentError, "#{label}: not a hex address"
+    cond do
+      not Regex.match?(~r/^[0-9a-f]{40}$/, body) ->
+        raise ArgumentError, "#{label}: not a hex address"
+
+      body == String.duplicate("0", 40) ->
+        raise ArgumentError, "#{label}: zero address is not allowed"
+
+      hex == body or hex == String.upcase(hex) ->
+        body
+
+      Address.checksum(body) == "0x" <> hex ->
+        body
+
+      true ->
+        raise ArgumentError, "#{label}: invalid EIP-55 checksum"
     end
   end
 
