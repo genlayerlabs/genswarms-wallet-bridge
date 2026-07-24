@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Intake.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/intake.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:43:12</p></footer>
+<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/objects/spend_keeper/intake.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-24 at 19:22:45</p></footer>
 <table>
 <tbody>
 <tr>
@@ -330,12 +330,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L38"><a href="#L38">38</a></td>
-<td class="hits">36</td>
+<td class="hits">41</td>
 <td class="source"><code>    warn_missing_meta(ctx, "handle_order")</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L39"><a href="#L39">39</a></td>
-<td class="hits">36</td>
+<td class="hits">41</td>
 <td class="source"><code>    handle_order(params, %{}, ctx)</code></td>
 </tr>
 <tr>
@@ -355,7 +355,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L43"><a href="#L43">43</a></td>
-<td class="hits">87</td>
+<td class="hits">92</td>
 <td class="source"><code>    order_ref = to_string(params["order_ref"] || "")</code></td>
 </tr>
 <tr>
@@ -365,32 +365,32 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L45"><a href="#L45">45</a></td>
-<td class="hits">87</td>
+<td class="hits">92</td>
 <td class="source"><code>    with :ok &lt;- geofence(meta, ctx),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L46"><a href="#L46">46</a></td>
-<td class="hits">61</td>
+<td class="hits">66</td>
 <td class="source"><code>         :ok &lt;- pin_version(params, ctx),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L47"><a href="#L47">47</a></td>
-<td class="hits">59</td>
+<td class="hits">64</td>
 <td class="source"><code>         {:ok, user_ref} &lt;- authenticate(params, ctx, order_ref),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L48"><a href="#L48">48</a></td>
-<td class="hits">45</td>
+<td class="hits">48</td>
 <td class="source"><code>         :ok &lt;- allow(ctx, user_ref),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L49"><a href="#L49">49</a></td>
-<td class="hits">44</td>
+<td class="hits">47</td>
 <td class="source"><code>         {:ok, terms} &lt;- terms_state(ctx, user_ref) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L50"><a href="#L50">50</a></td>
-<td class="hits">31</td>
+<td class="hits">34</td>
 <td class="source"><code>      case Keeper.fetch_order(ctx.keeper, order_ref, user_ref) do</code></td>
 </tr>
 <tr>
@@ -400,7 +400,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L52"><a href="#L52">52</a></td>
-<td class="hits">28</td>
+<td class="hits">29</td>
 <td class="source"><code>          if expired_user_tx?(view) do</code></td>
 </tr>
 <tr>
@@ -415,12 +415,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L55"><a href="#L55">55</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>            terms_required? = terms != nil &amp;&amp; terms["required"] == true</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L56"><a href="#L56">56</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>            display = stringify(view.display)</code></td>
 </tr>
 <tr>
@@ -430,12 +430,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L58"><a href="#L58">58</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>            display =</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L59"><a href="#L59">59</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>              if terms_required? &amp;&amp; is_map(display),</code></td>
 </tr>
 <tr class="hit">
@@ -445,7 +445,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L61"><a href="#L61">61</a></td>
-<td class="hits">22</td>
+<td class="hits">23</td>
 <td class="source"><code>                else: display</code></td>
 </tr>
 <tr>
@@ -455,27 +455,27 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L63"><a href="#L63">63</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>            base = %{</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L64"><a href="#L64">64</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>              "order_ref" =&gt; view.order_ref,</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L65"><a href="#L65">65</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>              "kind" =&gt; view.kind,</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L66"><a href="#L66">66</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>              "amount" =&gt; view.amount,</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L67"><a href="#L67">67</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>              "expires_at" =&gt; view.expires_at,</code></td>
 </tr>
 <tr>
@@ -495,7 +495,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L71"><a href="#L71">71</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>              "chain_id" =&gt; view.chain_id,</code></td>
 </tr>
 <tr>
@@ -530,7 +530,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L78"><a href="#L78">78</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>            base =</code></td>
 </tr>
 <tr>
@@ -540,7 +540,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L80"><a href="#L80">80</a></td>
-<td class="hits">25</td>
+<td class="hits">26</td>
 <td class="source"><code>                nil -&gt; base</code></td>
 </tr>
 <tr class="hit">
@@ -560,12 +560,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L84"><a href="#L84">84</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>            body =</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L85"><a href="#L85">85</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>              case view.kind do</code></td>
 </tr>
 <tr>
@@ -595,7 +595,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L91"><a href="#L91">91</a></td>
-<td class="hits">5</td>
+<td class="hits">6</td>
 <td class="source"><code>                  if terms_required?,</code></td>
 </tr>
 <tr class="hit">
@@ -605,7 +605,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L93"><a href="#L93">93</a></td>
-<td class="hits">4</td>
+<td class="hits">5</td>
 <td class="source"><code>                    else: Map.put(base, "tx", stringify(view.tx))</code></td>
 </tr>
 <tr>
@@ -650,7 +650,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L102"><a href="#L102">102</a></td>
-<td class="hits">27</td>
+<td class="hits">28</td>
 <td class="source"><code>            body = if terms, do: Map.put(body, "terms", terms), else: body</code></td>
 </tr>
 <tr>
@@ -695,7 +695,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L111"><a href="#L111">111</a></td>
-<td class="hits">56</td>
+<td class="hits">58</td>
 <td class="source"><code>      {:error, status, body} -&gt; {status, body}</code></td>
 </tr>
 <tr>
@@ -1170,12 +1170,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L206"><a href="#L206">206</a></td>
-<td class="hits">16</td>
+<td class="hits">17</td>
 <td class="source"><code>    warn_missing_meta(ctx, "handle_submitted")</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L207"><a href="#L207">207</a></td>
-<td class="hits">16</td>
+<td class="hits">17</td>
 <td class="source"><code>    handle_submitted(params, %{}, ctx)</code></td>
 </tr>
 <tr>
@@ -1195,7 +1195,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L211"><a href="#L211">211</a></td>
-<td class="hits">31</td>
+<td class="hits">32</td>
 <td class="source"><code>    order_ref = to_string(params["order_ref"] || "")</code></td>
 </tr>
 <tr>
@@ -1205,47 +1205,47 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L213"><a href="#L213">213</a></td>
-<td class="hits">31</td>
+<td class="hits">32</td>
 <td class="source"><code>    with :ok &lt;- geofence(meta, ctx),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L214"><a href="#L214">214</a></td>
-<td class="hits">26</td>
+<td class="hits">27</td>
 <td class="source"><code>         :ok &lt;- pin_version(params, ctx),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L215"><a href="#L215">215</a></td>
-<td class="hits">26</td>
+<td class="hits">27</td>
 <td class="source"><code>         {:ok, user_ref} &lt;- authenticate(params, ctx, order_ref),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L216"><a href="#L216">216</a></td>
-<td class="hits">20</td>
+<td class="hits">21</td>
 <td class="source"><code>         :ok &lt;- allow(ctx, user_ref),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L217"><a href="#L217">217</a></td>
-<td class="hits">20</td>
+<td class="hits">21</td>
 <td class="source"><code>         :ok &lt;- require_terms(ctx, user_ref),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L218"><a href="#L218">218</a></td>
-<td class="hits">19</td>
+<td class="hits">20</td>
 <td class="source"><code>         {:ok, tx_hash} &lt;- tx_hash(params["tx_hash"]),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L219"><a href="#L219">219</a></td>
-<td class="hits">16</td>
+<td class="hits">17</td>
 <td class="source"><code>         {:ok, order} &lt;- fetch_kind(ctx, order_ref, user_ref, "user_tx") do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L220"><a href="#L220">220</a></td>
-<td class="hits">13</td>
+<td class="hits">14</td>
 <td class="source"><code>      case Map.get(ctx, :submitted_fn) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L221"><a href="#L221">221</a></td>
-<td class="hits">3</td>
+<td class="hits">4</td>
 <td class="source"><code>        fun when is_function(fun, 2) -&gt; safe_submitted(fun, order.order_id, tx_hash)</code></td>
 </tr>
 <tr class="hit">
@@ -1265,7 +1265,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L225"><a href="#L225">225</a></td>
-<td class="hits">13</td>
+<td class="hits">14</td>
 <td class="source"><code>      record_event(</code></td>
 </tr>
 <tr>
@@ -1545,7 +1545,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L281"><a href="#L281">281</a></td>
-<td class="hits">93</td>
+<td class="hits">99</td>
 <td class="source"><code>    if is_map(ctx) and Map.has_key?(ctx, :compliance) do</code></td>
 </tr>
 <tr class="hit">
@@ -1605,12 +1605,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L293"><a href="#L293">293</a></td>
-<td class="hits">218</td>
+<td class="hits">224</td>
 <td class="source"><code>    case Map.fetch(ctx, :compliance) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L294"><a href="#L294">294</a></td>
-<td class="hits">89</td>
+<td class="hits">95</td>
 <td class="source"><code>      :error -&gt;</code></td>
 </tr>
 <tr>
@@ -1810,7 +1810,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L334"><a href="#L334">334</a></td>
-<td class="hits">135</td>
+<td class="hits">141</td>
 <td class="source"><code>    do: authenticate(params, ctx, ref, System.os_time(:second))</code></td>
 </tr>
 <tr>
@@ -1825,7 +1825,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L337"><a href="#L337">337</a></td>
-<td class="hits">169</td>
+<td class="hits">175</td>
 <td class="source"><code>    case {params["token"], Map.get(ctx, :token_secret)} do</code></td>
 </tr>
 <tr>
@@ -1835,17 +1835,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L339"><a href="#L339">339</a></td>
-<td class="hits">120</td>
+<td class="hits">126</td>
 <td class="source"><code>        case Token.verify(secret, ref, token, now_s) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L340"><a href="#L340">340</a></td>
-<td class="hits">110</td>
+<td class="hits">114</td>
 <td class="source"><code>          {:ok, user_ref} -&gt; {:ok, user_ref}</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L341"><a href="#L341">341</a></td>
-<td class="hits">10</td>
+<td class="hits">12</td>
 <td class="source"><code>          {:error, _reason} -&gt; {:error, 401, %{"error" =&gt; "unauthorized"}}</code></td>
 </tr>
 <tr>
@@ -1925,7 +1925,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L357"><a href="#L357">357</a></td>
-<td class="hits">141</td>
+<td class="hits">145</td>
 <td class="source"><code>    if params["v"] == version,</code></td>
 </tr>
 <tr>
@@ -1950,7 +1950,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L362"><a href="#L362">362</a></td>
-<td class="hits">8</td>
+<td class="hits">10</td>
 <td class="source"><code>  defp pin_version(_params, _ctx), do: :ok</code></td>
 </tr>
 <tr>
@@ -2225,12 +2225,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L417"><a href="#L417">417</a></td>
-<td class="hits">56</td>
+<td class="hits">57</td>
 <td class="source"><code>    case terms_state(ctx, user_ref) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L418"><a href="#L418">418</a></td>
-<td class="hits">48</td>
+<td class="hits">49</td>
 <td class="source"><code>      {:ok, nil} -&gt;</code></td>
 </tr>
 <tr>
@@ -2310,7 +2310,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L434"><a href="#L434">434</a></td>
-<td class="hits">100</td>
+<td class="hits">104</td>
 <td class="source"><code>    case ctx do</code></td>
 </tr>
 <tr>
@@ -2345,7 +2345,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L441"><a href="#L441">441</a></td>
-<td class="hits">54</td>
+<td class="hits">58</td>
 <td class="source"><code>      _ -&gt;</code></td>
 </tr>
 <tr>
@@ -2570,7 +2570,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L486"><a href="#L486">486</a></td>
-<td class="hits">6</td>
+<td class="hits">7</td>
 <td class="source"><code>  defp expired_user_tx?(%{kind: "user_tx", expires_at: exp}), do: System.os_time(:second) &gt; exp</code></td>
 </tr>
 <tr class="hit">
@@ -2625,7 +2625,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L497"><a href="#L497">497</a></td>
-<td class="hits">26</td>
+<td class="hits">27</td>
 <td class="source"><code>    case Keeper.fetch_order_full(ctx.keeper, ref, user_ref) do</code></td>
 </tr>
 <tr>
@@ -2650,7 +2650,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L502"><a href="#L502">502</a></td>
-<td class="hits">23</td>
+<td class="hits">24</td>
 <td class="source"><code>        if System.os_time(:second) &gt; order.expires_at,</code></td>
 </tr>
 <tr class="hit">
@@ -2800,7 +2800,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L532"><a href="#L532">532</a></td>
-<td class="hits">17</td>
+<td class="hits">18</td>
 <td class="source"><code>    if Regex.match?(~r/^[0-9a-fA-F]+$/, hex),</code></td>
 </tr>
 <tr>
@@ -2845,12 +2845,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L541"><a href="#L541">541</a></td>
-<td class="hits">3</td>
+<td class="hits">4</td>
 <td class="source"><code>  defp safe_submitted(fun, order_id, tx_hash) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L542"><a href="#L542">542</a></td>
-<td class="hits">3</td>
+<td class="hits">4</td>
 <td class="source"><code>    fun.(order_id, tx_hash)</code></td>
 </tr>
 <tr>
@@ -2925,12 +2925,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L557"><a href="#L557">557</a></td>
-<td class="hits">56</td>
+<td class="hits">57</td>
 <td class="source"><code>  defp record_event(ctx, user_ref, kind, wallet, order_ref, meta) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L558"><a href="#L558">558</a></td>
-<td class="hits">56</td>
+<td class="hits">57</td>
 <td class="source"><code>    event = %{</code></td>
 </tr>
 <tr>
@@ -2975,7 +2975,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L567"><a href="#L567">567</a></td>
-<td class="hits">56</td>
+<td class="hits">57</td>
 <td class="source"><code>    case ctx do</code></td>
 </tr>
 <tr>
@@ -2995,7 +2995,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L571"><a href="#L571">571</a></td>
-<td class="hits">34</td>
+<td class="hits">35</td>
 <td class="source"><code>      _ -&gt;</code></td>
 </tr>
 <tr>
@@ -3045,7 +3045,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L581"><a href="#L581">581</a></td>
-<td class="hits">33</td>
+<td class="hits">35</td>
 <td class="source"><code>    do: Map.new(map, fn {k, v} -&gt; {to_string(k), stringify(v)} end)</code></td>
 </tr>
 <tr>
@@ -3060,7 +3060,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L584"><a href="#L584">584</a></td>
-<td class="hits">22</td>
+<td class="hits">25</td>
 <td class="source"><code>  defp stringify(other), do: other</code></td>
 </tr>
 <tr>
@@ -3070,7 +3070,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L586"><a href="#L586">586</a></td>
-<td class="hits">103</td>
+<td class="hits">107</td>
 <td class="source"><code>  defp allow(ctx, user_ref), do: allow(ctx, user_ref, System.os_time(:second))</code></td>
 </tr>
 <tr>
@@ -3110,7 +3110,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L594"><a href="#L594">594</a></td>
-<td class="hits">1</td>
+<td class="hits">5</td>
 <td class="source"><code>  defp allow(_ctx, _user_ref, _now_s), do: :ok</code></td>
 </tr>
 <tr>

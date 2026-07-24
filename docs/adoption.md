@@ -82,6 +82,23 @@ or order result, key your own state by `bind_ref` or `order_ref` at mint time.
 The callbacks return those refs; they will never get a platform id back out of
 `user_ref`.
 
+Since 0.7.0 the package ships the consumer glue this section used to make
+every host write by hand — reach for these before writing your own:
+
+- `DelegatedSpend.Orders` builds the pieces above: `erc20_transfer_order/3`
+  (the `user_tx` tx map), `parse_token_amount/3` / `format_units/2`
+  (integer-only amount handling with a caller-stated cap),
+  `mint_order_ref/0` (the caller-minted ref for the object door), and
+  `user_ref/2` — which REQUIRES a non-empty salt, because an unsalted hash
+  of an enumerable platform-id space is offline-reversible.
+- `DelegatedSpend.Intake.Plug` (optional `plug` dep) is the mountable HTTP
+  surface: packaged dapp statics, host-overridden `config.json`, and the
+  `POST <intakeUrl>/orders` / `/orders/submitted` routes over these pure
+  handlers, with body caps and fail-closed auth shape checks.
+- `swarm-object.json` at the repo root is the engine loader entry for
+  `DelegatedSpend.Keeper.Object` — point your swarm config at it instead of
+  hand-rolling the file list.
+
 ---
 
 ## 1. The concrete router

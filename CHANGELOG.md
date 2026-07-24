@@ -19,6 +19,39 @@ package releases can ship zero contract bytecode changes. `scripts/check-version
   introspection view and the keeper's grant registry stores delegation
   grants, but no redemption path exists yet.
 
+## [0.7.0] - 2026-07-24
+
+Consumer-helpers release: the generic glue every adopting host was
+reinventing moves into the package. No Solidity bytes changed;
+`CONTRACT_VERSION` remains `0.2.0`.
+
+### Added
+
+- **`DelegatedSpend.Orders`** — order-building helpers for the `user_tx`
+  lane: `erc20_transfer_order/3` / `transfer_calldata/2` (the exact tx shape
+  `register_order` kind `"user_tx"` validates; raises on malformed
+  addresses), `parse_token_amount/3` (integer-only, decimals-bounded,
+  caller-stated `:max_units` cap — no business default), `format_units/2`,
+  `mint_order_ref/0` (the keeper's caller-minted 64-lowercase-hex shape),
+  and `user_ref/2` with a REQUIRED non-empty salt. The salt requirement
+  fixes a known weakness in the reference consumer implementation: unsalted
+  refs over enumerable platform-id spaces are offline-reversible.
+- **`DelegatedSpend.Intake.Plug`** — a mountable HTTP surface over the pure
+  intake handlers: packaged `webapp/` statics (traversal-guarded),
+  `GET /config.json` from the host-provided map (case-insensitively matched
+  — the `/Config.json` stale-pin bypass in the reference implementation is
+  not reproducible here), `POST <intakeUrl>/orders` and
+  `POST <intakeUrl>/orders/submitted` with capped raw bodies (413 oversize,
+  400 bad JSON, 401 before any work without a verifiable credential shape,
+  500/503 on handler raise/exit — never a crash). `plug ~> 1.15` is a new
+  OPTIONAL dependency; without it the module compiles to nothing and
+  existing consumers are untouched.
+- **`swarm-object.json`** — the engine loader entry file
+  (`DelegatedSpend.Keeper.Object` + dependency-ordered source list) the
+  notarized tree previously lacked; consumers no longer hand-roll it.
+  `objects/spend_keeper/intake/plug.ex` is deliberately not listed (host
+  plane, optional dep).
+
 ## [0.6.0] - 2026-07-21
 
 Geofence-blocklist release. No Solidity bytes changed; `CONTRACT_VERSION`
