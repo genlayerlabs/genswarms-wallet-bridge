@@ -1,9 +1,11 @@
 defmodule DelegatedSpend.Intake.PlugTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
   import Plug.Test
   import Plug.Conn, only: [put_req_header: 3]
 
+  alias DelegatedSpend.Compliance.MemoryStore, as: ComplianceStore
   alias DelegatedSpend.Intake.Plug, as: IntakePlug
   alias DelegatedSpend.Intake.Token
   alias DelegatedSpend.Keeper
@@ -65,6 +67,7 @@ defmodule DelegatedSpend.Intake.PlugTest do
     token = Token.mint(@secret, order_ref, user_ref, System.os_time(:second) + 900)
 
     %{
+      ctx: ctx,
       opts: IntakePlug.init(ctx: ctx, config: @config),
       order_ref: order_ref,
       user_ref: user_ref,
@@ -106,8 +109,28 @@ defmodule DelegatedSpend.Intake.PlugTest do
       assert IntakePlug.call(conn(:get, "/../mix.exs"), opts).status == 404
       assert IntakePlug.call(conn(:get, "/../webapp/../mix.exs"), opts).status == 404
       assert IntakePlug.call(conn(:get, "/../test/orders_test.exs"), opts).status == 404
+
       assert IntakePlug.call(conn(:get, "/lib/../../objects/spend_keeper/orders.ex"), opts).status ==
                404
+    end
+
+    test "a symlink to an allowlisted file outside webapp_dir is 404" do
+      tmp =
+        Path.join(System.tmp_dir!(), "dsp-plug-symlink-#{System.unique_integer([:positive])}")
+
+      webapp = Path.join(tmp, "webapp")
+      outside = Path.join(tmp, "outside")
+      File.mkdir_p!(webapp)
+      File.mkdir_p!(outside)
+      File.write!(Path.join(outside, "secret.mjs"), "outside secret")
+      File.ln_s!(Path.join(outside, "secret.mjs"), Path.join(webapp, "escape.mjs"))
+      on_exit(fn -> File.rm_rf(tmp) end)
+
+      opts = IntakePlug.init(ctx: %{}, config: @config, webapp_dir: webapp)
+      conn = IntakePlug.call(conn(:get, "/escape.mjs"), opts)
+
+      assert conn.status == 404
+      refute conn.resp_body =~ "outside secret"
     end
   end
 
@@ -139,7 +162,7 @@ defmodule DelegatedSpend.Intake.PlugTest do
   end
 
   describe "POST /spend/orders" do
-    test "round-trips a registered user_tx order", ctx do
+    test "round-trips a registered user_tx order with compliance off", ctx do
       body =
         Jason.encode!(%{"order_ref" => ctx.order_ref, "token" => ctx.token, "v" => "test-v"})
 
@@ -216,15 +239,62 @@ defmodule DelegatedSpend.Intake.PlugTest do
       assert json(conn) == %{"error" => "unavailable"}
     end
 
-    @tag capture_log: true
-    test "a raising handler answers 500, never a crash", ctx do
+    test "a raising handler answers 500 without exposing secret material", ctx do
       # ctx without :keeper makes the pure handler raise (KeyError) after auth
-      opts = IntakePlug.init(ctx: %{token_secret: @secret}, config: @config)
+      secret = "handler-crash-secret-#{System.unique_integer([:positive])}"
+      token = Token.mint(secret, ctx.order_ref, ctx.user_ref, 4_000_000_000)
+      opts = IntakePlug.init(ctx: %{token_secret: secret}, config: @config)
 
-      body = Jason.encode!(%{"order_ref" => ctx.order_ref, "token" => ctx.token})
-      conn = post_json("/spend/orders", body, opts)
+      body = Jason.encode!(%{"order_ref" => ctx.order_ref, "token" => token})
+      parent = self()
+
+      log =
+        capture_log(fn ->
+          send(parent, {:crash_response, post_json("/spend/orders", body, opts)})
+        end)
+
+      assert_receive {:crash_response, conn}
       assert conn.status == 500
       assert json(conn) == %{"error" => "internal"}
+      refute log =~ secret
+      refute log =~ token
+      refute conn.resp_body =~ secret
+      refute conn.resp_body =~ token
+    end
+
+    test "compliance-on requests receive trusted metadata instead of a spurious 451", ctx do
+      compliance_store = ComplianceStore.start()
+
+      compliance_ctx =
+        Map.put(ctx.ctx, :compliance, %{
+          geo_block: ["CU"],
+          store: {ComplianceStore, compliance_store}
+        })
+
+      opts =
+        IntakePlug.init(
+          ctx: compliance_ctx,
+          config: @config,
+          trusted_hops: 1,
+          country_header: "x-geo-country"
+        )
+
+      body =
+        Jason.encode!(%{"order_ref" => ctx.order_ref, "token" => ctx.token, "v" => "test-v"})
+
+      conn =
+        :post
+        |> conn("/spend/orders", body)
+        |> Map.put(:remote_ip, {10, 0, 0, 1})
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("x-forwarded-for", "203.0.113.9")
+        |> put_req_header("x-geo-country", "US")
+        |> put_req_header("user-agent", "wallet-plug-test/1.0")
+        |> put_req_header("cookie", "spend_session=session-1")
+        |> IntakePlug.call(opts)
+
+      assert conn.status == 200
+      refute json(conn) == %{"error" => "geo_blocked"}
     end
   end
 
@@ -244,6 +314,59 @@ defmodule DelegatedSpend.Intake.PlugTest do
       assert conn.status == 200
       assert json(conn) == %{"status" => "noted"}
       assert_receive {:submitted, "0x" <> _, ^tx_hash}
+    end
+
+    test "passes IP, headers, country, and session metadata to compliance handlers", ctx do
+      compliance_store = ComplianceStore.start()
+
+      compliance_ctx =
+        Map.put(ctx.ctx, :compliance, %{
+          geo_block: ["CU"],
+          store: {ComplianceStore, compliance_store}
+        })
+
+      opts =
+        IntakePlug.init(
+          ctx: compliance_ctx,
+          config: @config,
+          trusted_hops: 1,
+          country_header: "x-geo-country"
+        )
+
+      tx_hash = "0x" <> String.duplicate("cd", 32)
+
+      body =
+        Jason.encode!(%{
+          "order_ref" => ctx.order_ref,
+          "token" => ctx.token,
+          "v" => "test-v",
+          "tx_hash" => tx_hash
+        })
+
+      conn =
+        :post
+        |> conn("/spend/orders/submitted", body)
+        |> Map.put(:remote_ip, {10, 0, 0, 1})
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("x-forwarded-for", "203.0.113.9")
+        |> put_req_header("x-geo-country", "us")
+        |> put_req_header("user-agent", "wallet-plug-test/1.0")
+        |> put_req_header("cookie", "spend_session=session-1")
+        |> IntakePlug.call(opts)
+
+      assert conn.status == 200
+
+      assert [
+               %{
+                 kind: "tx_submitted",
+                 meta: %{
+                   ip: "203.0.113.9",
+                   country: "US",
+                   user_agent: "wallet-plug-test/1.0",
+                   session_id: "session-1"
+                 }
+               }
+             ] = ComplianceStore.events_for(compliance_store, ctx.user_ref)
     end
   end
 

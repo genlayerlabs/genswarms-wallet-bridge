@@ -28,8 +28,9 @@ if Code.ensure_loaded?(Plug.Conn) do
         stale-pin file on a case-insensitive filesystem,
       * `POST <intakeUrl>/orders` and `POST <intakeUrl>/orders/submitted`
         (the two routes the dapp's `user_tx` flow calls) — thin JSON
-        adapters over `DelegatedSpend.Intake.handle_order/2` and
-        `handle_submitted/2` with the host `:ctx`. Bodies are read raw and
+        adapters over `DelegatedSpend.Intake.handle_order/3` and
+        `handle_submitted/3` with trusted request metadata and the host
+        `:ctx`. Bodies are read raw and
         capped (413 oversize, 400 bad JSON — never a crash); requests
         without a usable credential shape are refused 401 before any
         handler work.
@@ -44,6 +45,11 @@ if Code.ensure_loaded?(Plug.Conn) do
         config and the mounted routes can never disagree.
       * `:ctx` — the ctx map for the pure Intake handlers (`token_secret`,
         `keeper`, `pinned`, optional `submitted_fn`/`compliance`…).
+      * `:trusted_hops`, `:country_header`, `:session_cookie` — passed to
+        `DelegatedSpend.Compliance.Meta.build/4`. `trusted_hops` defaults to
+        `0`, `country_header` to none, and `session_cookie` to
+        `"spend_session"`; deployments enabling compliance must name the
+        country header their trusted edge overwrites.
       * `:body_limit` — request-body cap in bytes (default 65_536).
       * `:webapp_dir` — override the served statics dir. By default the
         package's own `webapp/` is resolved from THIS source file's
@@ -59,6 +65,8 @@ if Code.ensure_loaded?(Plug.Conn) do
     import Plug.Conn
 
     require Logger
+
+    alias DelegatedSpend.Compliance.Meta
 
     # put_resp_content_type appends "; charset=utf-8" itself — plain types.
     @content_types %{
@@ -92,6 +100,11 @@ if Code.ensure_loaded?(Plug.Conn) do
         config: config,
         body_limit: Map.get(opts, :body_limit, @default_body_limit),
         webapp_dir: Path.expand(Map.get(opts, :webapp_dir) || @default_webapp_dir),
+        meta_opts: [
+          trusted_hops: Map.get(opts, :trusted_hops, 0),
+          country_header: Map.get(opts, :country_header),
+          session_cookie: Map.get(opts, :session_cookie, "spend_session")
+        ],
         intake: intake_segments(config)
       }
     end
@@ -103,10 +116,10 @@ if Code.ensure_loaded?(Plug.Conn) do
           serve_webapp(conn, "index.html", opts)
 
         conn.method == "POST" and conn.path_info == opts.intake ++ ["orders"] ->
-          handle_intake(conn, &DelegatedSpend.Intake.handle_order/2, opts)
+          handle_intake(conn, &DelegatedSpend.Intake.handle_order/3, opts)
 
         conn.method == "POST" and conn.path_info == opts.intake ++ ["orders", "submitted"] ->
-          handle_intake(conn, &DelegatedSpend.Intake.handle_submitted/2, opts)
+          handle_intake(conn, &DelegatedSpend.Intake.handle_submitted/3, opts)
 
         conn.method == "GET" ->
           serve_webapp(conn, Enum.join(conn.path_info, "/"), opts)
@@ -122,18 +135,21 @@ if Code.ensure_loaded?(Plug.Conn) do
     # MatchError on {:more, …}, crashing the request process and logging
     # attacker-controlled body fragments.
     defp handle_intake(conn, handler, opts) do
+      conn = fetch_cookies(conn)
+      meta = Meta.build(conn.remote_ip, conn.req_headers, conn.req_cookies, opts.meta_opts)
+
       case read_body(conn, length: opts.body_limit) do
-        {:ok, raw, conn} -> handle_intake_body(conn, handler, raw, opts)
+        {:ok, raw, conn} -> handle_intake_body(conn, handler, raw, meta, opts)
         {:more, _partial, conn} -> json_resp(conn, 413, %{"error" => "payload_too_large"})
         {:error, _reason} -> json_resp(conn, 400, %{"error" => "bad_request"})
       end
     end
 
-    defp handle_intake_body(conn, handler, raw, opts) do
+    defp handle_intake_body(conn, handler, raw, meta, opts) do
       case Jason.decode(raw) do
         {:ok, params} when is_map(params) ->
           if credential_shape?(params, opts.ctx) do
-            {status, body} = run_handler(handler, params, opts.ctx)
+            {status, body} = run_handler(handler, params, meta, opts.ctx)
             json_resp(conn, status, body)
           else
             json_resp(conn, 401, %{"error" => "unauthorized"})
@@ -157,15 +173,15 @@ if Code.ensure_loaded?(Plug.Conn) do
 
     # A dead/absent keeper EXITS the caller (:noproc) rather than raising —
     # catch both and answer without ever echoing request contents.
-    defp run_handler(handler, params, ctx) do
-      handler.(params, ctx)
+    defp run_handler(handler, params, meta, ctx) do
+      handler.(params, meta, ctx)
     rescue
-      e ->
-        Logger.warning("DelegatedSpend.Intake.Plug: handler raised #{Exception.message(e)}")
+      _ ->
+        Logger.warning("DelegatedSpend.Intake.Plug: handler raised")
         {500, %{"error" => "internal"}}
     catch
-      kind, reason ->
-        Logger.warning("DelegatedSpend.Intake.Plug: handler #{kind}: #{inspect(reason)}")
+      _, _ ->
+        Logger.warning("DelegatedSpend.Intake.Plug: handler exited")
         {503, %{"error" => "unavailable"}}
     end
 
@@ -193,8 +209,49 @@ if Code.ensure_loaded?(Plug.Conn) do
         not File.regular?(full) ->
           send_resp(conn, 404, "")
 
+        not canonical_descendant?(full, dir) ->
+          send_resp(conn, 404, "")
+
         true ->
           conn |> put_resp_content_type(ctype) |> send_file(200, full)
+      end
+    end
+
+    defp canonical_descendant?(path, dir) do
+      with {:ok, real_path} <- canonical_path(path),
+           {:ok, real_dir} <- canonical_path(dir) do
+        String.starts_with?(real_path, real_dir <> "/")
+      else
+        _ -> false
+      end
+    end
+
+    # Elixir 1.14 has no File.realpath/1. Resolve every existing path component,
+    # restarting after each link so relative targets and links inside links are
+    # handled before the containment check.
+    defp canonical_path(path), do: resolve_segments(Path.split(Path.expand(path)), 0)
+
+    defp resolve_segments([root | segments], links),
+      do: resolve_segments(root, segments, links)
+
+    defp resolve_segments(resolved, [], _links), do: {:ok, resolved}
+
+    defp resolve_segments(resolved, [segment | rest], links) do
+      candidate = Path.join(resolved, segment)
+
+      case File.read_link(candidate) do
+        {:ok, target} when links < 40 ->
+          target = Path.expand(target, resolved)
+          resolve_segments(Path.split(Path.join([target | rest])), links + 1)
+
+        {:ok, _target} ->
+          {:error, :too_many_symlinks}
+
+        {:error, :einval} ->
+          resolve_segments(candidate, rest, links)
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
 
