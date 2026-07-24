@@ -26,7 +26,11 @@ defmodule GenswarmsDelegatedSpend.MixProject do
     [
       {:ex_abi, "~> 0.8"},
       {:ex_rlp, "~> 0.6"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      # Optional: only needed by consumers that mount DelegatedSpend.Intake.Plug
+      # (the module compiles to nothing when plug is absent). Optional deps are
+      # still fetched for the package itself, so its own tests exercise it.
+      {:plug, "~> 1.15", optional: true}
     ]
   end
 end
