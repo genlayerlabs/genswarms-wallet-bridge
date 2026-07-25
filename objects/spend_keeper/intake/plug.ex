@@ -26,14 +26,36 @@ if Code.ensure_loaded?(Plug.Conn) do
         case-insensitively against the resolved path so no spelling
         (`/Config.json`, `/./config.json`) can reach the package's static
         stale-pin file on a case-insensitive filesystem,
-      * `POST <intakeUrl>/orders` and `POST <intakeUrl>/orders/submitted`
-        (the two routes the dapp's `user_tx` flow calls) — thin JSON
-        adapters over `DelegatedSpend.Intake.handle_order/3` and
-        `handle_submitted/3` with trusted request metadata and the host
-        `:ctx`. Bodies are read raw and
+      * `POST <intakeUrl>/orders`, `POST <intakeUrl>/orders/submitted` and
+        `POST <intakeUrl>/terms` (every route the dapp's `user_tx` flow
+        calls) — thin JSON adapters over `DelegatedSpend.Intake
+        .handle_order/3`, `handle_submitted/3` and `handle_terms/3` with
+        trusted request metadata and the host `:ctx`. Bodies are read raw and
         capped (413 oversize, 400 bad JSON — never a crash); requests
         without a usable credential shape are refused 401 before any
         handler work.
+
+    ## Scope: the user_tx lane, terms included
+
+    `/terms` is routed because it is not optional decoration: with
+    `ctx.compliance` configured, `handle_order/3` WITHHOLDS the executable
+    `tx` and `handle_submitted/3` answers `428 terms_required` until the
+    current terms are accepted, and the dapp accepts them by POSTing
+    `<intakeUrl>/terms` (`webapp/lib/flow.mjs`). A plug that takes the
+    compliance options but does not route that answer gives every
+    compliance-enabled consumer a permanently bricked lane — the order view
+    withholds `tx` forever and nothing can ever accept the terms. Routed
+    unconditionally: when the host configures no `:compliance`, the pure
+    handler is the authority and answers `503 unavailable` (there is nothing
+    to accept), which is why this needs no branch on the ctx.
+
+    The GRANT lane (`POST /grants`, `POST /wallet` —
+    `DelegatedSpend.Intake.handle_grant/3` and `handle_wallet/3`) is
+    deliberately NOT routed here. It needs a keeper configured with a signer,
+    a router and an action ABI, plus a host-owned `wallet_fn`, i.e. a
+    different deployment shape with its own decisions to make; a host running
+    that lane mounts its own router or forwards those two paths. This plug is
+    the user_tx/bind-read surface.
 
     ## Init opts
 
@@ -120,6 +142,11 @@ if Code.ensure_loaded?(Plug.Conn) do
 
         conn.method == "POST" and conn.path_info == opts.intake ++ ["orders", "submitted"] ->
           handle_intake(conn, &DelegatedSpend.Intake.handle_submitted/3, opts)
+
+        # The compliance answer to a 428 from either route above. Without it a
+        # compliance-enabled consumer's lane can never be un-gated.
+        conn.method == "POST" and conn.path_info == opts.intake ++ ["terms"] ->
+          handle_intake(conn, &DelegatedSpend.Intake.handle_terms/3, opts)
 
         conn.method == "GET" ->
           serve_webapp(conn, Enum.join(conn.path_info, "/"), opts)
