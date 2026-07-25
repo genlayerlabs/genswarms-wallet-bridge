@@ -179,7 +179,12 @@ defmodule DelegatedSpend.OrdersTest do
             "01",
             "00",
             "00.1",
-            "00.5"
+            "00.5",
+            # PCRE `$` matches before a final newline — the anchor is \z, so
+            # the contract's "surrounding whitespace" promise holds here too.
+            "5\n",
+            "2.5\n",
+            "\n5"
           ] do
         assert Orders.parse_token_amount(text, 6, max_units: @max_units) == :error,
                "expected #{inspect(text)} -> :error"

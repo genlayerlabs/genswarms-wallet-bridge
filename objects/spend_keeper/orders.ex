@@ -97,7 +97,11 @@ defmodule DelegatedSpend.Orders do
       raise ArgumentError, "parse_token_amount: max_units must be a positive integer"
     end
 
-    case Regex.run(~r/^(0|[1-9]\d*)(?:\.(\d+))?$/, text) do
+    # \z, not $: PCRE's `$` matches before a FINAL NEWLINE, so `"5\n"` would
+    # parse as 5 despite the contract above promising :error for surrounding
+    # whitespace. A host that forwards a chat line verbatim would then have a
+    # trailing newline silently accepted on a money amount.
+    case Regex.run(~r/^(0|[1-9]\d*)(?:\.(\d+))?\z/, text) do
       [_, whole] -> to_units(whole, "", decimals, max_units)
       [_, whole, frac] -> to_units(whole, frac, decimals, max_units)
       _ -> :error
