@@ -21,6 +21,7 @@
     "objects/spend_keeper/intake/telegram_auth.ex",
     "objects/spend_keeper/intake/grant_validation.ex",
     "objects/spend_keeper/intake.ex",
+    "objects/spend_keeper/intake/plug.ex",
     "objects/spend_keeper/orders.ex",
     "objects/spend_keeper/boot_check.ex",
     "objects/spend_keeper/object.ex"
