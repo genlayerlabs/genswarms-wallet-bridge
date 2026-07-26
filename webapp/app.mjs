@@ -30,6 +30,7 @@ export const MESSAGES = {
   config_drift: "This page's configuration is out of date (wrong network). Ask the operator to redeploy the wallet app.",
   geo_blocked: "This service isn't available in your region.",
   terms_stale: "The terms were updated — please review and accept the new version.",
+  authorization_unavailable: "This payment link isn't active — please ask for a new one.",
 };
 
 function showManual(order, get = $) {
@@ -48,7 +49,7 @@ function enterGeoDeadState(target, get = $) {
   paintStatus(target, MESSAGES.geo_blocked, "error");
 }
 
-export function showTermsPrompt(deps, { account, terms, ref, retry }, get = $, acceptFn = acceptTerms) {
+export function showTermsPrompt(deps, { account, terms, ref, retry, renderSummary }, get = $, acceptFn = acceptTerms) {
   const box = get("terms");
   const button = get("terms-accept");
   const pay = get("pay");
@@ -98,6 +99,12 @@ export function showTermsPrompt(deps, { account, terms, ref, retry }, get = $, a
         return;
       }
       if (refreshed.ok) showManual(refreshed.order, get);
+      // N1 fix: the enriched order is exactly what just arrived from the
+      // re-fetch above — recompose the summary from it BEFORE retry() can
+      // reach the signing step, so a lane whose summary depends on
+      // server-served fields (destination, amount) never signs while still
+      // showing the terms-pending copy. No-op for lanes that don't need it.
+      if (refreshed.ok && typeof renderSummary === "function") renderSummary(refreshed.order);
       box.hidden = true;
       pay.hidden = false;
       await retry(refreshed);
@@ -176,21 +183,25 @@ async function main() {
 // dead-state pattern: hide #pay, stamp the error. The re-check inside each
 // pay path is the load-bearing one (accounts change mid-session); this
 // load-time pass and the accountsChanged listener just surface it early.
-function blockWrongWallet(expected) {
-  $("pay").hidden = true;
-  paintStatus($("status"), wrongWalletMessage(expected), "error");
+// `get` defaults to the real DOM accessor (M9: threaded through so lanes that
+// pass their own `get` — e.g. setupAuthorization's fake-DOM tests — can reach
+// this branch too; production is unaffected since every existing caller keeps
+// the default).
+function blockWrongWallet(expected, get = $) {
+  get("pay").hidden = true;
+  paintStatus(get("status"), wrongWalletMessage(expected), "error");
 }
 
-async function enforceOwnerAtLoad(deps, order) {
+async function enforceOwnerAtLoad(deps, order, get = $) {
   if (!order.expected_owner) return true;
   if (typeof deps.provider.on === "function") {
     deps.provider.on("accountsChanged", (accounts) => {
-      if (ownerMismatch(order, accounts && accounts[0])) blockWrongWallet(order.expected_owner);
+      if (ownerMismatch(order, accounts && accounts[0])) blockWrongWallet(order.expected_owner, get);
     });
   }
   const conn = await connectWallet(deps).catch(() => ({ ok: false }));
   if (conn.ok && ownerMismatch(order, conn.account)) {
-    blockWrongWallet(order.expected_owner);
+    blockWrongWallet(order.expected_owner, get);
     return false;
   }
   return true; // connect refusals stay non-fatal — the pay path re-checks
@@ -245,13 +256,41 @@ async function setupPermit(deps, order, orderRef, tg) {
 // `get` defaults to the real DOM accessor and is threaded through (instead
 // of the module-level `$`) so this function is unit-testable with a fake
 // DOM — see webapp/tools/app.test.mjs.
-export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
+//
+// (review N1) The destination line only means anything once `order.to` is
+// actually present, and that happens at TWO points in time: first paint when
+// terms are already accepted, and — for a first-time user — right after
+// `showTermsPrompt`'s post-acceptance re-fetch. Both call the same
+// `authorizationSummaryText`, so the promised copy ("accept the terms to see
+// the destination and pay") is never left stale once it has been kept.
+function authorizationSummaryText(deps, order) {
   const amount = (order.amount / 1_000_000).toFixed(2);
-  get("summary").textContent = termsRequired(order)
+  return termsRequired(order)
     ? `${deps.config.actionLabel}: ${amount} USDC — accept the terms to see the destination and pay.`
     : `${deps.config.actionLabel}: ${amount} USDC to ${shortAddress(order.to)} ` +
       `(gasless — the operator pays network fees).`;
-  if (!(await enforceOwnerAtLoad(deps, order))) return;
+}
+
+// (review N2) `to`/`domain`/`nonce` are withheld ONLY while the current terms
+// are unaccepted (see above). If they are missing for any OTHER reason — a
+// config-drifted restart that lands the keeper back on a permit-only build is
+// the proven case (probe P8) — `shortAddress`'s falsy guard would otherwise
+// render a fabricated destination ("to an address") with pay enabled, walking
+// the user into a wallet prompt for structurally invalid typed data
+// (`domain: undefined`). An honest failure beats a plausible page.
+function authorizationEnrichmentMissing(order) {
+  return !termsRequired(order) && (!order.to || !order.domain || !order.nonce);
+}
+
+export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
+  if (authorizationEnrichmentMissing(order)) {
+    get("pay").hidden = true;
+    paintStatus(get("summary"), MESSAGES.authorization_unavailable, "error");
+    return;
+  }
+
+  get("summary").textContent = authorizationSummaryText(deps, order);
+  if (!(await enforceOwnerAtLoad(deps, order, get))) return;
   get("pay").disabled = false;
 
   const run = async (fetched) => {
@@ -263,9 +302,21 @@ export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
       paintStatus(get("status"), "Payment submitted ✓ — you can return to the chat.", "success");
       if (tg) setTimeout(() => tg.close(), 1500);
     } else if (result.reason === "wrong_wallet") {
-      blockWrongWallet(result.expected);
+      blockWrongWallet(result.expected, get);
     } else if (result.reason === "terms_required") {
-      showTermsPrompt(deps, { account: result.account, terms: result.terms, ref: orderRef, retry: run }, get);
+      showTermsPrompt(
+        deps,
+        {
+          account: result.account,
+          terms: result.terms,
+          ref: orderRef,
+          retry: run,
+          renderSummary: (refreshedOrder) => {
+            get("summary").textContent = authorizationSummaryText(deps, refreshedOrder);
+          },
+        },
+        get
+      );
     } else if (result.reason === "geo_blocked") {
       enterGeoDeadState(get("status"), get);
     } else {

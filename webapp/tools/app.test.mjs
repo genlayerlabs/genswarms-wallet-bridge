@@ -9,7 +9,7 @@ const HASH = "0x" + "11".repeat(32);
 
 function fakeDom() {
   const elements = {
-    summary: { textContent: "" },
+    summary: { textContent: "", dataset: {} },
     terms: { hidden: true },
     "terms-link": { href: "" },
     "terms-accept": { disabled: false, onclick: null },
@@ -24,8 +24,8 @@ function fakeDom() {
 
 function mockAuthProvider(overrides = {}) {
   return {
-    request: async ({ method }) => {
-      if (method in overrides) return overrides[method]();
+    request: async ({ method, params }) => {
+      if (method in overrides) return overrides[method](params);
       switch (method) {
         case "eth_requestAccounts":
           return [ACCOUNT];
@@ -347,6 +347,8 @@ describe("setupAuthorization (review C1)", () => {
       amount: 2_000_000,
       to: TREASURY,
       value: 2_000_000,
+      domain: { name: "USDC", version: "2", chainId: 84_532, verifyingContract: "0x000000000000000000000000000000000000aaaa" },
+      nonce: "0x" + "ab".repeat(32),
       terms: { required: false, v_hash: HASH, url: "https://example.test/terms" },
     };
     const deps = {
@@ -360,5 +362,130 @@ describe("setupAuthorization (review C1)", () => {
     assert.match(elements.summary.textContent, /2\.00 USDC/);
     assert.match(elements.summary.textContent, /0x0000…cccc/);
     assert.equal(elements.pay.disabled, false);
+  });
+
+  // Review N1: the C1 fix's own copy promises "accept the terms to see the
+  // destination and pay" on the terms-pending render, but nothing ever
+  // recomposed the summary after the terms were actually accepted — the user
+  // reached eth_signTypedData_v4 with the summary still reading the
+  // terms-pending copy. Probe C: capture #summary at the instant the wallet
+  // is asked to sign, on the accept-then-pay path.
+  test("(review N1) accepting terms then paying recomposes the summary with the destination before signing", async () => {
+    const { elements, get } = fakeDom();
+    const pending = {
+      kind: "authorization",
+      amount: 1_500_000,
+      terms: { required: true, v_hash: HASH, url: "https://example.test/terms" },
+      // value/to/domain/nonce withheld — same shape as probe P6.
+    };
+    const enriched = {
+      kind: "authorization",
+      amount: 1_500_000,
+      to: TREASURY,
+      value: 1_500_000,
+      domain: { name: "USDC", version: "2", chainId: 84_532, verifyingContract: "0x000000000000000000000000000000000000aaaa" },
+      nonce: "0x" + "ab".repeat(32),
+      valid_after: 0,
+      valid_before: 1_900_000_000,
+      token: "0x000000000000000000000000000000000000aaaa",
+      terms: { required: false, v_hash: HASH, url: "https://example.test/terms" },
+    };
+    let fetchCalls = 0;
+    const summaryAtSignTime = [];
+    const deps = {
+      provider: mockAuthProvider({
+        // eth_signTypedData_v4 fires twice on this path: once for the terms
+        // acceptance signature (primaryType "TermsAcceptance"), once for the
+        // actual money-moving signature (primaryType
+        // "TransferWithAuthorization"). Only the latter is the binding-rule
+        // moment probe-C cares about (to/value must be VISIBLE before THAT
+        // signature) — filter on typed-data shape rather than call order.
+        eth_signTypedData_v4: (params) => {
+          const typedData = JSON.parse(params[1]);
+          if (typedData.primaryType === "TransferWithAuthorization") {
+            summaryAtSignTime.push(elements.summary.textContent);
+          }
+          // Valid-shaped ECDSA sig (r + s + v=0x1c): the terms-acceptance leg
+          // of this path runs the signature through splitSignature, which
+          // rejects a v byte outside {27,28} — unlike SIG constants used
+          // elsewhere in this suite that never reach splitSignature.
+          return "0x" + "11".repeat(32) + "22".repeat(32) + "1c";
+        },
+      }),
+      config: { intakeUrl: "/spend", version: "0.5.0", chainId: 84_532, actionLabel: "Top up" },
+      fetchFn: async (url) => {
+        if (url.endsWith("/orders")) {
+          fetchCalls += 1;
+          return { status: 200, json: async () => (fetchCalls === 1 ? pending : enriched) };
+        }
+        if (url.endsWith("/terms")) {
+          return { status: 200, json: async () => ({ status: "accepted", v_hash: HASH }) };
+        }
+        if (url.endsWith("/authorization")) {
+          return { status: 200, json: async () => ({ status: "submitted", tx: "0x" + "bb".repeat(32) }) };
+        }
+        throw new Error(`unmocked fetch ${url}`);
+      },
+    };
+
+    await assert.doesNotReject(setupAuthorization(deps, pending, "oref-n1", null, get));
+    assert.match(elements.summary.textContent, /accept the terms to see the destination/);
+
+    // First pay click: terms-pending re-fetch surfaces terms_required and
+    // opens the prompt (same as the C1-era test above).
+    await assert.doesNotReject(elements.pay.onclick());
+    assert.equal(elements.terms.hidden, false);
+
+    // Accept: showTermsPrompt re-fetches (now enriched), must recompose the
+    // summary BEFORE retry() drives the signature.
+    await assert.doesNotReject(elements["terms-accept"].onclick());
+
+    assert.equal(summaryAtSignTime.length, 1, "eth_signTypedData_v4 must have been reached exactly once");
+    assert.match(summaryAtSignTime[0], /0x0000…cccc/, "destination must be visible at sign time");
+    assert.match(summaryAtSignTime[0], /1\.50 USDC/, "amount must be visible at sign time");
+    assert.doesNotMatch(summaryAtSignTime[0], /accept the terms/, "stale terms-pending copy must not survive to sign time");
+  });
+});
+
+// Review N2: `shortAddress`'s falsy guard let a disabled-lane order (no
+// enrichment, terms NOT required — e.g. a config-drifted restart that lands
+// the keeper back on a permit-only build, probe P8) render a fabricated
+// destination with pay ENABLED, walking the user into a wallet prompt for
+// structurally invalid typed data. Probe D: pay must stay disabled and the
+// signing call must be unreachable; an explicit message must render instead.
+describe("setupAuthorization (review N2)", () => {
+  test("a disabled-lane order (enrichment missing, terms not required) never enables pay", async () => {
+    const { elements, get } = fakeDom();
+    const order = {
+      kind: "authorization",
+      amount: 1_000_000,
+      terms: { required: false, v_hash: HASH, url: "https://example.test/terms" },
+      // to/value/domain/nonce intentionally ABSENT, exactly probe P8's shape,
+      // and terms.required is false — so this is NOT the C1/N1 terms-pending
+      // case; it is a broken/disabled deployment state.
+    };
+    let signAttempts = 0;
+    const deps = {
+      provider: mockAuthProvider({
+        eth_signTypedData_v4: () => {
+          signAttempts += 1;
+          // Valid-shaped ECDSA sig (r + s + v=0x1c): the terms-acceptance leg
+          // of this path runs the signature through splitSignature, which
+          // rejects a v byte outside {27,28} — unlike SIG constants used
+          // elsewhere in this suite that never reach splitSignature.
+          return "0x" + "11".repeat(32) + "22".repeat(32) + "1c";
+        },
+      }),
+      config: { intakeUrl: "/spend", version: "0.5.0", chainId: 84_532, actionLabel: "Top up" },
+      fetchFn: async () => ({ status: 200, json: async () => order }),
+    };
+
+    await assert.doesNotReject(setupAuthorization(deps, order, "oref-n2", null, get));
+
+    assert.equal(elements.pay.hidden, true, "pay must not be enabled/shown for a broken enrichment state");
+    assert.equal(elements.summary.textContent, MESSAGES.authorization_unavailable);
+    assert.equal(elements.summary.dataset.state, "error");
+    assert.equal(elements.pay.onclick, null, "no signing call must be reachable — onclick was never wired");
+    assert.equal(signAttempts, 0);
   });
 });
