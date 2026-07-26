@@ -6,12 +6,20 @@ defmodule DelegatedSpend.FakeRpc do
   """
 
   def start(config) do
-    {:ok, pid} = Agent.start_link(fn -> Map.merge(%{sent: [], receipts: %{}}, config) end)
+    {:ok, pid} =
+      Agent.start_link(fn -> Map.merge(%{sent: [], receipts: %{}, calls: []}, config) end)
+
     pid
   end
 
   def sent(pid), do: Agent.get(pid, & &1.sent) |> Enum.reverse()
   def put(pid, key, value), do: Agent.update(pid, &Map.put(&1, key, value))
+
+  # Every `eth_call_from` (the Signer's pre-broadcast simulation) recorded in
+  # order — the authorization-lane destination-guard test reads the LAST one
+  # to see the exact `{to, data}` the keeper handed to the Signer, without
+  # having to RLP-decode a fully signed transaction.
+  def calls(pid), do: Agent.get(pid, &Map.get(&1, :calls, [])) |> Enum.reverse()
 
   # ── rpc_mod interface ──────────────────────────────────────────────────────
   # Failure knobs (default off, so existing tests are unaffected):
@@ -36,11 +44,22 @@ defmodule DelegatedSpend.FakeRpc do
   def block_timestamp(pid),
     do: Agent.get(pid, &Map.get(&1, :block_timestamp, System.os_time(:second)))
 
-  def eth_call_from(pid, _from, _to, _data) do
+  def eth_call_from(pid, _from, to, data) do
+    Agent.update(pid, &%{&1 | calls: [%{to: to, data: data} | &1.calls]})
+
     case Agent.get(pid, & &1.simulate) do
       :ok -> {:ok, "0x"}
       {:revert, info} -> {:error, info}
     end
+  end
+
+  # The keeper's boot-time DOMAIN_SEPARATOR() read (authorization lane only) —
+  # a plain view call, no `from`. Defaults to a well-formed 32-byte value so a
+  # test that doesn't care about the separator still boots; set
+  # `:eth_call_result` to something short/malformed to exercise the keeper's
+  # fail-closed raise.
+  def eth_call(pid, _to, _data) do
+    Agent.get(pid, &Map.get(&1, :eth_call_result, "0x" <> String.duplicate("ab", 32)))
   end
 
   def send_raw(pid, raw) do

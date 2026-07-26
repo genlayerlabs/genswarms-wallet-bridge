@@ -65,6 +65,15 @@ defmodule DelegatedSpend.Keeper do
   def execute_with_permit(keeper, order_ref, user_ref, permit),
     do: GenServer.call(keeper, {:execute, order_ref, user_ref, permit}, 60_000)
 
+  @doc """
+  The EIP-3009 sibling of `execute_with_permit/4`. `auth` is
+  `%{from:, value:, valid_after:, valid_before:, signature:}` — note there is
+  no `to`: the destination is the keeper's own `:treasury_address`, never a
+  client-supplied field (see `execute_authorization_consumed/3`).
+  """
+  def execute_with_authorization(keeper, order_ref, user_ref, auth),
+    do: GenServer.call(keeper, {:execute_authorization, order_ref, user_ref, auth}, 60_000)
+
   def order_status(keeper, order_id), do: GenServer.call(keeper, {:order_status, order_id})
 
   @doc "Clear a suspended grant's revert backoff (the wallet dapp re-enable path)."
@@ -80,8 +89,32 @@ defmodule DelegatedSpend.Keeper do
 
   @impl true
   def init(opts) do
+    # Authorization lane config (EIP-3009). Both optional and gated on
+    # `:token_address`: a permit-only deployment has no EIP-3009 token and
+    # often no RPC wired at all (see the existing keeper tests), so it must
+    # not pay this boot cost or this failure mode for a lane it doesn't use.
+    token_address = Map.get(opts, :token_address)
+    treasury_address = Map.get(opts, :treasury_address)
+
+    # DOMAIN_SEPARATOR() = 0x3644e515. READ, never recomposed: a wrongly
+    # composed domain produces signatures the chain rejects without saying
+    # why (mirrors the Eip3009 moduledoc). Failing boot here is correct — with
+    # no domain no signature can ever be validated on-chain, and booting
+    # without it would only move the failure to the first paying user.
+    domain_separator =
+      case token_address do
+        nil ->
+          nil
+
+        addr ->
+          read_domain_separator(Map.fetch!(opts, :rpc_mod), Map.fetch!(opts, :rpc), addr)
+      end
+
     state = %{
       signer: Map.get(opts, :signer),
+      token_address: token_address,
+      treasury_address: treasury_address,
+      domain_separator: domain_separator,
       # The RUNTIME chain id (the app derives it from its RPC at boot). Not a
       # per-order field: order views stamp it at FETCH time, so orders
       # persisted before an upgrade still report the chain the keeper serves.
@@ -219,6 +252,61 @@ defmodule DelegatedSpend.Keeper do
     end
   end
 
+  # The EIP-3009 sibling of {:execute, ...} — same shape (order lookup →
+  # execution-status idempotency door → typed-failure cond → consume+submit),
+  # with two differences from the permit path: the expected kind is
+  # "authorization", and the AUTHORIZATION'S OWN validity window (valid_after/
+  # valid_before) is checked in addition to the order's own expiry — a
+  # transferWithAuthorization the token contract itself will reject on-chain
+  # once validBefore passes, so that check is mandatory here, not an optional
+  # anti-grief slack like the permit lane's deadline check.
+  def handle_call({:execute_authorization, order_ref, user_ref, auth}, _from, state) do
+    case store(state).get_order_by_ref(store_ref(state), order_ref, user_ref) do
+      nil ->
+        {:reply, {:failed, :not_found}, state}
+
+      order ->
+        case store(state).get_execution_status(store_ref(state), order.order_id) do
+          :unknown ->
+            cond do
+              Map.get(order, :kind, "permit") != "authorization" ->
+                {:reply, {:failed, :wrong_kind}, state}
+
+              is_nil(state.signer) ->
+                {:reply, {:failed, :authorization_lane_disabled}, state}
+
+              # Same anti-griefing backoff as the permit lane (spec §5.2.1) —
+              # one revert streak per user_ref, shared across both lanes.
+              suspended?(order.user_ref, state) ->
+                {:reply, {:failed, :suspended}, state}
+
+              now_s() > order.expires_at ->
+                {:reply, {:failed, :expired}, state}
+
+              auth.value != order.amount ->
+                {:reply, {:failed, :no_grant}, state}
+
+              # The authorization must still be open with comfortable margin
+              # by the time the chain processes it, not merely open right
+              # now — the exact same grief shape `deadline_slack_ok?/2`
+              # guards against for permits (passes simulation, reverts once
+              # mined). Chain time when an RPC is wired, else wall clock.
+              not authorization_window_open?(auth, state) ->
+                {:reply, {:failed, :expired}, state}
+
+              auth.valid_after > chain_now(state) ->
+                {:reply, {:failed, :not_yet_valid}, state}
+
+              true ->
+                execute_authorization_consumed(order, auth, state)
+            end
+
+          status ->
+            {:reply, status, state}
+        end
+    end
+  end
+
   def handle_call({:reset_backoff, user_ref}, _from, state) do
     {:reply, :ok, %{state | reverts: Map.delete(state.reverts, user_ref)}}
   end
@@ -282,9 +370,66 @@ defmodule DelegatedSpend.Keeper do
 
   defp receipt(_state, _hash), do: nil
 
+  # `Rpc.eth_call/3` (the plain, no-`from` view-call wrapper — unused so far
+  # elsewhere, since `eth_call_from/4` is what the Signer's simulation needs)
+  # either returns the raw `"0x…"` result or RAISES on transport failure
+  # (`call!` underneath). We only add our own message for the shape-mismatch
+  # case: a call that "succeeded" but didn't return a 32-byte word is not a
+  # transport error, it's a wrong contract/network, and deserves its own
+  # diagnosis rather than a generic rpc-failed message.
+  defp read_domain_separator(rpc_mod, rpc, token_address) do
+    case rpc_mod.eth_call(rpc, token_address, "0x3644e515") do
+      "0x" <> hex when byte_size(hex) == 64 ->
+        Base.decode16!(hex, case: :mixed)
+
+      other ->
+        raise "keeper: no se pudo leer DOMAIN_SEPARATOR del token #{token_address}: #{inspect(other)}"
+    end
+  end
+
   # ── execution ─────────────────────────────────────────────────────────────
 
   defp execute_consumed(order, permit, state) do
+    calldata = PermitLane.build_call(state.action, order.action_args, permit)
+    submit_consumed(order, %{to: state.router, data: calldata}, state)
+  end
+
+  # The destination is picked by the SERVER, from `:treasury_address` —
+  # NEVER from `auth`. A `to` that arrives from outside is a `to` an attacker
+  # chooses; this keeper's whole authority model (see moduledoc) rests on
+  # calldata being built solely from server-held config/state, never from
+  # client-supplied routing.
+  defp execute_authorization_consumed(order, auth, state) do
+    nonce = DelegatedSpend.Orders.authorization_nonce(order.order_ref)
+
+    calldata_hex =
+      DelegatedSpend.Keeper.Eip3009.transfer_with_authorization_calldata(
+        auth.from,
+        state.treasury_address,
+        auth.value,
+        auth.valid_after,
+        auth.valid_before,
+        nonce,
+        auth.signature
+      )
+
+    # Eip3009 returns calldata as "0x…" text (shaped for an external
+    # consumer, e.g. an HTTP response), but the Signer — like
+    # PermitLane.build_call above — expects `tx.data` as RAW bytes: Tx1559
+    # signs over the actual byte string, not its hex spelling. Decode at this
+    # boundary between the two conventions.
+    data = calldata_hex |> String.trim_leading("0x") |> Base.decode16!(case: :mixed)
+
+    submit_consumed(order, %{to: state.token_address, data: data, value: 0}, state)
+  end
+
+  # Shared by both lanes: consume the order + open its durable :pending
+  # execution record + hand the built tx to the Signer. Extracted so permit
+  # and authorization can never diverge on idempotency handling — the
+  # `action_key` (the order_id) is what makes a retry return the recorded
+  # result instead of broadcasting again (signer.ex, "action_key
+  # idempotency").
+  defp submit_consumed(order, tx, state) do
     case store(state).begin_execution(
            store_ref(state),
            order.order_id,
@@ -298,18 +443,11 @@ defmodule DelegatedSpend.Keeper do
         {:reply, store(state).get_execution_status(store_ref(state), order.order_id), state}
 
       {:ok, order} ->
-        calldata = PermitLane.build_call(state.action, order.action_args, permit)
-
         persist_hash_fn = fn hash ->
           store(state).update_inflight_hash(store_ref(state), order.order_id, hash)
         end
 
-        case Signer.submit(
-               state.signer,
-               order.order_id,
-               %{to: state.router, data: calldata},
-               persist_hash_fn
-             ) do
+        case Signer.submit(state.signer, order.order_id, tx, persist_hash_fn) do
           {:ok, hash} ->
             {:reply, {:submitted, hash}, state}
 
@@ -466,6 +604,14 @@ defmodule DelegatedSpend.Keeper do
     now = chain_now(state)
     is_integer(permit.deadline) and permit.deadline >= now + state.min_deadline_slack_s
   end
+
+  # Unlike `deadline_slack_ok?/2`, there is no "0 disables the check" escape
+  # hatch here: `valid_before` is not an optional grief-prevention margin, it
+  # is the EIP-3009 authorization's OWN on-chain validity boundary — the
+  # token contract rejects the transfer once it passes, full stop.
+  # `:min_deadline_slack_s` only widens that mandatory margin when set.
+  defp authorization_window_open?(auth, state),
+    do: auth.valid_before > chain_now(state) + state.min_deadline_slack_s
 
   defp chain_now(%{rpc_mod: mod, rpc: rpc}) when not is_nil(mod) do
     mod.block_timestamp(rpc)

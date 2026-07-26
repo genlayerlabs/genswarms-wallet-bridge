@@ -11,6 +11,12 @@ defmodule DelegatedSpend.KeeperTest do
     arg_types: [{:bytes, 32}, {:uint, 256}, {:bytes, 32}]
   }
 
+  # Authorization lane (EIP-3009) fixtures — distinct from @router/@action
+  # (the permit lane's SpendRouter target) since the authorization lane calls
+  # the TOKEN directly (`transferWithAuthorization`), never the router.
+  @token "0x" <> String.duplicate("11", 20)
+  @treasury "0x" <> String.duplicate("99", 20)
+
   defp permit(value) do
     %{
       owner: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
@@ -61,6 +67,88 @@ defmodule DelegatedSpend.KeeperTest do
 
   defp order_req,
     do: %{user_ref: "u-a", amount: 25_000_000, action_args: [<<7::256>>, 25_000_000, <<9::256>>]}
+
+  # ── authorization-lane helpers ────────────────────────────────────────────
+  # Extends the existing "fake store + fake signer" stack (start_stack/1
+  # above) rather than duplicating it: same MemoryStore, same real Signer
+  # wired to FakeRpc, only the keeper gets the new :treasury_address /
+  # :token_address / :rpc config the authorization lane needs (and FakeRpc
+  # gets a well-formed DOMAIN_SEPARATOR so boot succeeds).
+  defp start_keeper_with_authorization_config(overrides \\ %{}) do
+    overrides = Map.new(overrides)
+    treasury = Map.get(overrides, :treasury, @treasury)
+    token = Map.get(overrides, :token, @token)
+
+    fake =
+      FakeRpc.start(%{
+        chain_id: 84_532,
+        nonce: 0,
+        simulate: :ok,
+        eth_call_result: "0x" <> String.duplicate("ab", 32)
+      })
+
+    {:ok, signer} =
+      Signer.start_link(
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000
+      )
+
+    store = MemoryStore.start()
+
+    {:ok, keeper} =
+      Keeper.start_link(
+        signer: signer,
+        chain_id: 84_532,
+        store: {MemoryStore, store},
+        source_allowlist: ["market_phase"],
+        order_ttl_s: 600,
+        treasury_address: treasury,
+        token_address: token,
+        rpc_mod: FakeRpc,
+        rpc: fake,
+        sweep_ms: 3_600_000
+      )
+
+    {keeper, store, fake}
+  end
+
+  # Server-authoritative order, planted directly in the store — the
+  # authorization lane's tests exercise `execute_with_authorization/4`
+  # against an order that already exists, the same way the real order would
+  # have arrived via an earlier registration step; only the fields each test
+  # cares about need overriding.
+  defp put_order(store, attrs) do
+    order =
+      %{
+        order_id: "0x" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower),
+        action_args: [],
+        expires_at: System.os_time(:second) + 3600
+      }
+      |> Map.merge(Map.new(attrs))
+
+    :ok = MemoryStore.put_order(store, order)
+    order
+  end
+
+  defp valid_auth do
+    %{
+      from: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+      value: 1_000_000,
+      valid_after: 0,
+      valid_before: 4_000_000_000,
+      signature: :binary.copy(<<0x11>>, 65)
+    }
+  end
+
+  # The last `{to, data}` pair the keeper handed the Signer for simulation —
+  # this IS the transaction the keeper built, before any signing, so it's the
+  # cheapest place to assert on the calldata's fixed destination.
+  defp last_submitted_tx(fake), do: fake |> FakeRpc.calls() |> List.last()
+
+  defp submitted_tx_count(fake), do: length(FakeRpc.sent(fake))
 
   test "register: only allowlisted envelope sources; payload-claimed source is inert" do
     %{keeper: keeper} = start_stack()
@@ -1038,6 +1126,144 @@ defmodule DelegatedSpend.KeeperTest do
                Keeper.execute_with_permit(keeper, r2, "u-a", permit(25_000_000))
 
       assert Keeper.backoff_count(keeper, "u-a") == 1
+    end
+  end
+
+  describe "execute_with_authorization/4" do
+    test "rejects an order of a different kind" do
+      {keeper, store, _fake} = start_keeper_with_authorization_config()
+      put_order(store, %{order_ref: "r1", user_ref: "u1", kind: "permit", amount: 1_000_000})
+
+      assert {:failed, :wrong_kind} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+    end
+
+    test "rejects an amount that doesn't match the order" do
+      {keeper, store, _fake} = start_keeper_with_authorization_config()
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:failed, :no_grant} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", %{
+                 valid_auth()
+                 | value: 999_999
+               })
+    end
+
+    test "rejects an expired order" do
+      {keeper, store, _fake} = start_keeper_with_authorization_config()
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000,
+        expires_at: 0
+      })
+
+      assert {:failed, :expired} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+    end
+
+    test "rejects an authorization window that has already closed" do
+      {keeper, store, _fake} = start_keeper_with_authorization_config()
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:failed, :expired} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", %{
+                 valid_auth()
+                 | valid_before: 1
+               })
+    end
+
+    # THE guard for this task (the global "fixed destination" constraint): the
+    # server sets the destination, and the emitted calldata must carry it. If
+    # anyone adds a client-supplied `to`, this test goes red.
+    test "the emitted calldata ALWAYS goes to the configured treasury wallet" do
+      {keeper, store, fake} = start_keeper_with_authorization_config(%{treasury: @treasury})
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:submitted, _hash} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      tx = last_submitted_tx(fake)
+      assert tx.to == @token
+
+      assert String.contains?(
+               tx.data,
+               String.replace_prefix(String.downcase(@treasury), "0x", "")
+             )
+    end
+
+    test "a retry doesn't broadcast twice" do
+      {keeper, store, fake} = start_keeper_with_authorization_config()
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      first = Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+      second = Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert first == second
+      assert submitted_tx_count(fake) == 1
+    end
+  end
+
+  describe "authorization lane boot: DOMAIN_SEPARATOR" do
+    test "keeper refuses to boot when DOMAIN_SEPARATOR can't be read from the token" do
+      fake =
+        FakeRpc.start(%{
+          chain_id: 84_532,
+          nonce: 0,
+          simulate: :ok,
+          # too short to be a 32-byte separator — the malformed-read case
+          eth_call_result: "0xbad"
+        })
+
+      store = MemoryStore.start()
+
+      # A raise inside init/1 crashes the (linked) spawned process before the
+      # start_link handshake acks — trapping exits here is what turns that
+      # into a clean {:error, {exception, _stack}} return instead of taking
+      # the test process down with it (same need as the other init-crash
+      # tests in this file, e.g. "durable reconciliation shields an
+      # unavailable signer fallback").
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%RuntimeError{message: message}, _stacktrace}} =
+               Keeper.start_link(%{
+                 chain_id: 84_532,
+                 store: {MemoryStore, store},
+                 source_allowlist: ["market_phase"],
+                 order_ttl_s: 600,
+                 token_address: @token,
+                 treasury_address: @treasury,
+                 rpc_mod: FakeRpc,
+                 rpc: fake
+               })
+
+      assert message =~ "DOMAIN_SEPARATOR"
     end
   end
 end

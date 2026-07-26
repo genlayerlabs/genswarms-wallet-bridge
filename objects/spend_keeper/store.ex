@@ -15,8 +15,10 @@ defmodule DelegatedSpend.Keeper.Store do
       spec §6.1). Internal reconciliation reads use server-minted `order_id`.
     * Grants are keyed by app-supplied opaque `user_ref` — never raw platform
       ids; implementations must never log grant bodies (spec §10).
-    * `begin_execution/4` atomically consumes a permit order and creates its
-      durable `:pending` execution record.
+    * `begin_execution/4` atomically consumes an executable order (permit or
+      authorization lane) and creates its durable `:pending` execution
+      record. "bind" and "user_tx" orders are never passed here — they never
+      broadcast.
     * The first terminal resolution wins, and a mined resolution records its
       spend in the same atomic write.
     * Terminal status is retained for as long as its order remains queryable.
@@ -195,7 +197,10 @@ defmodule DelegatedSpend.Keeper.MemoryStore do
             s.consumed[order_id] ->
               {:already_consumed, s}
 
-            Map.get(order, :kind, "permit") != "permit" ->
+            # Both executable lanes may begin execution here; "bind" and
+            # "user_tx" orders never broadcast (the keeper never calls this
+            # for them), so they stay excluded on purpose.
+            Map.get(order, :kind, "permit") not in ["permit", "authorization"] ->
               {:not_found, s}
 
             true ->
