@@ -394,6 +394,19 @@ function authorizationEnrichmentMissing(order) {
   return !termsRequired(order) && (!order.to || !order.domain || !order.nonce);
 }
 
+// The brief SUPERSEDES the one-line summary — same facts, but with the full
+// destination instead of a truncated one. Rendering both says everything
+// twice and puts back the shortened address the brief exists to replace.
+//
+// The summary is emptied rather than hidden: the geo-blocked and
+// enrichment-missing dead states paint their message into this same element,
+// and an error written into a hidden element is an error the user never sees.
+export function renderAuthorizationScreen(deps, order, get = $) {
+  const brief = renderBrief(order, deps.config, get);
+  get("summary").textContent = brief ? "" : authorizationSummaryText(deps, order);
+  return brief;
+}
+
 export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
   if (authorizationEnrichmentMissing(order)) {
     get("pay").hidden = true;
@@ -401,8 +414,7 @@ export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
     return;
   }
 
-  get("summary").textContent = authorizationSummaryText(deps, order);
-  renderBrief(order, deps.config, get);
+  renderAuthorizationScreen(deps, order, get);
   if (!(await enforceOwnerAtLoad(deps, order, get))) return;
   get("pay").disabled = false;
 
@@ -424,12 +436,9 @@ export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
           terms: result.terms,
           ref: orderRef,
           retry: run,
-          renderSummary: (refreshedOrder) => {
-            get("summary").textContent = authorizationSummaryText(deps, refreshedOrder);
-            // The terms signature just cleared, so the server now serves the
-            // signable fields: this is the first moment a brief can be built.
-            renderBrief(refreshedOrder, deps.config, get);
-          },
+          // The terms signature just cleared, so the server now serves the
+          // signable fields: this is the first moment a brief can be built.
+          renderSummary: (refreshedOrder) => renderAuthorizationScreen(deps, refreshedOrder, get),
         },
         get
       );

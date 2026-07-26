@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { MESSAGES, RETURN_DELAY_S, askWhichWallet, entryRef, paintStatus, renderBrief, scheduleReturn, setupAuthorization, showTermsPrompt } from "../app.mjs";
+import { MESSAGES, RETURN_DELAY_S, askWhichWallet, entryRef, paintStatus, renderAuthorizationScreen, renderBrief, scheduleReturn, setupAuthorization, showTermsPrompt } from "../app.mjs";
 
 const ACCOUNT = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 const TREASURY = "0x000000000000000000000000000000000000cccc";
@@ -53,6 +53,33 @@ test("entryRef accepts order refs, bind refs, and Telegram start_param", () => {
     entryRef({ initDataUnsafe: { start_param: "tg-ref" } }, new URLSearchParams("order=o1&bind=b1")),
     "tg-ref"
   );
+});
+
+test("the brief REPLACES the one-line summary rather than repeating it", () => {
+  const { elements, get } = fakeDom();
+  const deps = { config: { tokenName: "USDC", productName: "Wingston", actionLabel: "Top up" } };
+
+  renderAuthorizationScreen(deps, { kind: "authorization", to: TREASURY, value: 1000000, valid_before: 4102444800 }, get);
+
+  assert.equal(elements.summary.textContent, "", "the same facts twice, one of them with a truncated address");
+  assert.equal(elements.brief.hidden, false);
+});
+
+test("with terms pending there is no brief, so the summary still carries the message", () => {
+  const { elements, get } = fakeDom();
+  const deps = { config: { tokenName: "USDC", actionLabel: "Top up" } };
+
+  renderAuthorizationScreen(deps, { kind: "authorization", amount: 1000000, terms: { required: true } }, get);
+
+  assert.match(elements.summary.textContent, /accept the terms/);
+  assert.equal(elements.brief.hidden, true);
+});
+
+test("the summary is EMPTIED, never hidden — dead states paint their error into it", async () => {
+  const src = await readFile(new URL("../app.mjs", import.meta.url), "utf8");
+  const fn = src.slice(src.indexOf("export function renderAuthorizationScreen"));
+  const body = fn.slice(0, fn.indexOf("\n}"));
+  assert.doesNotMatch(body, /get\("summary"\)\.hidden/);
 });
 
 test("the pre-signature brief renders the full destination, not a truncation", () => {
@@ -502,8 +529,13 @@ describe("setupAuthorization (review C1)", () => {
 
     await assert.doesNotReject(setupAuthorization(deps, order, "oref-2", null, get));
 
-    assert.match(elements.summary.textContent, /2\.00 USDC/);
-    assert.match(elements.summary.textContent, /0x0000…cccc/);
+    assert.match(elements["brief-headline"].textContent, /2\.00 USDC/);
+    assert.equal(
+      elements["brief-destination"].textContent,
+      TREASURY,
+      "the FULL destination, not the truncation the brief replaced",
+    );
+    assert.equal(elements.summary.textContent, "", "and not repeated in the summary above it");
     assert.equal(elements.pay.disabled, false);
   });
 
@@ -546,7 +578,9 @@ describe("setupAuthorization (review C1)", () => {
         eth_signTypedData_v4: (params) => {
           const typedData = JSON.parse(params[1]);
           if (typedData.primaryType === "TransferWithAuthorization") {
-            summaryAtSignTime.push(elements.summary.textContent);
+            summaryAtSignTime.push(
+              `${elements["brief-headline"].textContent} ${elements["brief-destination"].textContent}`,
+            );
           }
           // Valid-shaped ECDSA sig (r + s + v=0x1c): the terms-acceptance leg
           // of this path runs the signature through splitSignature, which
@@ -584,7 +618,10 @@ describe("setupAuthorization (review C1)", () => {
     await assert.doesNotReject(elements["terms-accept"].onclick());
 
     assert.equal(summaryAtSignTime.length, 1, "eth_signTypedData_v4 must have been reached exactly once");
-    assert.match(summaryAtSignTime[0], /0x0000…cccc/, "destination must be visible at sign time");
+    assert.ok(
+      summaryAtSignTime[0].includes(TREASURY),
+      "the full destination must be visible at sign time",
+    );
     assert.match(summaryAtSignTime[0], /1\.50 USDC/, "amount must be visible at sign time");
     assert.doesNotMatch(summaryAtSignTime[0], /accept the terms/, "stale terms-pending copy must not survive to sign time");
   });

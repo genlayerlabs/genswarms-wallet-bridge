@@ -82,3 +82,15 @@ test("the destination is named when the deployment has a product name, generic w
   assert.match(briefLines(brief, "Wingston")[0].text, /to Wingston's wallet$/);
   assert.match(briefLines(brief, null)[0].text, /to the destination wallet$/);
 });
+
+test("the token label falls back to the token's own domain name before it gives up", () => {
+  const withDomain = order({ domain: { name: "USDC", version: "2" } });
+
+  assert.equal(authorizationBrief(withDomain, { tokenName: "USDC" }, NOW).token, "USDC");
+  assert.equal(
+    authorizationBrief(withDomain, {}, NOW).token,
+    "USDC",
+    "the EIP-712 domain name is the string the wallet itself will print",
+  );
+  assert.equal(authorizationBrief(order(), {}, NOW).token, "tokens", "last resort only");
+});

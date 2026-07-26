@@ -63,7 +63,12 @@ export function authorizationBrief(order, config = {}, now = new Date()) {
   if (!order || !order.to || order.value == null) return null;
 
   const decimals = Number.isInteger(config.tokenDecimals) ? config.tokenDecimals : 6;
-  const token = config.tokenName || "tokens";
+
+  // The deployment's label first, then the token's OWN EIP-712 domain name —
+  // which is the string the wallet itself is about to print, so it is the
+  // best possible fallback. "tokens" is the last resort: on a screen that
+  // asks for money, "2.00 tokens" is barely better than a blank.
+  const token = config.tokenName || order.domain?.name || "tokens";
 
   return {
     amount: formatUnits(order.value, decimals),
