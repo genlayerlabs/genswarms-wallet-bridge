@@ -531,14 +531,12 @@ defmodule DelegatedSpend.Keeper do
     # occurrence ("0x0x12" -> "12"), which is never the intent for a prefix.
     data = calldata_hex |> String.replace_prefix("0x", "") |> Base.decode16!(case: :mixed)
 
-    case submit_consumed(order, %{to: state.token_address, data: data, value: 0}, state) do
-      {:reply, {:submitted, _hash}, _new_state} = result ->
-        record_gas_spend(order.order_id, state)
-        result
-
-      other ->
-        other
-    end
+    # Fix wave (Important #1+#2): gas-spend recording is no longer a
+    # post-submit side effect here — it happens INSIDE submit_consumed's
+    # persist_hash_fn, at the same durable pre-broadcast moment the Signer
+    # already writes the tx hash, for both the initial broadcast and every
+    # fee-bumped replacement. See `record_tracked_gas_spend/3`.
+    submit_consumed(order, %{to: state.token_address, data: data, value: 0}, state)
   end
 
   # Task 3b: consult the three economic brakes as ONE pure decision
@@ -597,22 +595,40 @@ defmodule DelegatedSpend.Keeper do
   defp gas_spent_today(state),
     do: store(state).gas_spent_since(store_ref(state), now_s() - @gas_budget_window_s)
 
-  # Spend is recorded AFTER a successful submit, as an ESTIMATE (gas * the
-  # max_fee the Signer actually used) — the mined cost is not known yet, and
-  # may never be observed synchronously here (see `Signer.cost_estimate/2`
-  # moduledoc). `state` (the PRE-submit state) is fine to reuse for
-  # `store`/`store_ref` — those never change across a submit.
-  defp record_gas_spend(order_id, state) do
-    case safe_cost_estimate(state.signer, order_id) do
-      {:ok, wei} -> store(state).record_gas_spend(store_ref(state), wei, now_s())
-      :unknown -> :ok
-    end
-  end
+  # Fix wave (Important #1+#2, structural fix): gas-spend is recorded at the
+  # SAME durable pre-broadcast moment the Signer already persists the
+  # inflight tx hash (persist_hash_fn, called before EVERY initial broadcast
+  # AND every fee-bumped replacement — see signer.ex's do_submit/bump). This
+  # makes under-counting structurally impossible: a crash right after
+  # broadcast has already had its spend recorded; a broadcast that then
+  # fails to send overcounts by one estimate, which is conservative (the
+  # budget brake trips earlier, never later).
+  #
+  # `cost_wei` is the full estimate on an initial broadcast, or only the
+  # DELTA versus the previous broadcast on a fee-bumped replacement (signer.ex
+  # computes which one applies); either way this function just adds it.
+  #
+  # Scoped to the authorization lane only — `order.kind == "authorization"` —
+  # so a permit-lane order on a keeper that ALSO has the authorization lane
+  # (and a daily gas budget) configured records nothing, keeping the permit
+  # lane byte-for-byte unchanged (spec mandate).
+  #
+  # Gated on `:daily_gas_budget_wei` being configured (Minor #3): a keeper
+  # that never set a daily budget performs zero extra store writes, not just
+  # zero extra RPC/read cost — nothing ever reads this history back, so
+  # nothing should be paying to write it. Enabling the budget later starts a
+  # fresh window with no retroactive history, which is fine since the window
+  # itself is rolling 24h, not a fixed epoch.
+  defp record_tracked_gas_spend(order, cost_wei, state) do
+    tracked? = Map.get(order, :kind, "permit") == "authorization"
+    budgeted? = not is_nil(state.gas_policy.daily_gas_budget_wei)
 
-  defp safe_cost_estimate(signer, order_id) do
-    Signer.cost_estimate(signer, order_id)
-  catch
-    _kind, _reason -> :unknown
+    if tracked? and budgeted? and cost_wei > 0 do
+      at = now_s()
+      store(state).record_gas_spend(store_ref(state), cost_wei, at, at - @gas_budget_window_s)
+    end
+
+    :ok
   end
 
   # Shared by both lanes: consume the order + open its durable :pending
@@ -635,8 +651,18 @@ defmodule DelegatedSpend.Keeper do
         {:reply, store(state).get_execution_status(store_ref(state), order.order_id), state}
 
       {:ok, order} ->
-        persist_hash_fn = fn hash ->
-          store(state).update_inflight_hash(store_ref(state), order.order_id, hash)
+        # The hash write and the gas-spend record are both durable
+        # PRE-broadcast side effects the Signer triggers via this one
+        # callback, before every initial and fee-bumped broadcast (see
+        # signer.ex moduledoc) — recording only happens once the hash write
+        # itself succeeds (`result == :ok`): if the durable write fails, the
+        # Signer never broadcasts (do_submit/bump both refuse on a
+        # non-:ok persist_hash_fn), so nothing was spent and nothing should
+        # be recorded either.
+        persist_hash_fn = fn hash, cost_wei ->
+          result = store(state).update_inflight_hash(store_ref(state), order.order_id, hash)
+          if result == :ok, do: record_tracked_gas_spend(order, cost_wei, state)
+          result
         end
 
         case Signer.submit(state.signer, order.order_id, tx, persist_hash_fn) do

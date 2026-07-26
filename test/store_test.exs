@@ -118,10 +118,24 @@ defmodule DelegatedSpend.StoreTest do
   # above.
   test "gas spend accounting mirror: relayer-wide, no user_ref" do
     store = MemoryStore.start()
-    :ok = MemoryStore.record_gas_spend(store, 10, 100)
-    :ok = MemoryStore.record_gas_spend(store, 20, 200)
+    :ok = MemoryStore.record_gas_spend(store, 10, 100, 0)
+    :ok = MemoryStore.record_gas_spend(store, 20, 200, 0)
     assert MemoryStore.gas_spent_since(store, 150) == 20
     assert MemoryStore.gas_spent_since(store, 0) == 30
+  end
+
+  # Fix wave (Minor #4): each write prunes entries older than ITS OWN
+  # `prune_before` cutoff — the caller (keeper.ex) always passes
+  # `at - @gas_budget_window_s`, so a long-running in-memory store never
+  # accumulates gas-spend history past the rolling window it is ever read
+  # against. Only exercised when the daily budget is configured (the only
+  # caller of this write path, per Minor #3).
+  test "gas spend accounting mirror: each write prunes entries older than its own cutoff" do
+    store = MemoryStore.start()
+    :ok = MemoryStore.record_gas_spend(store, 10, 100, 0)
+    # this write's cutoff (150) prunes the wei=10/at=100 entry recorded above
+    :ok = MemoryStore.record_gas_spend(store, 20, 200, 150)
+    assert MemoryStore.gas_spent_since(store, 0) == 20
   end
 
   test "execution status is durable and the first terminal result records mined spend once" do

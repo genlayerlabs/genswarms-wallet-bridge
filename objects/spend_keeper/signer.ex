@@ -20,12 +20,16 @@ defmodule DelegatedSpend.Keeper.Signer do
       the optional `:low_balance_wei`, logs a `warning` naming the
       `keeper_relayer_low_balance` metric — there is no metrics framework in
       this package, so a host that wants to alert on it scrapes the log line;
-    * `cost_estimate/2`: the wei cost (gas * max_fee) already computed for a
-      still-in-flight `action_key`, read back — not re-derived — by the
-      keeper right after a successful submit to record the day's gas spend.
-      It is an ESTIMATE (the ceiling used, not the gas actually burned) and
-      only exists while the entry is in flight: once resolved, `done` keeps
-      just the terminal status, not its params.
+    * gas-spend accounting handoff (Task 3b fix wave): `persist_hash_fn` is
+      called as `fun.(hash, cost_wei)` — `cost_wei` is the wei cost (gas *
+      max_fee) of THIS broadcast, computed here and handed to the caller at
+      the SAME durable pre-broadcast moment as the hash itself. On the
+      initial broadcast `cost_wei` is the FULL estimate; on a fee-bumped
+      replacement it is only the DELTA versus the previous broadcast's
+      estimate for the same `action_key` (bumps only raise fees, so the
+      delta is never negative). The keeper is the one that decides whether
+      and where to record it — this module only ever reports what a given
+      broadcast is about to cost, never persists anything itself.
 
   The Keeper Store, not this process, owns durable execution status across
   restarts. Keeper supplies the request-critical hash writer used before each
@@ -53,7 +57,7 @@ defmodule DelegatedSpend.Keeper.Signer do
   end
 
   def submit(server, action_key, tx),
-    do: submit(server, action_key, tx, fn _hash -> :ok end)
+    do: submit(server, action_key, tx, fn _hash, _cost_wei -> :ok end)
 
   def submit(server, action_key, tx, persist_hash_fn),
     do: GenServer.call(server, {:submit, action_key, tx, persist_hash_fn}, 60_000)
@@ -62,13 +66,6 @@ defmodule DelegatedSpend.Keeper.Signer do
   def receipt(server, tx_hash), do: GenServer.call(server, {:receipt, tx_hash}, 60_000)
   def address(server), do: GenServer.call(server, :address)
   def sweep_now(server), do: GenServer.call(server, :sweep_now, 60_000)
-
-  @doc """
-  The estimated wei cost (gas * max_fee) of the still-in-flight entry for
-  `action_key` — `{:ok, wei}`, or `:unknown` once it never existed or has
-  already resolved (see moduledoc).
-  """
-  def cost_estimate(server, action_key), do: GenServer.call(server, {:cost_estimate, action_key})
 
   @impl true
   def init(opts) do
@@ -126,16 +123,6 @@ defmodule DelegatedSpend.Keeper.Signer do
 
   def handle_call(:sweep_now, _from, state), do: {:reply, :ok, do_sweep(state)}
 
-  def handle_call({:cost_estimate, key}, _from, state) do
-    reply =
-      case state.pending[key] do
-        %{params: %{gas: gas, max_fee: max_fee}} -> {:ok, gas * max_fee}
-        nil -> :unknown
-      end
-
-    {:reply, reply, state}
-  end
-
   def handle_call({:submit, key, tx, persist_hash_fn}, _from, state) do
     cond do
       terminal = state.done[key] ->
@@ -188,7 +175,12 @@ defmodule DelegatedSpend.Keeper.Signer do
 
           {raw, hash} = Tx1559.sign(params, state.priv)
 
-          case persist_hash(persist_hash_fn, hash) do
+          # Task 3b fix wave: the full cost estimate for THIS (the initial)
+          # broadcast, handed to the caller at the exact same durable
+          # pre-broadcast moment as the hash — see moduledoc.
+          cost_wei = params.gas * params.max_fee
+
+          case persist_hash(persist_hash_fn, hash, cost_wei) do
             :ok ->
               _ = rpc_mod.send_raw(rpc, raw)
 
@@ -340,7 +332,18 @@ defmodule DelegatedSpend.Keeper.Signer do
 
     {raw, hash} = Tx1559.sign(params, state.priv)
 
-    case persist_hash(entry.persist_hash_fn, hash) do
+    # Task 3b fix wave (Important #1+#2): only the DELTA between this bump's
+    # estimate and the previous broadcast's estimate for the SAME action_key
+    # — never the full re-estimate, which would double-count what the prior
+    # broadcast's persist_hash_fn call already recorded. `gas` never changes
+    # across a bump (only the fee fields do), so this is exactly the extra
+    # wei this replacement adds over what was already accounted for. Bumps
+    # only raise fees, so the delta is never negative.
+    previous_cost_wei = entry.params.gas * entry.params.max_fee
+    cost_wei = params.gas * params.max_fee
+    delta_wei = cost_wei - previous_cost_wei
+
+    case persist_hash(entry.persist_hash_fn, hash, delta_wei) do
       :ok ->
         _ = state.rpc_mod.send_raw(state.rpc, raw)
 
@@ -360,8 +363,8 @@ defmodule DelegatedSpend.Keeper.Signer do
     end
   end
 
-  defp persist_hash(fun, hash) do
-    case fun.(hash) do
+  defp persist_hash(fun, hash, cost_wei) do
+    case fun.(hash, cost_wei) do
       :ok -> :ok
       other -> {:error, {:persist_hash, other}}
     end

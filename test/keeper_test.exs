@@ -1630,7 +1630,7 @@ defmodule DelegatedSpend.KeeperTest do
       # pre-existing gas spend today, seeded directly at the store — the
       # keeper reads this back via `gas_spent_since/2` before ever calling
       # the Signer.
-      :ok = MemoryStore.record_gas_spend(store, 1_000, System.os_time(:second))
+      :ok = MemoryStore.record_gas_spend(store, 1_000, System.os_time(:second), 0)
 
       put_order(store, %{
         order_ref: "r1",
@@ -1651,7 +1651,7 @@ defmodule DelegatedSpend.KeeperTest do
 
       # this spend is more than a day old — it must NOT count toward today's
       # accumulated total
-      :ok = MemoryStore.record_gas_spend(store, 1_000, System.os_time(:second) - 90_000)
+      :ok = MemoryStore.record_gas_spend(store, 1_000, System.os_time(:second) - 90_000, 0)
 
       put_order(store, %{
         order_ref: "r1",
@@ -1689,7 +1689,7 @@ defmodule DelegatedSpend.KeeperTest do
       {keeper, store, fake} =
         start_keeper_with_authorization_config(%{gas_price: 999_999_999_999})
 
-      :ok = MemoryStore.record_gas_spend(store, 999_999_999_999, System.os_time(:second))
+      :ok = MemoryStore.record_gas_spend(store, 999_999_999_999, System.os_time(:second), 0)
 
       put_order(store, %{
         order_ref: "r1",
@@ -1724,6 +1724,166 @@ defmodule DelegatedSpend.KeeperTest do
       # FakeRpc's defaults, the SAME numbers the Signer itself computed at
       # submit time (an ESTIMATE, not the mined cost: see Signer moduledoc).
       assert MemoryStore.gas_spent_since(store, 0) == div(100_000 * 13, 10) * 21_000_000_000
+    end
+
+    # Fix wave, Minor #3: the WRITE side (record_gas_spend + the store round
+    # trip it costs) is gated on :daily_gas_budget_wei specifically — a
+    # keeper with a DIFFERENT brake configured (:max_gas_wei here, which
+    # already exercises the admit check's RPC/read path) still records no
+    # history at all, because nothing ever reads it back.
+    test "Minor #3: no :daily_gas_budget_wei configured records nothing, even on a successful submit" do
+      {keeper, store, _fake} =
+        start_keeper_with_authorization_config(%{max_gas_wei: 999_999_999_999_999})
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:submitted, _hash} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert MemoryStore.gas_spent_since(store, 0) == 0
+    end
+
+    # Fix wave, Important #1+#2: the structural fix. Gas-spend recording now
+    # happens at the SAME durable pre-broadcast moment as the tx-hash write
+    # (the Signer's persist_hash_fn, invoked before every initial AND
+    # fee-bumped broadcast) — never re-derived from a post-submit read. A
+    # stuck tx that gets fee-bumped must have its recorded total track the
+    # FINAL (bumped) estimate, not freeze at the original — the exact
+    # under-counting bug this fix wave closes.
+    test "a fee-bumped rebroadcast records only the delta: the total tracks the final estimate, not the original" do
+      fake =
+        FakeRpc.start(%{
+          chain_id: 84_532,
+          nonce: 0,
+          simulate: :ok,
+          eth_call_result: "0x" <> String.duplicate("ab", 32)
+        })
+
+      {:ok, signer} =
+        Signer.start_link(
+          rpc_url: fake,
+          chain_id: 84_532,
+          priv: @anvil0,
+          rpc_mod: FakeRpc,
+          sweep_ms: 3_600_000,
+          bump_after_ms: 0
+        )
+
+      store = MemoryStore.start()
+
+      {:ok, keeper} =
+        Keeper.start_link(
+          signer: signer,
+          chain_id: 84_532,
+          store: {MemoryStore, store},
+          source_allowlist: ["market_phase"],
+          order_ttl_s: 600,
+          treasury_address: @treasury,
+          token_address: @token,
+          rpc_mod: FakeRpc,
+          rpc: fake,
+          sweep_ms: 3_600_000,
+          daily_gas_budget_wei: 999_999_999_999_999
+        )
+
+      {:ok, %{order_ref: ref}} =
+        Keeper.register_order(keeper, "market_phase", %{
+          user_ref: "u-a",
+          amount: 1_000_000,
+          action_args: [],
+          kind: "authorization"
+        })
+
+      assert {:submitted, _hash} =
+               Keeper.execute_with_authorization(keeper, ref, "u-a", valid_auth())
+
+      # gas(100_000, headroomed 1.3x) * max_fee(base 10e9*2 + prio 1e9) — the
+      # SAME FakeRpc defaults as the sibling test above.
+      original_estimate = div(100_000 * 13, 10) * 21_000_000_000
+      assert MemoryStore.gas_spent_since(store, 0) == original_estimate
+
+      # a stuck tx (bump_after_ms: 0 → any still-pending entry bumps on the
+      # next sweep tick): the same nonce rebroadcasts at 1.25x the fees.
+      Process.sleep(5)
+      :ok = Signer.sweep_now(signer)
+
+      bumped_max_fee = div(21_000_000_000 * 5, 4) + 1
+      final_estimate = div(100_000 * 13, 10) * bumped_max_fee
+
+      # the recorded total equals the FINAL estimate exactly — not the
+      # original frozen in place (the bug), and not original + a full
+      # re-estimate double-counted (only the delta is added).
+      assert MemoryStore.gas_spent_since(store, 0) == final_estimate
+      refute MemoryStore.gas_spent_since(store, 0) == original_estimate
+    end
+
+    # A single keeper can serve BOTH lanes at once (the authorization lane
+    # doesn't disable the permit lane). Gas-spend recording must stay scoped
+    # to the authorization lane's orders only — a permit-kind execution on
+    # the SAME keeper, with the SAME :daily_gas_budget_wei configured, must
+    # record nothing (permit lane untouched), while a sibling authorization
+    # order on that keeper still gets tracked normally.
+    test "gas spend recording stays scoped to the authorization lane even when a permit order runs on the same keeper" do
+      fake =
+        FakeRpc.start(%{
+          chain_id: 84_532,
+          nonce: 0,
+          simulate: :ok,
+          eth_call_result: "0x" <> String.duplicate("ab", 32)
+        })
+
+      {:ok, signer} =
+        Signer.start_link(
+          rpc_url: fake,
+          chain_id: 84_532,
+          priv: @anvil0,
+          rpc_mod: FakeRpc,
+          sweep_ms: 3_600_000
+        )
+
+      store = MemoryStore.start()
+
+      {:ok, keeper} =
+        Keeper.start_link(
+          signer: signer,
+          chain_id: 84_532,
+          store: {MemoryStore, store},
+          router: @router,
+          action: @action,
+          source_allowlist: ["market_phase"],
+          order_ttl_s: 600,
+          treasury_address: @treasury,
+          token_address: @token,
+          rpc_mod: FakeRpc,
+          rpc: fake,
+          sweep_ms: 3_600_000,
+          daily_gas_budget_wei: 999_999_999_999_999
+        )
+
+      {:ok, %{order_ref: ref}} = Keeper.register_order(keeper, "market_phase", order_req())
+
+      assert {:submitted, _hash} =
+               Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+
+      assert MemoryStore.gas_spent_since(store, 0) == 0
+
+      {:ok, %{order_ref: aref}} =
+        Keeper.register_order(keeper, "market_phase", %{
+          user_ref: "u-a",
+          amount: 1_000_000,
+          action_args: [],
+          kind: "authorization"
+        })
+
+      assert {:submitted, _hash2} =
+               Keeper.execute_with_authorization(keeper, aref, "u-a", valid_auth())
+
+      assert MemoryStore.gas_spent_since(store, 0) > 0
     end
   end
 

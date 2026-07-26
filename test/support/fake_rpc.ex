@@ -28,6 +28,7 @@ defmodule DelegatedSpend.FakeRpc do
   #   :receipt_raises → receipt/2 raises (a transient-RPC crash simulation)
   #   :receipt_failure → :raise | :exit | :throw
   #   :fees_raise     → max_priority_fee raises (fees error path)
+  #   :balance_raises → balance/2 raises (a transient-RPC crash simulation)
   #   :block_timestamp → the value block_timestamp/1 returns (else wall clock)
   def chain_id(pid), do: Agent.get(pid, & &1.chain_id)
   def nonce(pid, _addr), do: Agent.get(pid, & &1.nonce)
@@ -46,7 +47,13 @@ defmodule DelegatedSpend.FakeRpc do
   # `:gas_price` / `:balance`, defaulting to values no economic-brake test
   # would ever trip by accident.
   def gas_price(pid), do: Agent.get(pid, &Map.get(&1, :gas_price, 1_000_000_000))
-  def balance(pid, _addr), do: Agent.get(pid, &Map.get(&1, :balance, 1_000_000_000_000_000_000))
+
+  def balance(pid, _addr) do
+    if Agent.get(pid, &Map.get(&1, :balance_raises, false)),
+      do: raise("simulated RPC balance failure")
+
+    Agent.get(pid, &Map.get(&1, :balance, 1_000_000_000_000_000_000))
+  end
 
   def block_timestamp(pid),
     do: Agent.get(pid, &Map.get(&1, :block_timestamp, System.os_time(:second)))

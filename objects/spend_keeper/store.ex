@@ -56,7 +56,21 @@ defmodule DelegatedSpend.Keeper.Store do
   # Gas-policy accounting (Task 3b, spec §5): the RELAYER's own gas spend, NOT
   # scoped by user_ref — the daily gas budget protects the sponsor's balance
   # as a whole, not any one payer's grant, so there is nothing to key it by.
-  @callback record_gas_spend(ref :: term, wei :: non_neg_integer, at :: integer) :: :ok
+  #
+  # `prune_before` (fix wave, Minor #4): the caller (keeper.ex, the only
+  # writer of this callback, gated on :daily_gas_budget_wei being configured
+  # per Minor #3) always passes `at - @gas_budget_window_s` — every write
+  # prunes entries older than the caller's OWN rolling window, so a
+  # long-running in-memory store never accumulates history the budget check
+  # will never read again. The window's actual length is a keeper concern,
+  # not a store one; the store just drops whatever is older than the cutoff
+  # it's handed.
+  @callback record_gas_spend(
+              ref :: term,
+              wei :: non_neg_integer,
+              at :: integer,
+              prune_before :: integer
+            ) :: :ok
   @callback gas_spent_since(ref :: term, since :: integer) :: non_neg_integer
 
   @callback put_order(ref :: term, order) :: :ok
@@ -154,8 +168,15 @@ defmodule DelegatedSpend.Keeper.MemoryStore do
   end
 
   @impl true
-  def record_gas_spend(pid, wei, at),
-    do: Agent.update(pid, &%{&1 | gas_spends: [{wei, at} | &1.gas_spends]})
+  def record_gas_spend(pid, wei, at, prune_before) do
+    Agent.update(pid, fn s ->
+      gas_spends =
+        [{wei, at} | s.gas_spends]
+        |> Enum.filter(fn {_wei, ts} -> ts >= prune_before end)
+
+      %{s | gas_spends: gas_spends}
+    end)
+  end
 
   @impl true
   def gas_spent_since(pid, since) do
