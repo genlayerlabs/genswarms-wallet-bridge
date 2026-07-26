@@ -67,13 +67,55 @@ defmodule DelegatedSpend.FakeRpc do
     end
   end
 
-  # The keeper's boot-time DOMAIN_SEPARATOR() read (authorization lane only) —
-  # a plain view call, no `from`. Defaults to a well-formed 32-byte value so a
-  # test that doesn't care about the separator still boots; set
-  # `:eth_call_result` to something short/malformed to exercise the keeper's
-  # fail-closed raise.
-  def eth_call(pid, _to, _data) do
-    Agent.get(pid, &Map.get(&1, :eth_call_result, "0x" <> String.duplicate("ab", 32)))
+  # The keeper's boot-time reads on the authorization lane: DOMAIN_SEPARATOR()
+  # (0x3644e515), name() (0x06fdde03) and version() (0x54fd4d50) — plain view
+  # calls, no `from`. Dispatches by 4-byte selector so all three can be
+  # answered DIFFERENTLY, the way a real token contract would.
+  #
+  # Defaults are SELF-CONSISTENT on purpose: the DOMAIN_SEPARATOR default is
+  # COMPUTED (via the keeper's own `Eip3009.domain_separator/4`, production
+  # code) from the SAME `:token_name`/`:token_version` defaults ("USDC"/"2" —
+  # the real values on both Base chains) that name()/version() answer, over
+  # the real `to` address and the config's `:chain_id`. A test that doesn't
+  # care about the domain fields still boots without wiring anything extra;
+  # a test that wants the keeper's fail-closed mismatch/malformed-read raise
+  # sets `:eth_call_result` (still honored, DOMAIN_SEPARATOR selector only —
+  # e.g. a short "0xbad" for the malformed-read case) or `:token_name` /
+  # `:token_version` (to make name()/version() disagree with the separator).
+  def eth_call(pid, to, data) do
+    case selector(data) do
+      "3644e515" ->
+        Agent.get(pid, fn s ->
+          Map.get(s, :eth_call_result) || default_domain_separator(s, to)
+        end)
+
+      "06fdde03" ->
+        Agent.get(pid, &encode_abi_string(Map.get(&1, :token_name, "USDC")))
+
+      "54fd4d50" ->
+        Agent.get(pid, &encode_abi_string(Map.get(&1, :token_version, "2")))
+
+      _ ->
+        Agent.get(pid, &Map.get(&1, :eth_call_result, "0x" <> String.duplicate("ab", 32)))
+    end
+  end
+
+  defp selector("0x" <> hex), do: String.downcase(hex) |> String.slice(0, 8)
+  defp selector(_), do: nil
+
+  defp default_domain_separator(s, to) do
+    name = Map.get(s, :token_name, "USDC")
+    version = Map.get(s, :token_version, "2")
+
+    ds = DelegatedSpend.Keeper.Eip3009.domain_separator(name, version, s.chain_id, to)
+    "0x" <> Base.encode16(ds, case: :lower)
+  end
+
+  defp encode_abi_string(str) do
+    len = byte_size(str)
+    pad = rem(32 - rem(len, 32), 32)
+    payload = str <> :binary.copy(<<0>>, pad)
+    "0x" <> Base.encode16(<<32::256, len::256>> <> payload, case: :lower)
   end
 
   def send_raw(pid, raw) do

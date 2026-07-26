@@ -1322,4 +1322,240 @@ defmodule DelegatedSpend.IntakeTest do
                ctx
              )
   end
+
+  # ── authorization lane (EIP-3009) — same five gates as handle_grant/3 ──────
+
+  @treasury "0x0000000000000000000000000000000000000CcC"
+
+  defp start_authorization_stack(rate_max \\ 100, order_ttl_s \\ 600) do
+    fake = FakeRpc.start(%{chain_id: 84_532, nonce: 0, simulate: :ok})
+
+    {:ok, signer} =
+      Signer.start_link(
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000
+      )
+
+    store = MemoryStore.start()
+
+    {:ok, keeper} =
+      Keeper.start_link(
+        signer: signer,
+        chain_id: 84_532,
+        store: {MemoryStore, store},
+        treasury_address: @treasury,
+        token_address: @token,
+        source_allowlist: ["market_phase"],
+        order_ttl_s: order_ttl_s,
+        rpc_mod: FakeRpc,
+        rpc: fake,
+        sweep_ms: 3_600_000
+      )
+
+    ctx = %{
+      bot_token: @bot_token,
+      max_age_s: 900,
+      user_ref_fn: fn user_id -> "ref-" <> Integer.to_string(user_id) end,
+      keeper: keeper,
+      pinned: %{chain_id: 84_532, token: @token, router: @router, version: "0.2.0"},
+      rate: {Rate.start(60), rate_max}
+    }
+
+    %{fake: fake, signer: signer, store: store, keeper: keeper, ctx: ctx}
+  end
+
+  defp register_authorization_order(keeper, user_id, amount \\ 1_000_000) do
+    {:ok, %{order_ref: ref}} =
+      Keeper.register_order(keeper, "market_phase", %{
+        user_ref: "ref-" <> Integer.to_string(user_id),
+        amount: amount,
+        action_args: [],
+        kind: "authorization"
+      })
+
+    ref
+  end
+
+  defp auth_env(overrides \\ %{}) do
+    Map.merge(
+      %{
+        "v" => "0.2.0",
+        "chain_id" => 84_532,
+        "token" => @token,
+        "from" => "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        "value" => 1_000_000,
+        "valid_after" => 0,
+        "valid_before" => 4_000_000_000,
+        "signature" => "0x" <> String.duplicate("11", 65)
+      },
+      overrides
+    )
+  end
+
+  describe "handle_order/3 for an authorization-kind order" do
+    test "serves nonce/to/domain — everything the dapp needs to compose the EIP-712 payload" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack()
+      ref = register_authorization_order(keeper, @user_id, 2_000_000)
+
+      assert {200, body} =
+               Intake.handle_order(
+                 order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}),
+                 ctx
+               )
+
+      assert body["kind"] == "authorization"
+      assert body["value"] == 2_000_000
+      assert body["to"] == @treasury
+      assert body["token"] == @token
+      assert body["valid_after"] == 0
+      assert body["valid_before"] == body["expires_at"]
+
+      expected_nonce =
+        "0x" <> Base.encode16(DelegatedSpend.Orders.authorization_nonce(ref), case: :lower)
+
+      assert body["nonce"] == expected_nonce
+
+      assert body["domain"] == %{
+               "name" => "USDC",
+               "version" => "2",
+               "chainId" => 84_532,
+               "verifyingContract" => @token
+             }
+    end
+
+    test "withholds nonce/to/domain until current terms are accepted, exactly like user_tx's tx" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack()
+      ref = register_authorization_order(keeper, @user_id)
+      compliance_store = ComplianceStore.start()
+
+      ctx =
+        Map.put(ctx, :compliance, %{
+          geo_block: ["CU"],
+          terms: %{hash: "0x" <> String.duplicate("11", 32), url: "https://example.test/terms"},
+          store: {ComplianceStore, compliance_store}
+        })
+
+      assert {200, body} =
+               Intake.handle_order(
+                 order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}),
+                 %{country: "US"},
+                 ctx
+               )
+
+      assert body["terms"]["required"] == true
+      refute Map.has_key?(body, "nonce")
+      refute Map.has_key?(body, "to")
+      refute Map.has_key?(body, "domain")
+    end
+  end
+
+  describe "handle_authorization/3" do
+    test "sin initData verificada rechaza con 401 y no toca el store" do
+      %{ctx: ctx, keeper: keeper, store: store} = start_authorization_stack()
+      ref = register_authorization_order(keeper, @user_id)
+
+      for bad <- [nil, "", "garbage", init_data(@user_id, "999:WRONG")] do
+        params = %{"init_data" => bad, "order_ref" => ref, "authorization" => auth_env()}
+        assert {401, %{"error" => "unauthorized"}} = Intake.handle_authorization(params, %{}, ctx)
+      end
+
+      assert MemoryStore.list_inflight(store) == []
+    end
+
+    test "el user_ref NO sale de lo que manda el cliente" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack()
+      ref = register_authorization_order(keeper, @user_id)
+
+      # The client lies about being another user; the initData still
+      # verifies to @user_id, so the order (owned by ref-@user_id) is still
+      # found and executed — a client-controlled user_ref would 404 instead
+      # (the order isn't owned by "ref-attacker").
+      params = %{
+        "init_data" => init_data(),
+        "order_ref" => ref,
+        "user_ref" => "ref-attacker",
+        "authorization" => auth_env()
+      }
+
+      assert {200, %{"status" => _}} = Intake.handle_authorization(params, %{}, ctx)
+    end
+
+    test "país bloqueado rechaza antes de nada" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack()
+      ref = register_authorization_order(keeper, @user_id)
+      ctx = Map.put(ctx, :compliance, %{geo_block: ["XX"]})
+      params = %{"init_data" => init_data(), "order_ref" => ref, "authorization" => auth_env()}
+
+      assert {451, %{"error" => "geo_blocked"}} =
+               Intake.handle_authorization(params, %{country: "XX"}, ctx)
+    end
+
+    test "sin términos aceptados no ejecuta" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack()
+      ref = register_authorization_order(keeper, @user_id)
+      compliance_store = ComplianceStore.start()
+
+      ctx =
+        Map.put(ctx, :compliance, %{
+          geo_block: ["CU"],
+          terms: %{hash: "0x" <> String.duplicate("11", 32), url: "https://example.test/terms"},
+          store: {ComplianceStore, compliance_store}
+        })
+
+      params = %{"init_data" => init_data(), "order_ref" => ref, "authorization" => auth_env()}
+
+      assert {428, %{"error" => "terms_required"}} =
+               Intake.handle_authorization(params, %{country: "US"}, ctx)
+    end
+
+    test "por encima del límite de peticiones rechaza" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack(1)
+      ref1 = register_authorization_order(keeper, @user_id)
+      ref2 = register_authorization_order(keeper, @user_id)
+
+      params1 = %{"init_data" => init_data(), "order_ref" => ref1, "authorization" => auth_env()}
+      params2 = %{"init_data" => init_data(), "order_ref" => ref2, "authorization" => auth_env()}
+
+      assert {200, _} = Intake.handle_authorization(params1, %{}, ctx)
+      assert {429, %{"error" => "rate limited"}} = Intake.handle_authorization(params2, %{}, ctx)
+    end
+
+    test "una versión vieja del dapp se rechaza con 409" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack()
+      ref = register_authorization_order(keeper, @user_id)
+
+      params = %{
+        "init_data" => init_data(),
+        "order_ref" => ref,
+        "authorization" => Map.put(auth_env(), "v", "0.0.9")
+      }
+
+      assert {409, _} = Intake.handle_authorization(params, %{}, ctx)
+    end
+
+    test "una firma ausente o vacía se rechaza con 422" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack()
+      ref = register_authorization_order(keeper, @user_id)
+
+      params = %{
+        "init_data" => init_data(),
+        "order_ref" => ref,
+        "authorization" => Map.put(auth_env(), "signature", "")
+      }
+
+      assert {422, %{"error" => "invalid", "field" => "signature"}} =
+               Intake.handle_authorization(params, %{}, ctx)
+    end
+
+    test "el camino feliz llega al keeper y devuelve el estado" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack()
+      ref = register_authorization_order(keeper, @user_id)
+      params = %{"init_data" => init_data(), "order_ref" => ref, "authorization" => auth_env()}
+
+      assert {200, %{"status" => _}} = Intake.handle_authorization(params, %{}, ctx)
+    end
+  end
 end

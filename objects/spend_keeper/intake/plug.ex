@@ -26,14 +26,18 @@ if Code.ensure_loaded?(Plug.Conn) do
         case-insensitively against the resolved path so no spelling
         (`/Config.json`, `/./config.json`) can reach the package's static
         stale-pin file on a case-insensitive filesystem,
-      * `POST <intakeUrl>/orders`, `POST <intakeUrl>/orders/submitted` and
-        `POST <intakeUrl>/terms` (every route the dapp's `user_tx` flow
-        calls) — thin JSON adapters over `DelegatedSpend.Intake
-        .handle_order/3`, `handle_submitted/3` and `handle_terms/3` with
-        trusted request metadata and the host `:ctx`. Bodies are read raw and
-        capped (413 oversize, 400 bad JSON — never a crash); requests
-        without a usable credential shape are refused 401 before any
-        handler work.
+      * `POST <intakeUrl>/orders`, `POST <intakeUrl>/orders/submitted`,
+        `POST <intakeUrl>/terms` and `POST <intakeUrl>/authorization` (every
+        route the dapp's `user_tx` and EIP-3009 authorization flows call) —
+        thin JSON adapters over `DelegatedSpend.Intake.handle_order/3`,
+        `handle_submitted/3`, `handle_terms/3` and `handle_authorization/3`
+        with trusted request metadata and the host `:ctx`. Bodies are read
+        raw and capped (413 oversize, 400 bad JSON — never a crash);
+        requests without a usable credential shape are refused 401 before
+        any handler work. **Transport only**: every authority decision
+        (geofence, `initData` authentication, rate limit, terms, pinned
+        config) lives inside the `Intake` handlers themselves — this plug
+        never calls the keeper directly.
 
     ## Scope: the user_tx lane, terms included
 
@@ -49,13 +53,16 @@ if Code.ensure_loaded?(Plug.Conn) do
     handler is the authority and answers `503 unavailable` (there is nothing
     to accept), which is why this needs no branch on the ctx.
 
-    The GRANT lane (`POST /grants`, `POST /wallet` —
+    The PERMIT grant lane (`POST /grants`, `POST /wallet` —
     `DelegatedSpend.Intake.handle_grant/3` and `handle_wallet/3`) is
     deliberately NOT routed here. It needs a keeper configured with a signer,
     a router and an action ABI, plus a host-owned `wallet_fn`, i.e. a
     different deployment shape with its own decisions to make; a host running
     that lane mounts its own router or forwards those two paths. This plug is
-    the user_tx/bind-read surface.
+    the user_tx/bind-read surface, PLUS the authorization (EIP-3009) lane
+    below — which, unlike the permit lane, needs no router/action ABI and no
+    host `wallet_fn`, only the keeper's own `:treasury_address` /
+    `:token_address`, so it fits this plug's existing deployment shape.
 
     ## Init opts
 
@@ -147,6 +154,15 @@ if Code.ensure_loaded?(Plug.Conn) do
         # compliance-enabled consumer's lane can never be un-gated.
         conn.method == "POST" and conn.path_info == opts.intake ++ ["terms"] ->
           handle_intake(conn, &DelegatedSpend.Intake.handle_terms/3, opts)
+
+        # Unlike the grant (permit) lane below, the authorization (EIP-3009)
+        # lane needs no router/action ABI and no host wallet_fn — only the
+        # keeper's own :treasury_address/:token_address — so it is routed
+        # here like /terms, not left to a host-mounted router. All FIVE
+        # authority gates still run inside `handle_authorization/3` itself;
+        # this is transport only (see the moduledoc's "authority" note).
+        conn.method == "POST" and conn.path_info == opts.intake ++ ["authorization"] ->
+          handle_intake(conn, &DelegatedSpend.Intake.handle_authorization/3, opts)
 
         conn.method == "GET" ->
           serve_webapp(conn, Enum.join(conn.path_info, "/"), opts)

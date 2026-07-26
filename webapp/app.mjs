@@ -3,7 +3,7 @@
 // the injected EIP-1193 provider, and the DOM elements.
 
 import { applyProductName } from "./lib/brand.mjs";
-import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, runBindFlow, runPermitFlow, runUserTxFlow, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
+import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, runAuthorizationFlow, runBindFlow, runPermitFlow, runUserTxFlow, shortAddress, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -165,6 +165,7 @@ async function main() {
 
   if (fetched.order.kind === "user_tx") return setupUserTx(deps, fetched.order, orderRef, tg);
   if (fetched.order.kind === "bind") return setupBind(deps, fetched.order, orderRef, tg);
+  if (fetched.order.kind === "authorization") return setupAuthorization(deps, fetched.order, orderRef, tg);
   setupPermit(deps, fetched.order, orderRef, tg);
 }
 
@@ -218,6 +219,40 @@ async function setupPermit(deps, order, orderRef, tg) {
       enterGeoDeadState($("status"));
     } else {
       paintStatus($("status"), MESSAGES[result.reason] || `Payment failed (${result.reason}). Nothing was charged — reopen this page from the chat button to retry, or use the manual send option below if shown.`, "error");
+      $("pay").disabled = false;
+    }
+  };
+  $("pay").onclick = () => run();
+}
+
+// The authorization (EIP-3009) lane: same skeleton as setupPermit — a
+// gasless signature, not a wallet-sent transaction — but the destination and
+// amount are shown UP FRONT and prominently: the user must see where the
+// money goes before the wallet's own signing prompt ever appears.
+async function setupAuthorization(deps, order, orderRef, tg) {
+  const amount = (order.value / 1_000_000).toFixed(2);
+  $("summary").textContent =
+    `${deps.config.actionLabel}: ${amount} USDC to ${shortAddress(order.to)} ` +
+    `(gasless — the operator pays network fees).`;
+  if (!(await enforceOwnerAtLoad(deps, order))) return;
+  $("pay").disabled = false;
+
+  const run = async (fetched) => {
+    $("pay").disabled = true;
+    paintStatus($("status"), "Connecting wallet…");
+    const result = await runAuthorizationFlow(deps, orderRef, fetched);
+
+    if (result.ok) {
+      paintStatus($("status"), "Payment submitted ✓ — you can return to the chat.", "success");
+      if (tg) setTimeout(() => tg.close(), 1500);
+    } else if (result.reason === "wrong_wallet") {
+      blockWrongWallet(result.expected);
+    } else if (result.reason === "terms_required") {
+      showTermsPrompt(deps, { account: result.account, terms: result.terms, ref: orderRef, retry: run });
+    } else if (result.reason === "geo_blocked") {
+      enterGeoDeadState($("status"));
+    } else {
+      paintStatus($("status"), MESSAGES[result.reason] || `Payment failed (${result.reason}). Nothing was charged — reopen this page from the chat button to retry.`, "error");
       $("pay").disabled = false;
     }
   };

@@ -456,7 +456,13 @@ defmodule DelegatedSpend.Intake.PlugTest do
 
       gated = post_compliance("/spend/orders", order_body, ctx.compliance_opts)
       assert gated.status == 200
-      assert json(gated)["terms"] == %{"required" => true, "v_hash" => @terms_hash, "url" => "https://example.test/terms-v2"}
+
+      assert json(gated)["terms"] == %{
+               "required" => true,
+               "v_hash" => @terms_hash,
+               "url" => "https://example.test/terms-v2"
+             }
+
       refute Map.has_key?(json(gated), "tx")
 
       submit_body =
@@ -544,6 +550,86 @@ defmodule DelegatedSpend.Intake.PlugTest do
     end
   end
 
+  # The keeper this whole file shares (see the top-level `setup`) has no
+  # signer/treasury/token configured — the authorization lane is disabled —
+  # so a request that clears the credential gate still gets a typed 422
+  # (`authorization_lane_disabled`) from the REAL keeper, never a stub. That
+  # is exactly the point: this route is transport only, so proving it
+  # reaches the real `Intake.handle_authorization/3` → `Keeper` chain is the
+  # whole test, regardless of whether the lane happens to be configured.
+  describe "POST /spend/authorization" do
+    setup ctx do
+      order_ref = Orders.mint_order_ref()
+
+      {:ok, _ack} =
+        Keeper.register_order(ctx.ctx.keeper, "app", %{
+          order_ref: order_ref,
+          user_ref: ctx.user_ref,
+          amount: 1_000_000,
+          action_args: [],
+          kind: "authorization"
+        })
+
+      token = Token.mint(@secret, order_ref, ctx.user_ref, System.os_time(:second) + 900)
+
+      %{auth_order_ref: order_ref, auth_token: token}
+    end
+
+    defp auth_body(order_ref, token, overrides \\ %{}) do
+      envelope =
+        Map.merge(
+          %{
+            "v" => "test-v",
+            "chain_id" => @chain_id,
+            "token" => @token_addr,
+            "from" => "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "value" => 1_000_000,
+            "valid_after" => 0,
+            "valid_before" => 4_000_000_000,
+            "signature" => "0x" <> String.duplicate("11", 65)
+          },
+          overrides
+        )
+
+      Jason.encode!(%{
+        "order_ref" => order_ref,
+        "token" => token,
+        "v" => "test-v",
+        "authorization" => envelope
+      })
+    end
+
+    test "transport only: reaches handle_authorization/3 and returns its {status, body} verbatim",
+         ctx do
+      body = auth_body(ctx.auth_order_ref, ctx.auth_token)
+      conn = post_json("/spend/authorization", body, ctx.opts)
+
+      assert conn.status == 422
+      assert json(conn) == %{"status" => "failed", "reason" => "authorization_lane_disabled"}
+    end
+
+    test "401 without any credential, before any handler work", ctx do
+      body = Jason.encode!(%{"order_ref" => ctx.auth_order_ref, "authorization" => %{}})
+      conn = post_json("/spend/authorization", body, ctx.opts)
+      assert conn.status == 401
+      assert json(conn) == %{"error" => "unauthorized"}
+    end
+
+    test "413 on an oversize body, bounded by :body_limit", _ctx do
+      small = IntakePlug.init(ctx: %{token_secret: @secret}, config: @config, body_limit: 64)
+      body = Jason.encode!(%{"token" => "t", "pad" => String.duplicate("x", 500)})
+
+      conn = post_json("/spend/authorization", body, small)
+      assert conn.status == 413
+      assert json(conn) == %{"error" => "payload_too_large"}
+    end
+
+    test "400 on bad JSON and non-map JSON", ctx do
+      assert post_json("/spend/authorization", "{not json", ctx.opts).status == 400
+      assert post_json("/spend/authorization", "[1,2,3]", ctx.opts).status == 400
+    end
+  end
+
   describe "routing" do
     test "the grant lane is NOT routed (this plug is the user_tx surface)", ctx do
       # Not an oversight: /grants and /wallet need a keeper with a signer, a
@@ -551,6 +637,13 @@ defmodule DelegatedSpend.Intake.PlugTest do
       # moduledoc; pinned here so routing them becomes a deliberate change.
       assert post_json("/spend/grants", "{}", ctx.opts).status == 404
       assert post_json("/spend/wallet", "{}", ctx.opts).status == 404
+    end
+
+    test "the authorization lane IS routed here (unlike grants/wallet)", ctx do
+      # No router/action ABI and no host wallet_fn needed for this lane, so
+      # (unlike /grants and /wallet above) it fits this plug's deployment
+      # shape — it reaches the handler (never a 404 router miss).
+      refute post_json("/spend/authorization", "{}", ctx.opts).status == 404
     end
 
     test "unknown POST routes and non-GET/POST methods are 404", ctx do

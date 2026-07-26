@@ -396,4 +396,110 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
   test "interface/0 describes the three door actions" do
     assert %{register_order: _, order_status: _, reset_backoff: _} = Object.interface()
   end
+
+  # ── kind: "authorization" (EIP-3009) — the enriched register_order ack ────
+
+  @token "0x" <> String.duplicate("11", 20)
+  @treasury "0x" <> String.duplicate("99", 20)
+
+  defp authorization_keeper_opts(fake, signer) do
+    %{
+      signer: signer,
+      chain_id: 84_532,
+      store: {MemoryStore, MemoryStore.start()},
+      treasury_address: @treasury,
+      token_address: @token,
+      source_allowlist: ["market_phase"],
+      order_ttl_s: 600,
+      rpc_mod: FakeRpc,
+      rpc: fake,
+      sweep_ms: 3_600_000
+    }
+  end
+
+  defp start_authorization_object(config_overrides \\ %{}) do
+    fake = FakeRpc.start(%{chain_id: 84_532, nonce: 0, simulate: :ok})
+
+    {:ok, signer} =
+      Signer.start_link(
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000
+      )
+
+    opts = authorization_keeper_opts(fake, signer)
+    {:ok, state} = Object.init(Map.merge(%{keeper_opts: opts}, config_overrides))
+    %{state: state, opts: opts}
+  end
+
+  defp register_authorization_payload(overrides \\ %{}) do
+    order =
+      Map.merge(
+        %{
+          "order_ref" => @ref,
+          "user_ref" => "u-a",
+          "amount" => 1_000_000,
+          "action_args" => [],
+          "kind" => "authorization"
+        },
+        overrides
+      )
+
+    Jason.encode!(%{"action" => "register_order", "order" => order})
+  end
+
+  describe "register_order with kind: authorization" do
+    test "the ack carries everything the dapp needs to compose the EIP-3009 payload" do
+      %{state: state} = start_authorization_object()
+      {reply, _state} = msg(state, "market_phase", register_authorization_payload())
+
+      assert reply["ok"] == true
+      assert reply["order_ref"] == @ref
+      assert reply["value"] == 1_000_000
+      # server-picked, never client-chosen: the dapp shows these, doesn't set them
+      assert reply["to"] == @treasury
+      assert reply["token"] == @token
+      assert reply["chain_id"] == 84_532
+      assert reply["valid_after"] == 0
+      assert is_integer(reply["valid_before"])
+      assert reply["nonce"] =~ ~r/^0x[0-9a-f]{64}$/
+
+      assert reply["domain"] == %{
+               "name" => "USDC",
+               "version" => "2",
+               "chainId" => 84_532,
+               "verifyingContract" => @token
+             }
+    end
+
+    test "the nonce matches Orders.authorization_nonce/1 for the order_ref (deterministic)" do
+      %{state: state} = start_authorization_object()
+      {reply, _state} = msg(state, "market_phase", register_authorization_payload())
+
+      expected =
+        "0x" <> Base.encode16(DelegatedSpend.Orders.authorization_nonce(@ref), case: :lower)
+
+      assert reply["nonce"] == expected
+    end
+
+    test "refused when the keeper's authorization lane isn't configured (permit-only)" do
+      %{state: state} = start_object()
+      {reply, _state} = msg(state, "market_phase", register_authorization_payload())
+
+      assert reply["ok"] == false
+      assert reply["error"] == "authorization_lane_disabled"
+    end
+
+    test "a plain (permit-shaped) register_order gets no authorization fields" do
+      %{state: state} = start_object()
+      {reply, _state} = msg(state, "market_phase", register_payload())
+
+      assert reply["ok"] == true
+      refute Map.has_key?(reply, "nonce")
+      refute Map.has_key?(reply, "domain")
+      refute Map.has_key?(reply, "to")
+    end
+  end
 end

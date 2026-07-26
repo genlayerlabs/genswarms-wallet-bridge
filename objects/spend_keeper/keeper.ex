@@ -88,6 +88,16 @@ defmodule DelegatedSpend.Keeper do
 
   def order_status(keeper, order_id), do: GenServer.call(keeper, {:order_status, order_id})
 
+  @doc """
+  The EIP-712 domain the wallet dapp needs to compose a
+  `TransferWithAuthorization` signature — `name`/`version` are the ones READ
+  and CROSS-CHECKED at boot (see `read_and_verify_domain_fields/5`), never a
+  hardcoded guess, plus the keeper's runtime `chain_id` and the
+  treasury/token addresses. `:disabled` when the authorization lane isn't
+  configured (nothing to serve, and nothing was read).
+  """
+  def authorization_domain(keeper), do: GenServer.call(keeper, :authorization_domain)
+
   @doc "Clear a suspended grant's revert backoff (the wallet dapp re-enable path)."
   def reset_backoff(keeper, user_ref), do: GenServer.call(keeper, {:reset_backoff, user_ref})
 
@@ -116,13 +126,17 @@ defmodule DelegatedSpend.Keeper do
     # why (mirrors the Eip3009 moduledoc). Failing boot here is correct — with
     # no domain no signature can ever be validated on-chain, and booting
     # without it would only move the failure to the first paying user.
-    domain_separator =
+    {domain_separator, token_name, token_version} =
       case token_address do
         nil ->
-          nil
+          {nil, nil, nil}
 
         addr ->
-          read_domain_separator(Map.fetch!(opts, :rpc_mod), Map.fetch!(opts, :rpc), addr)
+          rpc_mod = Map.fetch!(opts, :rpc_mod)
+          rpc = Map.fetch!(opts, :rpc)
+          ds = read_domain_separator(rpc_mod, rpc, addr)
+          {name, version} = read_and_verify_domain_fields(rpc_mod, rpc, addr, opts.chain_id, ds)
+          {ds, name, version}
       end
 
     state = %{
@@ -130,6 +144,13 @@ defmodule DelegatedSpend.Keeper do
       token_address: token_address,
       treasury_address: treasury_address,
       domain_separator: domain_separator,
+      # Boot-VERIFIED name/version (see `read_and_verify_domain_fields/5`
+      # below) — the only fields ever served to the dapp as the EIP-712
+      # domain, because they are proven to hash to the on-chain
+      # DOMAIN_SEPARATOR read above, not merely assumed from public knowledge
+      # of the real token deployments.
+      token_name: token_name,
+      token_version: token_version,
       authorization_enabled?: authorization_enabled?,
       # The RUNTIME chain id (the app derives it from its RPC at boot). Not a
       # per-order field: order views stamp it at FETCH time, so orders
@@ -358,6 +379,24 @@ defmodule DelegatedSpend.Keeper do
     end
   end
 
+  def handle_call(:authorization_domain, _from, state) do
+    reply =
+      if state.authorization_enabled? do
+        {:ok,
+         %{
+           treasury_address: state.treasury_address,
+           token_address: state.token_address,
+           chain_id: state.chain_id,
+           name: state.token_name,
+           version: state.token_version
+         }}
+      else
+        :disabled
+      end
+
+    {:reply, reply, state}
+  end
+
   def handle_call({:reset_backoff, user_ref}, _from, state) do
     {:reply, :ok, %{state | reverts: Map.delete(state.reverts, user_ref)}}
   end
@@ -494,6 +533,72 @@ defmodule DelegatedSpend.Keeper do
       other ->
         raise "keeper: could not read DOMAIN_SEPARATOR from token #{String.downcase(token_address)}: #{inspect(other)}"
     end
+  end
+
+  # name() = 0x06fdde03, version() = 0x54fd4d50. Proves the fields this
+  # keeper will later serve as the EIP-712 domain are the TRUE preimage of
+  # the on-chain DOMAIN_SEPARATOR already read above, rather than a
+  # hardcoded guess — even though both values are public knowledge for the
+  # real deployments this package targets ("USDC" / "2" on both Base
+  # chains), reading and cross-checking them here is the only way to prove
+  # what gets served is correct: composing a domain that merely LOOKS
+  # plausible and handing it to the dapp would produce signatures the chain
+  # silently rejects (see the Eip3009 moduledoc), discovered only after a
+  # real user tries to pay. Boot fails closed on any mismatch or malformed
+  # read, exactly like the DOMAIN_SEPARATOR read and BootCheck's codehash
+  # pin.
+  defp read_and_verify_domain_fields(rpc_mod, rpc, token_address, chain_id, domain_separator) do
+    name = read_token_string(rpc_mod, rpc, token_address, "0x06fdde03", "name")
+    version = read_token_string(rpc_mod, rpc, token_address, "0x54fd4d50", "version")
+
+    computed =
+      DelegatedSpend.Keeper.Eip3009.domain_separator(name, version, chain_id, token_address)
+
+    unless computed == domain_separator do
+      raise "keeper: token #{String.downcase(token_address)} name()/version() " <>
+              "(#{inspect(name)}, #{inspect(version)}) do not hash to the on-chain " <>
+              "DOMAIN_SEPARATOR — refusing to serve an unverified EIP-712 domain to the dapp " <>
+              "(expected 0x#{Base.encode16(domain_separator, case: :lower)}, computed " <>
+              "0x#{Base.encode16(computed, case: :lower)})"
+    end
+
+    {name, version}
+  end
+
+  defp read_token_string(rpc_mod, rpc, token_address, selector, label) do
+    case rpc_mod.eth_call(rpc, token_address, selector) do
+      "0x" <> hex ->
+        case decode_abi_string(hex) do
+          {:ok, str} ->
+            str
+
+          :error ->
+            raise "keeper: could not decode #{label}() from token " <>
+                    "#{String.downcase(token_address)}: malformed ABI string"
+        end
+
+      other ->
+        raise "keeper: could not read #{label}() from token " <>
+                "#{String.downcase(token_address)}: #{inspect(other)}"
+    end
+  end
+
+  # Minimal ABI decode for a single dynamic `string` return: offset word (32
+  # bytes, ignored — always 0x20 for a direct single-value return), length
+  # word, then the UTF-8 bytes themselves (right-padded to a multiple of 32,
+  # which `binary_part/3` below simply ignores).
+  defp decode_abi_string(hex) do
+    bytes = Base.decode16!(hex, case: :mixed)
+
+    case bytes do
+      <<_offset::256, len::256, rest::binary>> when byte_size(rest) >= len ->
+        {:ok, binary_part(rest, 0, len)}
+
+      _ ->
+        :error
+    end
+  rescue
+    _ -> :error
   end
 
   # ── execution ─────────────────────────────────────────────────────────────

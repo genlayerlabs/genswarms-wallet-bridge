@@ -10,6 +10,7 @@
 // the product-side answer to all of them; the wallet dapp only reports.
 
 import { buildPermitTypedData, buildGrantEnvelope } from "./permit.mjs";
+import { buildAuthorizationTypedData, buildAuthorizationEnvelope } from "./authorization.mjs";
 import { buildTermsEnvelope, buildTermsTypedData } from "./terms.mjs";
 
 export async function connectWallet({ provider }) {
@@ -308,6 +309,96 @@ export async function runPermitFlow(deps, orderRef, fetched = null) {
     order: fetched.order,
     account: conn.account,
     nonce,
+  });
+}
+
+/**
+ * The authorization (EIP-3009) lane's sign step: `to`, `value`, `nonce` and
+ * the EIP-712 `domain` all come from the SERVER-served order view (see
+ * DelegatedSpend.Intake.handle_order/3) — this page shows them and signs
+ * over exactly what it was given, it never recomputes any of them. The
+ * keeper re-validates everything against the stored order and its own
+ * boot-verified domain before it ever calls the token contract, so a
+ * tampered value here would simply fail to execute, never overpay.
+ */
+export async function signAndSubmitAuthorization(deps, { orderRef, order, account }) {
+  const { provider, fetchFn, config } = deps;
+
+  const typedData = buildAuthorizationTypedData({
+    domain: order.domain,
+    from: account,
+    to: order.to,
+    value: order.value,
+    validAfter: order.valid_after,
+    validBefore: order.valid_before,
+    nonce: order.nonce,
+  });
+
+  let signature;
+  try {
+    signature = await provider.request({
+      method: "eth_signTypedData_v4",
+      params: [account, JSON.stringify(typedData)],
+    });
+  } catch (e) {
+    if (e && e.code === 4001) return { ok: false, reason: "user_rejected" };
+    return { ok: false, reason: "sign_failed" };
+  }
+
+  const envelope = buildAuthorizationEnvelope({
+    version: config.version,
+    chainId: config.chainId,
+    token: order.token,
+    from: account,
+    value: order.value,
+    validAfter: order.valid_after,
+    validBefore: order.valid_before,
+    signature,
+  });
+
+  const res = await fetchFn(`${config.intakeUrl}/authorization`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: authBody(deps, { order_ref: orderRef, authorization: envelope }),
+  });
+
+  if (res.status === 409) return { ok: false, reason: "version_mismatch" };
+  if (res.status === 401) return { ok: false, reason: "unauthorized" };
+  if (res.status === 451) return { ok: false, reason: "geo_blocked" };
+  const body = await res.json();
+  if (res.status === 428)
+    return { ok: false, reason: "terms_required", terms: body.terms, account };
+  if (res.status !== 200) return { ok: false, reason: body.reason || body.error || `http_${res.status}` };
+  return { ok: true, status: body.status, tx: body.tx };
+}
+
+/**
+ * The authorization lane's whole handshake: fetch order → sign → submit.
+ * Same shape as runPermitFlow (fetch-before-connect so config drift blocks
+ * before any wallet interaction; the wallet-vs-config chain check only runs
+ * once order and config already agree) — this lane needs no on-chain nonce
+ * read (the server-picked nonce is deterministic from the order ref, not a
+ * per-owner counter), so there is no fetchPermitNonce-equivalent step.
+ */
+export async function runAuthorizationFlow(deps, orderRef, fetched = null) {
+  fetched ??= await fetchOrder(deps, orderRef);
+  if (!fetched.ok) return fetched;
+  if (configDrift(fetched.order, deps.config)) return { ok: false, reason: "config_drift" };
+  if (fetched.order.kind !== "authorization") return { ok: false, reason: "wrong_kind" };
+
+  let conn = await connectWallet(deps);
+  if (!conn.ok) return conn;
+  conn = await ensureChain(deps, conn);
+  if (!conn.ok) return conn;
+  if (ownerMismatch(fetched.order, conn.account))
+    return { ok: false, reason: "wrong_wallet", expected: fetched.order.expected_owner };
+  if (termsRequired(fetched.order))
+    return { ok: false, reason: "terms_required", terms: fetched.order.terms, account: conn.account };
+
+  return signAndSubmitAuthorization(deps, {
+    orderRef,
+    order: fetched.order,
+    account: conn.account,
   });
 }
 

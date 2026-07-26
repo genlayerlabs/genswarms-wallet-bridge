@@ -53,4 +53,42 @@ defmodule DelegatedSpend.Eip3009Test do
       Eip3009.transfer_with_authorization_calldata(@from, @to, 1, 0, 99, @nonce, <<>>)
     end
   end
+
+  describe "domain_separator/4" do
+    test "es de 32 bytes y cambia con cada campo del dominio" do
+      base = Eip3009.domain_separator("USDC", "2", 84_532, @to)
+      assert byte_size(base) == 32
+
+      refute base == Eip3009.domain_separator("USDT", "2", 84_532, @to)
+      refute base == Eip3009.domain_separator("USDC", "1", 84_532, @to)
+      refute base == Eip3009.domain_separator("USDC", "2", 8453, @to)
+      refute base == Eip3009.domain_separator("USDC", "2", 84_532, @from)
+    end
+
+    test "coincide con la formula EIP-712 de dominio (4 campos) usada por los vectores de permit" do
+      # Misma formula que el helper privado de test/permit_vectors_test.exs —
+      # ambas lanes comparten el mismo tipo de dominio EIP712Domain(name,
+      # version, chainId, verifyingContract), sólo cambia el typehash del
+      # mensaje (Permit vs TransferWithAuthorization).
+      alias DelegatedSpend.Keccak
+      alias DelegatedSpend.Evm.Address
+
+      name = "USDC"
+      version = "2"
+      chain_id = 84_532
+
+      expected =
+        Keccak.hash_256(
+          Keccak.hash_256(
+            "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+          ) <>
+            Keccak.hash_256(name) <>
+            Keccak.hash_256(version) <>
+            <<chain_id::256>> <>
+            <<0::96>> <> Address.to_bytes(@to)
+        )
+
+      assert Eip3009.domain_separator(name, version, chain_id, @to) == expected
+    end
+  end
 end

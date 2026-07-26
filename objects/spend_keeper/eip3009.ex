@@ -22,6 +22,10 @@ defmodule DelegatedSpend.Keeper.Eip3009 do
               "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
             )
 
+  @domain_typehash Keccak.hash_256(
+                     "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                   )
+
   # transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,bytes)
   # El selector ya no se escribe a mano: `Abi.encode_call/3` lo deriva de
   # name+types, así un typo no puede acuñar en silencio uno equivocado.
@@ -105,6 +109,29 @@ defmodule DelegatedSpend.Keeper.Eip3009 do
       )
 
     "0x" <> Base.encode16(calldata, case: :lower)
+  end
+
+  @doc """
+  The EIP-712 domain separator for `(name, version, chainId, verifyingContract)`
+  — the same formula the token's own `DOMAIN_SEPARATOR()` computes on-chain.
+
+  Exposed so the keeper can PROVE, at boot, that the `name()`/`version()` it
+  just read from the token really are the domain's preimage (spec: do not
+  serve an EIP-712 domain to the dapp without verifying it hashes to the
+  separator read from the contract). Composing a domain that merely *looks*
+  plausible and serving it produces signatures the chain silently rejects —
+  see the moduledoc above.
+  """
+  @spec domain_separator(String.t(), String.t(), non_neg_integer, String.t()) :: <<_::256>>
+  def domain_separator(name, version, chain_id, verifying_contract)
+      when is_binary(name) and is_binary(version) and is_integer(chain_id) do
+    Keccak.hash_256(
+      @domain_typehash <>
+        Keccak.hash_256(name) <>
+        Keccak.hash_256(version) <>
+        <<chain_id::256>> <>
+        pad_address(verifying_contract)
+    )
   end
 
   defp pad_address(addr), do: <<0::96>> <> Address.to_bytes(addr)

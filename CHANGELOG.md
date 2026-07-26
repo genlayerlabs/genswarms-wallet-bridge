@@ -11,6 +11,80 @@ package releases can ship zero contract bytecode changes. `scripts/check-version
 
 ## [Unreleased]
 
+### Added
+
+- **The authorization lane (EIP-3009 `transferWithAuthorization`) is now
+  exposed end to end** — a gasless sibling to the permit lane that pays the
+  keeper's own `:treasury_address` directly on the real USDC contract,
+  instead of routing through `SpendRouter`. No Solidity bytes changed and
+  `CONTRACT_VERSION` stays put: this lane never touches the router or the
+  package's own contract, it calls Circle's USDC deployment's
+  `transferWithAuthorization` directly.
+  - `DelegatedSpend.Keeper.Eip3009` — the digest/calldata pair (spec-mirror
+    of `PermitLane`, distinct typehash) plus `domain_separator/4`, the pure
+    EIP-712 domain formula used to PROVE what the keeper serves is correct
+    (see the boot check below).
+  - `DelegatedSpend.Keeper.execute_with_authorization/4` — the EIP-3009
+    sibling of `execute_with_permit/4`: same order-lookup →
+    execution-status idempotency → typed-failure `cond` shape, plus the
+    authorization's OWN `valid_after`/`valid_before` on-chain validity
+    window (checked against chain time, not just the order's TTL) and
+    `GasPolicy`'s economic brakes (price ceiling, rolling 24h budget,
+    minimum order size).
+  - `DelegatedSpend.Keeper.GasPolicy` — the three independent, all-optional
+    economic brakes gating the authorization lane's broadcast: a gas-price
+    ceiling, a rolling 24h gas budget, and a minimum order size.
+  - **Store-contract change:** the keeper's store behaviour gained
+    `record_gas_spend/4` and `gas_spent_since/2` (gas-budget accounting,
+    scoped to the authorization lane's orders only). **This is a breaking
+    change for consumer-supplied stores** — any store module implementing
+    the keeper's store contract (see `DelegatedSpend.Keeper.Store`) must add
+    both callbacks; `MemoryStore` ships the reference implementation.
+  - `DelegatedSpend.Intake.handle_authorization/3` — `POST /authorization`'s
+    pure handler, the EIP-3009 sibling of `handle_grant/3`: the SAME five
+    authority gates in the SAME order (geofence → `initData` authentication
+    → rate limit → terms → `GrantValidation` against pinned config), and the
+    `user_ref` derives ONLY from verified `initData`, never from the
+    request body.
+  - `DelegatedSpend.Intake.GrantValidation.validate_authorization/2` — same
+    shape as `validate_permit/2`: `chain_id`/`token`/`version` checked
+    against pinned config (no `router` pin — this lane never touches the
+    router), `from`/`value`/`valid_after`/`valid_before`/`signature`
+    type-checked. There is no `"to"` in the envelope at all — the
+    destination is the keeper's `:treasury_address`, set server-side, and a
+    client-sent `to` is never even parsed.
+  - `DelegatedSpend.Intake.Plug` now routes `POST <intakeUrl>/authorization`
+    — unlike the permit grant lane (`/grants`, `/wallet`, still intentionally
+    unrouted here), this lane needs no router/action ABI and no host
+    `wallet_fn`, only the keeper's own treasury/token config, so it fits this
+    plug's existing deployment shape. Transport only: every authority
+    decision still lives inside `handle_authorization/3`.
+  - `DelegatedSpend.Keeper.Object`'s `register_order` action, given
+    `kind: "authorization"`, now returns an enriched ack — `nonce` (0x-hex,
+    deterministic from the order ref), `to` (the treasury — shown, never
+    chosen by the caller), `value`, `valid_after`/`valid_before`, `token`,
+    `chain_id`, and the EIP-712 `domain` — everything the wallet dapp needs
+    to compose a `TransferWithAuthorization` signature. `DelegatedSpend
+    .Keeper.authorization_domain/1` exposes the same fields for
+    `Intake.handle_order/3`'s order view (withheld until terms are accepted,
+    exactly like the `user_tx` lane's `tx` field).
+  - **Boot-time EIP-712 domain verification:** the keeper now reads the
+    token's `name()`/`version()` at boot (in addition to the existing
+    `DOMAIN_SEPARATOR()` read) and recomposes the domain hash from them,
+    refusing to boot if it disagrees with the separator actually read from
+    the contract. This is the only way to prove the `name`/`version` served
+    to the dapp are the TRUE preimage rather than a hardcoded guess — a
+    domain that merely looks plausible produces signatures the chain
+    silently rejects, discovered only after a real user tries to pay.
+  - The wallet dapp (`webapp/`) signs `TransferWithAuthorization` via
+    `eth_signTypedData_v4` for `kind: "authorization"` orders instead of
+    sending a transaction — `webapp/lib/authorization.mjs` (typed-data +
+    envelope encoding, the sibling of `lib/permit.mjs`) and
+    `runAuthorizationFlow`/`signAndSubmitAuthorization` in `lib/flow.mjs`.
+    `to` and `value` are shown prominently before the wallet's signing
+    prompt ever appears; every field signed comes from the server-served
+    order view, never recomputed client-side.
+
 ### Planned
 
 - **M2 — delegation lane (ERC-7710):** standing delegation with caveats,

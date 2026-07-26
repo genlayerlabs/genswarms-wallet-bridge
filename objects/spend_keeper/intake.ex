@@ -27,7 +27,7 @@ defmodule DelegatedSpend.Intake do
 
   alias DelegatedSpend.Compliance.{Geo, Store, Terms}
   alias DelegatedSpend.Intake.{GrantValidation, Rate, TelegramAuth, Token}
-  alias DelegatedSpend.Keeper
+  alias DelegatedSpend.{Keeper, Orders}
 
   require Logger
 
@@ -95,6 +95,16 @@ defmodule DelegatedSpend.Intake do
                 "bind" ->
                   Map.put(base, "current_wallet", wallet_view(ctx, user_ref))
 
+                "authorization" ->
+                  # Same withholding rule as "tx" above: nonce/to/domain are
+                  # exactly what is needed to sign and submit a valid
+                  # TransferWithAuthorization, so they are as executable as
+                  # the user_tx payload and must not be servable before the
+                  # current terms are accepted.
+                  if terms_required?,
+                    do: base,
+                    else: authorization_fields(base, view, ctx)
+
                 _ ->
                   base
               end
@@ -150,6 +160,62 @@ defmodule DelegatedSpend.Intake do
 
             {:mined, hash} ->
               record_event(ctx, user_ref, "grant_submitted", permit.owner, order_ref, meta)
+              {200, %{"status" => "mined", "tx" => hash}}
+
+            {:failed, :not_found} ->
+              {404, %{"error" => "not found"}}
+
+            {:failed, reason} ->
+              {422, %{"status" => "failed", "reason" => to_string(reason)}}
+
+            :unknown ->
+              {404, %{"error" => "not found"}}
+          end
+      end
+    else
+      {:error, status, body} -> {status, body}
+    end
+  end
+
+  @doc """
+  POST /authorization — EIP-3009 envelope wrapping a pending order. Same
+  authority chain as `handle_grant/3`: no work happens before authentication,
+  and the `user_ref` derives ONLY from verified `initData`.
+  """
+  def handle_authorization(params, ctx) when is_map(params) do
+    warn_missing_meta(ctx, "handle_authorization")
+    handle_authorization(params, %{}, ctx)
+  end
+
+  def handle_authorization(params, meta, ctx) when is_map(params) do
+    order_ref = to_string(params["order_ref"] || "")
+
+    with :ok <- geofence(meta, ctx),
+         {:ok, user_ref} <- authenticate(params, ctx, order_ref),
+         :ok <- allow(ctx, user_ref),
+         :ok <- require_terms(ctx, user_ref) do
+      case GrantValidation.validate_authorization(params["authorization"] || %{}, ctx.pinned) do
+        {:error, {:pinned_mismatch, :version}} ->
+          {409, %{"error" => "version mismatch"}}
+
+        {:error, {:pinned_mismatch, field}} ->
+          {422, %{"error" => "pinned mismatch", "field" => to_string(field)}}
+
+        {:error, {:invalid, field}} ->
+          {422, %{"error" => "invalid", "field" => to_string(field)}}
+
+        {:ok, auth} ->
+          case Keeper.execute_with_authorization(ctx.keeper, order_ref, user_ref, auth) do
+            :pending ->
+              record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
+              {200, %{"status" => "pending"}}
+
+            {:submitted, hash} ->
+              record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
+              {200, %{"status" => "submitted", "tx" => hash}}
+
+            {:mined, hash} ->
+              record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
               {200, %{"status" => "mined", "tx" => hash}}
 
             {:failed, :not_found} ->
@@ -405,6 +471,38 @@ defmodule DelegatedSpend.Intake do
   end
 
   defp invalid(field), do: {422, %{"error" => "invalid", "field" => to_string(field)}}
+
+  # Everything the dapp needs to compose the TransferWithAuthorization
+  # EIP-712 payload — the SAME boot-verified domain `DelegatedSpend
+  # .Keeper.authorization_domain/1` exposes to the object door's
+  # registration ack (nothing is re-derived here). `:disabled` only if the
+  # keeper's authorization lane was somehow turned off after an
+  # "authorization"-kind order was already registered against it (config is
+  # fixed at boot, so this is a defensive no-op in practice, not a real
+  # runtime state) — degrades to serving the plain view rather than a 5xx.
+  defp authorization_fields(base, view, ctx) do
+    case Keeper.authorization_domain(ctx.keeper) do
+      {:ok, domain} ->
+        Map.merge(base, %{
+          "nonce" =>
+            "0x" <> Base.encode16(Orders.authorization_nonce(view.order_ref), case: :lower),
+          "to" => domain.treasury_address,
+          "value" => view.amount,
+          "valid_after" => 0,
+          "valid_before" => view.expires_at,
+          "token" => domain.token_address,
+          "domain" => %{
+            "name" => domain.name,
+            "version" => domain.version,
+            "chainId" => domain.chain_id,
+            "verifyingContract" => domain.token_address
+          }
+        })
+
+      :disabled ->
+        base
+    end
+  end
 
   defp wallet_view(ctx, user_ref) do
     case Map.get(ctx, :wallet_view_fn) do

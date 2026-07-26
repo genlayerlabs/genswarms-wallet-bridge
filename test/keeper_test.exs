@@ -108,8 +108,10 @@ defmodule DelegatedSpend.KeeperTest do
   # Extends the existing "fake store + fake signer" stack (start_stack/1
   # above) rather than duplicating it: same MemoryStore, same real Signer
   # wired to FakeRpc, only the keeper gets the new :treasury_address /
-  # :token_address / :rpc config the authorization lane needs (and FakeRpc
-  # gets a well-formed DOMAIN_SEPARATOR so boot succeeds).
+  # :token_address / :rpc config the authorization lane needs. FakeRpc's
+  # DOMAIN_SEPARATOR/name()/version() defaults are self-consistent (computed
+  # from the SAME "USDC"/"2" defaults over @token and chain_id 84_532), so
+  # boot's domain cross-check passes with no extra wiring.
   defp start_keeper_with_authorization_config(overrides \\ %{}) do
     overrides = Map.new(overrides)
     treasury = Map.get(overrides, :treasury, @treasury)
@@ -118,12 +120,7 @@ defmodule DelegatedSpend.KeeperTest do
     fake =
       FakeRpc.start(
         Map.merge(
-          %{
-            chain_id: 84_532,
-            nonce: 0,
-            simulate: :ok,
-            eth_call_result: "0x" <> String.duplicate("ab", 32)
-          },
+          %{chain_id: 84_532, nonce: 0, simulate: :ok},
           Map.take(overrides, [:simulate, :block_timestamp, :gas_price])
         )
       )
@@ -220,13 +217,7 @@ defmodule DelegatedSpend.KeeperTest do
   # Traps exits so an init/1 raise comes back as {:error, {exception, _}}
   # instead of taking the test process down.
   defp start_keeper_with(opts) do
-    fake =
-      FakeRpc.start(%{
-        chain_id: 84_532,
-        nonce: 0,
-        simulate: :ok,
-        eth_call_result: "0x" <> String.duplicate("ab", 32)
-      })
+    fake = FakeRpc.start(%{chain_id: 84_532, nonce: 0, simulate: :ok})
 
     {:ok, signer} =
       Signer.start_link(
@@ -1796,8 +1787,7 @@ defmodule DelegatedSpend.KeeperTest do
         FakeRpc.start(%{
           chain_id: 84_532,
           nonce: 0,
-          simulate: :ok,
-          eth_call_result: "0x" <> String.duplicate("ab", 32)
+          simulate: :ok
         })
 
       {:ok, signer} =
@@ -1869,8 +1859,7 @@ defmodule DelegatedSpend.KeeperTest do
         FakeRpc.start(%{
           chain_id: 84_532,
           nonce: 0,
-          simulate: :ok,
-          eth_call_result: "0x" <> String.duplicate("ab", 32)
+          simulate: :ok
         })
 
       {:ok, signer} =
@@ -1936,8 +1925,7 @@ defmodule DelegatedSpend.KeeperTest do
         FakeRpc.start(%{
           chain_id: 84_532,
           nonce: 0,
-          simulate: :ok,
-          eth_call_result: "0x" <> String.duplicate("ab", 32)
+          simulate: :ok
         })
 
       {:ok, signer} =
@@ -2038,6 +2026,77 @@ defmodule DelegatedSpend.KeeperTest do
                })
 
       assert message =~ "DOMAIN_SEPARATOR"
+      assert message =~ String.downcase(@token)
+    end
+  end
+
+  describe "authorization lane boot: EIP-712 domain (name/version) verification" do
+    test "boots fine and exposes the boot-verified domain when name()/version() hash to DOMAIN_SEPARATOR" do
+      {keeper, _store, _fake} = start_keeper_with_authorization_config()
+
+      assert {:ok,
+              %{
+                treasury_address: @treasury,
+                token_address: @token,
+                chain_id: 84_532,
+                name: "USDC",
+                version: "2"
+              }} = Keeper.authorization_domain(keeper)
+    end
+
+    test ":disabled when the authorization lane isn't configured (permit-only keeper)" do
+      %{keeper: keeper} = start_stack()
+      assert Keeper.authorization_domain(keeper) == :disabled
+    end
+
+    # The whole point of reading name()/version() instead of hardcoding them:
+    # if what the token actually reports does NOT hash to the on-chain
+    # DOMAIN_SEPARATOR, boot must fail closed rather than serve an unverified
+    # (and therefore possibly wrong-network / wrong-token) domain to the dapp.
+    test "keeper refuses to boot when name()/version() do NOT hash to the read DOMAIN_SEPARATOR" do
+      # DOMAIN_SEPARATOR is PINNED to the "USDC"/"2" formula (via
+      # eth_call_result, which short-circuits FakeRpc's self-consistent
+      # default), while the token's version() call (falsely) answers "3" —
+      # the two now disagree.
+      pinned_separator =
+        DelegatedSpend.Keeper.Eip3009.domain_separator("USDC", "2", 84_532, @token)
+
+      fake =
+        FakeRpc.start(%{
+          chain_id: 84_532,
+          nonce: 0,
+          simulate: :ok,
+          eth_call_result: "0x" <> Base.encode16(pinned_separator, case: :lower),
+          token_version: "3"
+        })
+
+      store = MemoryStore.start()
+
+      {:ok, signer} =
+        Signer.start_link(
+          rpc_url: fake,
+          chain_id: 84_532,
+          priv: @anvil0,
+          rpc_mod: FakeRpc,
+          sweep_ms: 3_600_000
+        )
+
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%RuntimeError{message: message}, _stacktrace}} =
+               Keeper.start_link(%{
+                 signer: signer,
+                 chain_id: 84_532,
+                 store: {MemoryStore, store},
+                 source_allowlist: ["market_phase"],
+                 order_ttl_s: 600,
+                 token_address: @token,
+                 treasury_address: @treasury,
+                 rpc_mod: FakeRpc,
+                 rpc: fake
+               })
+
+      assert message =~ "name()/version()"
       assert message =~ String.downcase(@token)
     end
   end
