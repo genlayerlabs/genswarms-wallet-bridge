@@ -1677,5 +1677,44 @@ defmodule DelegatedSpend.KeeperTest do
 
       assert Process.alive?(keeper)
     end
+
+    # R1 (re-review): presence alone is not enough. A truncated paste like
+    # "0xdead" is PRESENT, so the checks above wave it through — and
+    # `Address.to_bytes/1` has a raw-20-byte pass-through clause, so a
+    # string that merely happens to be 20 characters long gets used as-is,
+    # ASCII and all, as the destination. That must fail at boot, not at the
+    # first paying user.
+    test "a malformed treasury address refuses to boot, naming :treasury_address" do
+      assert {:error, {%ArgumentError{message: message}, _}} =
+               start_keeper_with(%{
+                 signer: :real,
+                 token_address: @token,
+                 treasury_address: "0xdeadbeefdeadbeef12"
+               })
+
+      assert message =~ ":treasury_address"
+    end
+
+    test "a malformed token address refuses to boot, naming :token_address" do
+      assert {:error, {%ArgumentError{message: message}, _}} =
+               start_keeper_with(%{
+                 signer: :real,
+                 token_address: "0xdeadbeefdeadbeef12",
+                 treasury_address: @treasury
+               })
+
+      assert message =~ ":token_address"
+    end
+
+    test "a well-formed EIP-55 mixed-case address boots fine (must not over-tighten)" do
+      assert {:ok, keeper} =
+               start_keeper_with(%{
+                 signer: :real,
+                 token_address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+                 treasury_address: @treasury
+               })
+
+      assert Process.alive?(keeper)
+    end
   end
 end

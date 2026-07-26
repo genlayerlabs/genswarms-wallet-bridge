@@ -421,15 +421,33 @@ defmodule DelegatedSpend.Keeper do
       not requested? ->
         false
 
-      missing == [] ->
-        true
-
-      true ->
+      missing != [] ->
         raise ArgumentError,
               "keeper: authorization lane is half-configured — missing " <>
                 Enum.map_join(missing, ", ", &inspect/1) <>
                 ". Configure all of :signer, :token_address and :treasury_address, " <>
                 "or none of :token_address/:treasury_address for a permit-only deployment."
+
+      true ->
+        validate_authorization_address!(:treasury_address, configured[:treasury_address])
+        validate_authorization_address!(:token_address, configured[:token_address])
+        true
+    end
+  end
+
+  # R1 (re-review): presence is not shape. `Address.to_bytes/1` has a raw
+  # `<<_::binary-size(20)>>` pass-through clause, so a config value that is
+  # merely *20 characters long* — a truncated paste, e.g. a copy that lost
+  # its tail — is silently accepted and used AS THE RAW ADDRESS BYTES,
+  # ASCII and all: a deploy-time typo becomes an unrecoverable destination,
+  # discovered only after real funds move. Reusing `address?/1` (0x + 40 hex,
+  # the same predicate that already guards `auth.from` at execution time)
+  # catches this at boot, before any order can be consumed.
+  defp validate_authorization_address!(key, value) do
+    unless address?(value) do
+      raise ArgumentError,
+            "keeper: authorization lane #{inspect(key)} is not a well-formed address " <>
+              "(expected \"0x\" + 40 hex chars), got: #{inspect(value)}"
     end
   end
 
