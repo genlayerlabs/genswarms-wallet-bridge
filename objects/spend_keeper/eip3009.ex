@@ -15,7 +15,7 @@ defmodule DelegatedSpend.Keeper.Eip3009 do
   sin explicar por qué.
   """
 
-  alias DelegatedSpend.Evm.Address
+  alias DelegatedSpend.Evm.{Abi, Address}
   alias DelegatedSpend.Keccak
 
   @typehash Keccak.hash_256(
@@ -23,7 +23,10 @@ defmodule DelegatedSpend.Keeper.Eip3009 do
             )
 
   # transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,bytes)
-  @selector "cf092995"
+  # El selector ya no se escribe a mano: `Abi.encode_call/3` lo deriva de
+  # name+types, así un typo no puede acuñar en silencio uno equivocado.
+  # Valor esperado (para grep): 0xcf092995.
+  @call_types [:address, :address, {:uint, 256}, {:uint, 256}, {:uint, 256}, {:bytes, 32}, :bytes]
 
   @doc "El typehash EIP-3009, expuesto para el vector dorado (spec §8)."
   def typehash, do: @typehash
@@ -86,27 +89,23 @@ defmodule DelegatedSpend.Keeper.Eip3009 do
       raise ArgumentError, "transfer_with_authorization_calldata: firma vacía"
     end
 
-    head =
-      pad_address(from) <>
-        pad_address(to) <>
-        <<value::256>> <>
-        <<valid_after::256>> <>
-        <<valid_before::256>> <>
-        nonce <>
-        <<0xE0::256>>
+    calldata =
+      Abi.encode_call(
+        "transferWithAuthorization",
+        @call_types,
+        [
+          Address.to_bytes(from),
+          Address.to_bytes(to),
+          value,
+          valid_after,
+          valid_before,
+          nonce,
+          signature
+        ]
+      )
 
-    padded = pad_right_words(signature)
-    body = head <> <<byte_size(signature)::256>> <> padded
-
-    "0x" <> @selector <> Base.encode16(body, case: :lower)
+    "0x" <> Base.encode16(calldata, case: :lower)
   end
 
   defp pad_address(addr), do: <<0::96>> <> Address.to_bytes(addr)
-
-  defp pad_right_words(bin) do
-    case rem(byte_size(bin), 32) do
-      0 -> bin
-      r -> bin <> <<0::size((32 - r) * 8)>>
-    end
-  end
 end
