@@ -90,5 +90,43 @@ defmodule DelegatedSpend.Eip3009Test do
 
       assert Eip3009.domain_separator(name, version, chain_id, @to) == expected
     end
+
+    test "matches the live Base Sepolia USDC contract's DOMAIN_SEPARATOR() — externally verified, not derived from this codebase (review I3)" do
+      # `test/support/fake_rpc.ex`'s default answer for DOMAIN_SEPARATOR() is
+      # COMPUTED by this same production function, and the other test above
+      # rebuilds its "expected" value with the same Keccak/Address building
+      # blocks the implementation uses — both are circular by construction: a
+      # wrong typehash, a swapped field order, or an unhashed name/version
+      # would pass every one of them. This assertion is anchored to a value
+      # the implementation cannot influence:
+      #
+      #   cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+      #     "DOMAIN_SEPARATOR()" --rpc-url <base-sepolia-rpc>
+      #
+      # on Base Sepolia's real USDC contract, where name() == "USDC" and
+      # version() == "2" (confirmed on the same live contract; Base
+      # MAINNET's USDC answers name() == "USD Coin", not "USDC" — see the
+      # fixture comment fix in fake_rpc.ex).
+      usdc_base_sepolia = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+
+      live_domain_separator =
+        Base.decode16!("71f17a3b2ff373b803d70a5a07c046c1a2bc8e89c09ef722fcb047abe94c9818",
+          case: :lower
+        )
+
+      assert Eip3009.domain_separator("USDC", "2", 84_532, usdc_base_sepolia) ==
+               live_domain_separator
+    end
+
+    test "typehash/0 matches the canonical EIP-3009 TransferWithAuthorization typehash — externally verified (review I3)" do
+      # `cast keccak "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"`
+      # agrees with this value.
+      canonical_typehash =
+        Base.decode16!("7c7c6cdb67a18743f49ec6fa9b35f50d52ed05cbed4cc592e13b44501c1a2267",
+          case: :lower
+        )
+
+      assert Eip3009.typehash() == canonical_typehash
+    end
   end
 end

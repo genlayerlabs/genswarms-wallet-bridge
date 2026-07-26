@@ -74,9 +74,16 @@ defmodule DelegatedSpend.FakeRpc do
   #
   # Defaults are SELF-CONSISTENT on purpose: the DOMAIN_SEPARATOR default is
   # COMPUTED (via the keeper's own `Eip3009.domain_separator/4`, production
-  # code) from the SAME `:token_name`/`:token_version` defaults ("USDC"/"2" —
-  # the real values on both Base chains) that name()/version() answer, over
-  # the real `to` address and the config's `:chain_id`. A test that doesn't
+  # code) from the SAME `:token_name`/`:token_version` defaults ("USDC"/"2")
+  # that name()/version() answer, over the real `to` address and the
+  # config's `:chain_id`. "USDC"/"2" are the real values on Base SEPOLIA's
+  # USDC contract ONLY — externally verified against the live chain, see
+  # `test/eip3009_test.exs`'s golden-vector test. Base MAINNET's USDC
+  # answers name() == "USD Coin" (not "USDC"); this fixture deliberately
+  # mirrors the Sepolia deployment `webapp/config.json` targets, and the
+  # keeper's boot cross-check (this module's whole reason to dispatch by
+  # selector) is exactly what would catch a mainnet copy of this default
+  # being pointed at the wrong network. A test that doesn't
   # care about the domain fields still boots without wiring anything extra;
   # a test that wants the keeper's fail-closed mismatch/malformed-read raise
   # sets `:eth_call_result` (still honored, DOMAIN_SEPARATOR selector only —

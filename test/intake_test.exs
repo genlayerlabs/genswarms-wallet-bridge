@@ -1483,6 +1483,54 @@ defmodule DelegatedSpend.IntakeTest do
       assert {200, %{"status" => _}} = Intake.handle_authorization(params, %{}, ctx)
     end
 
+    test "el evento de auditoría registra el user_ref verificado, no el reclamado por el cliente (review I1)" do
+      %{ctx: base_ctx, keeper: keeper} = start_authorization_stack()
+      {ctx, store} = with_compliance(base_ctx)
+      ref = register_authorization_order(keeper, @user_id)
+
+      # Same shape as the mutation the reviewer ran against gate 3 (allow/2
+      # keyed off params["user_ref"]): if record_event/6 ever took the same
+      # shortcut, the compliance audit trail would show the attacker's
+      # claimed identity instead of the one initData actually verified.
+      params = %{
+        "init_data" => init_data(),
+        "order_ref" => ref,
+        "user_ref" => "ref-attacker",
+        "authorization" => auth_env()
+      }
+
+      assert {200, _} = Intake.handle_authorization(params, audit_meta(), ctx)
+
+      verified_ref = "ref-#{@user_id}"
+      assert [%{user_ref: ^verified_ref}] = ComplianceStore.events_for(store, verified_ref)
+      assert ComplianceStore.events_for(store, "ref-attacker") == []
+    end
+
+    test "el límite de tasa se aplica sobre el user_ref verificado — rotar el user_ref reclamado no lo evade (review I1)" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack(1)
+      ref1 = register_authorization_order(keeper, @user_id)
+      ref2 = register_authorization_order(keeper, @user_id)
+
+      # First request burns the ONE allowed slot for the verified identity
+      # ("ref-#{@user_id}"), with no claimed user_ref override.
+      params1 = %{"init_data" => init_data(), "order_ref" => ref1, "authorization" => auth_env()}
+
+      # Second request: SAME verified initData (still @user_id), but the
+      # client claims to be a brand-new identity. If gate 3 keyed the rate
+      # bucket off params["user_ref"] (the reviewer's mutation), this would
+      # land in a fresh, unexhausted bucket and succeed with 200 instead of
+      # being rejected — the exact bypass a rotating attacker would use.
+      params2 = %{
+        "init_data" => init_data(),
+        "order_ref" => ref2,
+        "user_ref" => "ref-attacker",
+        "authorization" => auth_env()
+      }
+
+      assert {200, _} = Intake.handle_authorization(params1, %{}, ctx)
+      assert {429, %{"error" => "rate limited"}} = Intake.handle_authorization(params2, %{}, ctx)
+    end
+
     test "país bloqueado rechaza antes de nada" do
       %{ctx: ctx, keeper: keeper} = start_authorization_stack()
       ref = register_authorization_order(keeper, @user_id)

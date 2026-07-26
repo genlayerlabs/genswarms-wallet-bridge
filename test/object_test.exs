@@ -492,6 +492,23 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
       assert reply["error"] == "authorization_lane_disabled"
     end
 
+    test "a refused registration never persists the order — the order_ref is not burned (review I2)" do
+      %{state: state} = start_object()
+
+      {reply, state} = msg(state, "market_phase", register_authorization_payload())
+      assert reply["ok"] == false
+      assert reply["error"] == "authorization_lane_disabled"
+
+      # If the order had been stored before the refusal (the pre-fix
+      # behaviour — register first, THEN check the lane), retrying the
+      # IDENTICAL order_ref would now fail with duplicate_order_ref even
+      # though the caller was told nothing was created. Nothing was
+      # persisted, so a plain re-registration under the same ref succeeds.
+      {retry, _state} = msg(state, "market_phase", register_payload(%{"order_ref" => @ref}))
+      assert retry["ok"] == true
+      assert retry["order_ref"] == @ref
+    end
+
     test "a plain (permit-shaped) register_order gets no authorization fields" do
       %{state: state} = start_object()
       {reply, _state} = msg(state, "market_phase", register_payload())

@@ -3,7 +3,7 @@
 // the injected EIP-1193 provider, and the DOM elements.
 
 import { applyProductName } from "./lib/brand.mjs";
-import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, runAuthorizationFlow, runBindFlow, runPermitFlow, runUserTxFlow, shortAddress, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
+import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, runAuthorizationFlow, runBindFlow, runPermitFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -229,34 +229,51 @@ async function setupPermit(deps, order, orderRef, tg) {
 // gasless signature, not a wallet-sent transaction — but the destination and
 // amount are shown UP FRONT and prominently: the user must see where the
 // money goes before the wallet's own signing prompt ever appears.
-async function setupAuthorization(deps, order, orderRef, tg) {
-  const amount = (order.value / 1_000_000).toFixed(2);
-  $("summary").textContent =
-    `${deps.config.actionLabel}: ${amount} USDC to ${shortAddress(order.to)} ` +
-    `(gasless — the operator pays network fees).`;
+//
+// `order.to`/`order.value` are WITHHELD by the server
+// (`DelegatedSpend.Intake.handle_order/3`) until the current terms are
+// accepted — exactly like `user_tx`'s `tx` — while `order.amount` never is
+// (review C1: this used to read `order.value`, which is `undefined` in the
+// terms-pending state, throwing before the terms prompt could ever be
+// reached and permanently bricking the page for every first-time user on a
+// compliance-enabled deployment). So the destination line is composed ONLY
+// once `termsRequired(order)` is false; the terms-pending case shows the
+// amount alone and defers the destination + signing to the first pay click,
+// whose `runAuthorizationFlow` re-fetch surfaces `terms_required` and opens
+// the very same `showTermsPrompt` every other lane uses.
+//
+// `get` defaults to the real DOM accessor and is threaded through (instead
+// of the module-level `$`) so this function is unit-testable with a fake
+// DOM — see webapp/tools/app.test.mjs.
+export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
+  const amount = (order.amount / 1_000_000).toFixed(2);
+  get("summary").textContent = termsRequired(order)
+    ? `${deps.config.actionLabel}: ${amount} USDC — accept the terms to see the destination and pay.`
+    : `${deps.config.actionLabel}: ${amount} USDC to ${shortAddress(order.to)} ` +
+      `(gasless — the operator pays network fees).`;
   if (!(await enforceOwnerAtLoad(deps, order))) return;
-  $("pay").disabled = false;
+  get("pay").disabled = false;
 
   const run = async (fetched) => {
-    $("pay").disabled = true;
-    paintStatus($("status"), "Connecting wallet…");
+    get("pay").disabled = true;
+    paintStatus(get("status"), "Connecting wallet…");
     const result = await runAuthorizationFlow(deps, orderRef, fetched);
 
     if (result.ok) {
-      paintStatus($("status"), "Payment submitted ✓ — you can return to the chat.", "success");
+      paintStatus(get("status"), "Payment submitted ✓ — you can return to the chat.", "success");
       if (tg) setTimeout(() => tg.close(), 1500);
     } else if (result.reason === "wrong_wallet") {
       blockWrongWallet(result.expected);
     } else if (result.reason === "terms_required") {
-      showTermsPrompt(deps, { account: result.account, terms: result.terms, ref: orderRef, retry: run });
+      showTermsPrompt(deps, { account: result.account, terms: result.terms, ref: orderRef, retry: run }, get);
     } else if (result.reason === "geo_blocked") {
-      enterGeoDeadState($("status"));
+      enterGeoDeadState(get("status"), get);
     } else {
-      paintStatus($("status"), MESSAGES[result.reason] || `Payment failed (${result.reason}). Nothing was charged — reopen this page from the chat button to retry.`, "error");
-      $("pay").disabled = false;
+      paintStatus(get("status"), MESSAGES[result.reason] || `Payment failed (${result.reason}). Nothing was charged — reopen this page from the chat button to retry.`, "error");
+      get("pay").disabled = false;
     }
   };
-  $("pay").onclick = () => run();
+  get("pay").onclick = () => run();
 }
 
 async function setupUserTx(deps, order, orderRef, tg) {
@@ -319,4 +336,21 @@ export function entryRef(tg, params) {
   return (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || params.get("order") || params.get("bind");
 }
 
-if (typeof document !== "undefined") main();
+// Fatal-error backstop (review C1): `main()` had no `.catch()`, so ANY
+// uncaught throw along the way (a malformed order shape, a config.json
+// parse failure, …) left the page silently stuck on "Loading order…" with
+// #pay disabled forever — no in-dapp signal, no way for the user to tell a
+// bug from a slow network. This is the same "dead end with no workaround"
+// bug class as C1 itself, one layer further out; every other failure path
+// in this file already ends in a typed, visible status.
+export function handleFatalError(err, get = $) {
+  console.error(err);
+  const pay = get("pay");
+  if (pay) pay.hidden = true;
+  const summary = get("summary");
+  if (summary) {
+    paintStatus(summary, "Something went wrong loading this page. Reopen it from the chat button.", "error");
+  }
+}
+
+if (typeof document !== "undefined") main().catch(handleFatalError);

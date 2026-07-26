@@ -78,7 +78,8 @@ defmodule DelegatedSpend.Intake.PlugTest do
       opts: IntakePlug.init(ctx: ctx, config: @config),
       order_ref: order_ref,
       user_ref: user_ref,
-      token: token
+      token: token,
+      store: store
     }
   end
 
@@ -561,13 +562,28 @@ defmodule DelegatedSpend.Intake.PlugTest do
     setup ctx do
       order_ref = Orders.mint_order_ref()
 
-      {:ok, _ack} =
-        Keeper.register_order(ctx.ctx.keeper, "app", %{
+      # `Keeper.register_order/3` now refuses to persist a kind:"authorization"
+      # order against a disabled lane BEFORE the store write (review I2) —
+      # this shared keeper has no signer/treasury/token, so that call would
+      # itself return `{:error, :authorization_lane_disabled}` here. To still
+      # exercise the transport-only path down to `execute_authorization`'s own
+      # disabled-lane check (the defense that remains meaningful for a
+      # config-drifted restart: an order registered while the lane was
+      # enabled, surviving in the store after a restart with the lane since
+      # disabled), the order is written directly to the store, deliberately
+      # bypassing `Keeper.register_order/3`.
+      :ok =
+        MemoryStore.put_order(ctx.store, %{
+          order_id: "0x" <> Base.encode16(:crypto.strong_rand_bytes(32), case: :lower),
           order_ref: order_ref,
           user_ref: ctx.user_ref,
           amount: 1_000_000,
           action_args: [],
-          kind: "authorization"
+          kind: "authorization",
+          tx: nil,
+          display: %{},
+          expected_owner: nil,
+          expires_at: System.os_time(:second) + 900
         })
 
       token = Token.mint(@secret, order_ref, ctx.user_ref, System.os_time(:second) + 900)
@@ -613,6 +629,13 @@ defmodule DelegatedSpend.Intake.PlugTest do
       conn = post_json("/spend/authorization", body, ctx.opts)
       assert conn.status == 401
       assert json(conn) == %{"error" => "unauthorized"}
+    end
+
+    test "409 on a stale dapp build (envelope version mismatch) — review M8", ctx do
+      body = auth_body(ctx.auth_order_ref, ctx.auth_token, %{"v" => "stale-v"})
+      conn = post_json("/spend/authorization", body, ctx.opts)
+      assert conn.status == 409
+      assert json(conn) == %{"error" => "version mismatch"}
     end
 
     test "413 on an oversize body, bounded by :body_limit", _ctx do

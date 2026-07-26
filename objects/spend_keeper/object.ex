@@ -74,10 +74,14 @@ defmodule DelegatedSpend.Keeper.Object do
   .authorization_domain/1`), never re-derived here. The destination and
   nonce are picked by the SERVER; the dapp shows them but does not choose
   them. Refused (`ok: false, error: "authorization_lane_disabled"`) if the
-  keeper wasn't configured for this lane.
+  keeper wasn't configured for this lane — refused BEFORE the order is
+  persisted (`DelegatedSpend.Keeper`'s `register_order` gates on
+  `authorization_enabled?` ahead of the store write), so a refused
+  registration never strands the caller-minted `order_ref`: the identical
+  payload can be retried once the lane is enabled (review I2).
   """
 
-  alias DelegatedSpend.{Keeper, Orders}
+  alias DelegatedSpend.Keeper
 
   @doc "ObjectHandler init — start or attach the keeper core."
   def init(config) do
@@ -201,32 +205,30 @@ defmodule DelegatedSpend.Keeper.Object do
   # A "authorization"-kind order needs more than the generic ack: the dapp
   # can't compose a TransferWithAuthorization signature without the nonce,
   # the destination (the keeper's OWN treasury — never client-chosen) and
-  # the EIP-712 domain. `Keeper.authorization_domain/1` returns ONLY the
-  # boot-verified fields (cross-checked against the on-chain
-  # DOMAIN_SEPARATOR at init — see `DelegatedSpend.Keeper`), so nothing here
-  # re-derives or guesses `name`/`version`.
+  # the EIP-712 domain. `Keeper.authorization_view_fields/5` shares this
+  # merge with `DelegatedSpend.Intake.handle_order/3`'s order view (review
+  # M7) — it reads ONLY the boot-verified fields (cross-checked against the
+  # on-chain DOMAIN_SEPARATOR at init — see `DelegatedSpend.Keeper`), so
+  # nothing here re-derives or guesses `name`/`version`.
+  #
+  # The `:disabled` arm is defensive-only and should be unreachable in
+  # practice (review I2): `Keeper.register_order/3` now refuses a
+  # kind:"authorization" order for a disabled lane BEFORE it is persisted
+  # (see `order_kind/2` in keeper.ex), so `ack` only ever reaches here for an
+  # order that was already accepted as "authorization" — which means the
+  # lane was enabled at registration time, and `authorization_enabled?` is a
+  # boot-fixed constant. Kept as a fail-closed belt-and-suspenders, not a
+  # live code path.
   defp authorization_ack(%{kind: "authorization"}, ack, state, base) do
-    case Keeper.authorization_domain(state.keeper) do
-      {:ok, domain} ->
-        Map.merge(base, %{
-          "nonce" =>
-            "0x" <> Base.encode16(Orders.authorization_nonce(ack.order_ref), case: :lower),
-          "to" => domain.treasury_address,
-          "value" => ack.amount,
-          "valid_after" => 0,
-          "valid_before" => ack.expires_at,
-          "token" => domain.token_address,
-          "chain_id" => domain.chain_id,
-          "domain" => %{
-            "name" => domain.name,
-            "version" => domain.version,
-            "chainId" => domain.chain_id,
-            "verifyingContract" => domain.token_address
-          }
-        })
-
-      :disabled ->
-        err("authorization_lane_disabled", "register_order")
+    case Keeper.authorization_view_fields(
+           state.keeper,
+           ack.order_ref,
+           ack.amount,
+           ack.expires_at,
+           base
+         ) do
+      {:ok, merged} -> merged
+      :disabled -> err("authorization_lane_disabled", "register_order")
     end
   end
 

@@ -1,23 +1,41 @@
-import { test } from "node:test";
+import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { MESSAGES, entryRef, paintStatus, showTermsPrompt } from "../app.mjs";
+import { MESSAGES, entryRef, paintStatus, setupAuthorization, showTermsPrompt } from "../app.mjs";
 
 const ACCOUNT = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+const TREASURY = "0x000000000000000000000000000000000000cccc";
 const HASH = "0x" + "11".repeat(32);
 
 function fakeDom() {
   const elements = {
+    summary: { textContent: "" },
     terms: { hidden: true },
     "terms-link": { href: "" },
     "terms-accept": { disabled: false, onclick: null },
-    pay: { hidden: false, disabled: false },
+    pay: { hidden: false, disabled: false, onclick: null },
     manual: { hidden: false },
     "manual-address": { textContent: "" },
     "manual-amount": { textContent: "" },
     status: { textContent: "", dataset: {} },
   };
   return { elements, get: (id) => elements[id] };
+}
+
+function mockAuthProvider(overrides = {}) {
+  return {
+    request: async ({ method }) => {
+      if (method in overrides) return overrides[method]();
+      switch (method) {
+        case "eth_requestAccounts":
+          return [ACCOUNT];
+        case "eth_chainId":
+          return "0x14a34"; // 84532
+        default:
+          throw new Error(`unmocked ${method}`);
+      }
+    },
+  };
 }
 
 test("entryRef accepts order refs, bind refs, and Telegram start_param", () => {
@@ -284,4 +302,63 @@ test("thrown acceptance request stays nonterminal and re-enables acceptance with
   assert.equal(elements.pay.hidden, true);
   assert.equal(elements["terms-accept"].disabled, false);
   assert.equal(retries, 0);
+});
+
+// Review C1: `setupAuthorization` used to read `order.value`/`order.to`
+// unconditionally — fields `Intake.handle_order/3` WITHHOLDS until the
+// current terms are accepted — so a first-time user on a compliance-enabled
+// deployment hit a TypeError before the terms prompt could ever render.
+describe("setupAuthorization (review C1)", () => {
+  test("a terms-pending order (value/to withheld) never throws and defers to the terms prompt on pay", async () => {
+    const { elements, get } = fakeDom();
+    const order = {
+      kind: "authorization",
+      amount: 1_500_000,
+      terms: { required: true, v_hash: HASH, url: "https://example.test/terms" },
+      // value/to/domain/nonce intentionally ABSENT — exactly what the server
+      // serves while the current terms are unaccepted (probe P6).
+    };
+    const deps = {
+      provider: mockAuthProvider(),
+      config: { intakeUrl: "/spend", version: "0.5.0", chainId: 84_532, actionLabel: "Top up" },
+      fetchFn: async () => ({ status: 200, json: async () => order }),
+    };
+
+    // The bug reproduced as an unhandled rejection/throw right here.
+    await assert.doesNotReject(setupAuthorization(deps, order, "oref-1", null, get));
+
+    assert.equal(elements.summary.textContent.includes("NaN"), false);
+    assert.match(elements.summary.textContent, /1\.50 USDC/);
+    assert.equal(elements.pay.disabled, false);
+
+    // Clicking pay re-fetches the order (still terms-pending), connects the
+    // wallet, and — same as every other lane — opens the terms prompt
+    // instead of signing.
+    await assert.doesNotReject(elements.pay.onclick());
+    assert.equal(elements.terms.hidden, false);
+    assert.equal(elements["terms-link"].href, order.terms.url);
+    assert.equal(elements.pay.hidden, true);
+  });
+
+  test("a terms-accepted order renders the destination/amount up front and enables pay", async () => {
+    const { elements, get } = fakeDom();
+    const order = {
+      kind: "authorization",
+      amount: 2_000_000,
+      to: TREASURY,
+      value: 2_000_000,
+      terms: { required: false, v_hash: HASH, url: "https://example.test/terms" },
+    };
+    const deps = {
+      provider: mockAuthProvider(),
+      config: { intakeUrl: "/spend", version: "0.5.0", chainId: 84_532, actionLabel: "Top up" },
+      fetchFn: async () => ({ status: 200, json: async () => order }),
+    };
+
+    await assert.doesNotReject(setupAuthorization(deps, order, "oref-2", null, get));
+
+    assert.match(elements.summary.textContent, /2\.00 USDC/);
+    assert.match(elements.summary.textContent, /0x0000…cccc/);
+    assert.equal(elements.pay.disabled, false);
+  });
 });

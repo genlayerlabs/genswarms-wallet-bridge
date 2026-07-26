@@ -192,6 +192,11 @@ export function ownerMismatch(order, account) {
 }
 
 export function shortAddress(address) {
+  // Defensive guard (review C1): every real caller passes a server-served
+  // address, but a falsy input must render SOMETHING rather than throw —
+  // a page that dies on a missing field is the whole bug class this lane
+  // exists to avoid.
+  if (!address) return "an address";
   return address.length > 12 ? `${address.slice(0, 6)}…${address.slice(-4)}` : address;
 }
 

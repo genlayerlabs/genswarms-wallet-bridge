@@ -98,6 +98,43 @@ defmodule DelegatedSpend.Keeper do
   """
   def authorization_domain(keeper), do: GenServer.call(keeper, :authorization_domain)
 
+  @doc """
+  Shared enrichment for every view of an `"authorization"`-kind order — the
+  registration ack (`DelegatedSpend.Keeper.Object`) and the wallet dapp's
+  order view (`DelegatedSpend.Intake.handle_order/3`) both need the SAME
+  nonce/destination/domain fields, computed from the SAME boot-verified
+  `authorization_domain/1`; this is the one place that does it (review M7 —
+  the two call sites merge into a differently-shaped `base` map and disagree
+  on what `:disabled` should mean, so only the domain-lookup-and-merge core
+  is shared; each caller still decides its own `:disabled` fallback).
+  """
+  def authorization_view_fields(keeper, order_ref, amount, expires_at, base) do
+    case authorization_domain(keeper) do
+      {:ok, domain} ->
+        {:ok,
+         Map.merge(base, %{
+           "nonce" =>
+             "0x" <>
+               Base.encode16(DelegatedSpend.Orders.authorization_nonce(order_ref), case: :lower),
+           "to" => domain.treasury_address,
+           "value" => amount,
+           "valid_after" => 0,
+           "valid_before" => expires_at,
+           "token" => domain.token_address,
+           "chain_id" => domain.chain_id,
+           "domain" => %{
+             "name" => domain.name,
+             "version" => domain.version,
+             "chainId" => domain.chain_id,
+             "verifyingContract" => domain.token_address
+           }
+         })}
+
+      :disabled ->
+        :disabled
+    end
+  end
+
   @doc "Clear a suspended grant's revert backoff (the wallet dapp re-enable path)."
   def reset_backoff(keeper, user_ref), do: GenServer.call(keeper, {:reset_backoff, user_ref})
 
@@ -208,7 +245,7 @@ defmodule DelegatedSpend.Keeper do
   def handle_call({:register_order, source, req}, _from, state) do
     with true <- MapSet.member?(state.allowlist, source) || {:error, {:unknown_source, source}},
          %{user_ref: user_ref, amount: amount, action_args: args} = req,
-         {:ok, kind} <- order_kind(req),
+         {:ok, kind} <- order_kind(req, state),
          {:ok, order_ref} <- order_ref(state, req, user_ref) do
       order = %{
         order_id: "0x" <> hex(:crypto.strong_rand_bytes(32)),
@@ -882,7 +919,13 @@ defmodule DelegatedSpend.Keeper do
   defp suspended?(user_ref, state),
     do: Map.get(state.reverts, user_ref, 0) >= state.max_reverts
 
-  defp order_kind(req) do
+  # `state` is threaded through so the "authorization" branch can refuse
+  # BEFORE the caller ever reaches `order_ref/3`/`put_order/2` (review I2): a
+  # disabled lane must not persist a phantom order or burn the caller-minted
+  # `order_ref` — a rejected registration must be retriable, byte-identical,
+  # with no trace left behind. `authorization_enabled?` is the same
+  # boot-computed predicate `execute_authorization` already trusts.
+  defp order_kind(req, state) do
     case Map.get(req, :kind, "permit") do
       "permit" ->
         {:ok, "permit"}
@@ -891,7 +934,9 @@ defmodule DelegatedSpend.Keeper do
       # no routing payload of its own — the destination is the keeper's own
       # treasury — so there is nothing extra to validate here.
       "authorization" ->
-        {:ok, "authorization"}
+        if state.authorization_enabled?,
+          do: {:ok, "authorization"},
+          else: {:error, :authorization_lane_disabled}
 
       "bind" ->
         {:ok, "bind"}

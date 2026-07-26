@@ -362,6 +362,13 @@ test("wrongWalletMessage shortens the bound address middle", () => {
   );
 });
 
+test("shortAddress guards a falsy input instead of throwing (review C1)", () => {
+  assert.doesNotThrow(() => shortAddress(undefined));
+  assert.doesNotThrow(() => shortAddress(null));
+  assert.doesNotThrow(() => shortAddress(""));
+  assert.equal(typeof shortAddress(undefined), "string");
+});
+
 test("owner-bound permit order + wrong connected wallet → wrong_wallet, nothing signed or POSTed to /grants", async () => {
   const bound = "0x000000000000000000000000000000000000dEaD";
   const provider = mockProvider();

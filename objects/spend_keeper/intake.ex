@@ -27,7 +27,7 @@ defmodule DelegatedSpend.Intake do
 
   alias DelegatedSpend.Compliance.{Geo, Store, Terms}
   alias DelegatedSpend.Intake.{GrantValidation, Rate, TelegramAuth, Token}
-  alias DelegatedSpend.{Keeper, Orders}
+  alias DelegatedSpend.Keeper
 
   require Logger
 
@@ -473,34 +473,24 @@ defmodule DelegatedSpend.Intake do
   defp invalid(field), do: {422, %{"error" => "invalid", "field" => to_string(field)}}
 
   # Everything the dapp needs to compose the TransferWithAuthorization
-  # EIP-712 payload — the SAME boot-verified domain `DelegatedSpend
-  # .Keeper.authorization_domain/1` exposes to the object door's
-  # registration ack (nothing is re-derived here). `:disabled` only if the
-  # keeper's authorization lane was somehow turned off after an
-  # "authorization"-kind order was already registered against it (config is
-  # fixed at boot, so this is a defensive no-op in practice, not a real
-  # runtime state) — degrades to serving the plain view rather than a 5xx.
+  # EIP-712 payload — `Keeper.authorization_view_fields/5` shares this merge
+  # with `DelegatedSpend.Keeper.Object`'s registration ack (review M7), both
+  # reading the SAME boot-verified domain (nothing is re-derived here).
+  # `:disabled` only if the keeper's authorization lane was somehow turned
+  # off after an "authorization"-kind order was already registered against
+  # it (config is fixed at boot, so this is a defensive no-op in practice,
+  # not a real runtime state) — degrades to serving the plain view rather
+  # than a 5xx.
   defp authorization_fields(base, view, ctx) do
-    case Keeper.authorization_domain(ctx.keeper) do
-      {:ok, domain} ->
-        Map.merge(base, %{
-          "nonce" =>
-            "0x" <> Base.encode16(Orders.authorization_nonce(view.order_ref), case: :lower),
-          "to" => domain.treasury_address,
-          "value" => view.amount,
-          "valid_after" => 0,
-          "valid_before" => view.expires_at,
-          "token" => domain.token_address,
-          "domain" => %{
-            "name" => domain.name,
-            "version" => domain.version,
-            "chainId" => domain.chain_id,
-            "verifyingContract" => domain.token_address
-          }
-        })
-
-      :disabled ->
-        base
+    case Keeper.authorization_view_fields(
+           ctx.keeper,
+           view.order_ref,
+           view.amount,
+           view.expires_at,
+           base
+         ) do
+      {:ok, merged} -> merged
+      :disabled -> base
     end
   end
 
