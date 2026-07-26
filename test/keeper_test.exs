@@ -17,6 +17,42 @@ defmodule DelegatedSpend.KeeperTest do
   @token "0x" <> String.duplicate("11", 20)
   @treasury "0x" <> String.duplicate("99", 20)
 
+  # Fix wave re-review regression double (Important): every callback
+  # delegates straight to MemoryStore EXCEPT record_gas_spend/4, which
+  # raises — simulating an accounting-write failure so a test can prove it
+  # stays isolated from the hash-persistence result that decides whether an
+  # order gets durably marked failed.
+  defmodule RaisingGasSpendStore do
+    alias DelegatedSpend.Keeper.MemoryStore
+
+    def put_order(ref, order), do: MemoryStore.put_order(ref, order)
+    def get_order(ref, order_id), do: MemoryStore.get_order(ref, order_id)
+
+    def get_order_by_ref(ref, order_ref, user_ref),
+      do: MemoryStore.get_order_by_ref(ref, order_ref, user_ref)
+
+    def consume_order(ref, order_id, user_ref),
+      do: MemoryStore.consume_order(ref, order_id, user_ref)
+
+    def begin_execution(ref, order_id, user_ref, action_key),
+      do: MemoryStore.begin_execution(ref, order_id, user_ref, action_key)
+
+    def get_execution_status(ref, order_id), do: MemoryStore.get_execution_status(ref, order_id)
+
+    def update_inflight_hash(ref, order_id, tx_hash),
+      do: MemoryStore.update_inflight_hash(ref, order_id, tx_hash)
+
+    def resolve_inflight(ref, order_id, result, at),
+      do: MemoryStore.resolve_inflight(ref, order_id, result, at)
+
+    def list_inflight(ref), do: MemoryStore.list_inflight(ref)
+    def gas_spent_since(ref, since), do: MemoryStore.gas_spent_since(ref, since)
+
+    def record_gas_spend(_ref, _wei, _at, _prune_before) do
+      raise "accounting store unavailable"
+    end
+  end
+
   defp permit(value) do
     %{
       owner: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
@@ -1884,6 +1920,77 @@ defmodule DelegatedSpend.KeeperTest do
                Keeper.execute_with_authorization(keeper, aref, "u-a", valid_auth())
 
       assert MemoryStore.gas_spent_since(store, 0) > 0
+    end
+
+    # Fix wave re-review (Important): the accounting write and the hash write
+    # share one closure (`persist_hash_fn`) — a raise in cost-recording must
+    # never be mistaken for a hash-persistence failure. Before the fix, an
+    # accounting raise propagated out of the closure, so signer.ex's
+    # `persist_hash/3` reported it as a persist_hash error, and keeper.ex's
+    # generic `{:error, _} -> settle(..., {:failed, :rpc_timeout})` clause
+    # then durably overwrote the order's status from the just-written
+    # `{:submitted, hash}` to a terminal failure — killing a legitimate,
+    # already-broadcast order over a lost accounting row.
+    test "a raise in gas-spend accounting is isolated: the order still submits, the hash stays durable, only a warning is logged" do
+      fake =
+        FakeRpc.start(%{
+          chain_id: 84_532,
+          nonce: 0,
+          simulate: :ok,
+          eth_call_result: "0x" <> String.duplicate("ab", 32)
+        })
+
+      {:ok, signer} =
+        Signer.start_link(
+          rpc_url: fake,
+          chain_id: 84_532,
+          priv: @anvil0,
+          rpc_mod: FakeRpc,
+          sweep_ms: 3_600_000
+        )
+
+      store = MemoryStore.start()
+
+      {:ok, keeper} =
+        Keeper.start_link(
+          signer: signer,
+          chain_id: 84_532,
+          store: {RaisingGasSpendStore, store},
+          source_allowlist: ["market_phase"],
+          order_ttl_s: 600,
+          treasury_address: @treasury,
+          token_address: @token,
+          rpc_mod: FakeRpc,
+          rpc: fake,
+          sweep_ms: 3_600_000,
+          daily_gas_budget_wei: 999_999_999_999_999
+        )
+
+      {:ok, %{order_ref: ref, order_id: oid}} =
+        Keeper.register_order(keeper, "market_phase", %{
+          user_ref: "u-a",
+          amount: 1_000_000,
+          action_args: [],
+          kind: "authorization"
+        })
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:submitted, _hash} =
+                   Keeper.execute_with_authorization(keeper, ref, "u-a", valid_auth())
+        end)
+
+      # one broadcast happened — a lost accounting write must never suppress
+      # or duplicate it.
+      assert submitted_tx_count(fake) == 1
+
+      # the hash write is durable and the order is NOT terminally failed,
+      # even though the accounting half of the same closure raised.
+      assert {:submitted, _hash} = MemoryStore.get_execution_status(store, oid)
+      refute match?({:failed, _}, MemoryStore.get_execution_status(store, oid))
+
+      assert log =~ oid
+      assert log =~ "gas spend not recorded"
     end
   end
 

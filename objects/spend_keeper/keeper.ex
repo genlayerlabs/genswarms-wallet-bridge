@@ -619,6 +619,25 @@ defmodule DelegatedSpend.Keeper do
   # nothing should be paying to write it. Enabling the budget later starts a
   # fresh window with no retroactive history, which is fine since the window
   # itself is rolling 24h, not a fixed epoch.
+  #
+  # Re-review fix (Important): this runs INSIDE the same `persist_hash_fn`
+  # closure as the durable tx-hash write (see `submit_consumed/3`), but its
+  # own outcome must never be allowed to affect that closure's return value.
+  # The hash write is the anti-double-broadcast control — a caller
+  # (signer.ex's `persist_hash/3`) that sees this closure raise cannot tell
+  # "the accounting write failed" apart from "the hash failed to persist,"
+  # and treats both as a reason to refuse the broadcast; keeper.ex's caller
+  # then durably overwrites the order to a TERMINAL `{:failed, :rpc_timeout}`
+  # — even though the hash had already been written and nothing was ever
+  # broadcast twice. That would kill a perfectly good order over a lost
+  # accounting row. So: rescue/catch everything here, log a warning naming
+  # the order and the wei amount that won't be counted, and always return
+  # `:ok`. Losing one row under-counts the daily budget by a bounded amount
+  # (this one broadcast's cost) — a nuisance the operator is warned about;
+  # losing a legitimate, already-consumed order is much worse and is exactly
+  # what the old `safe_cost_estimate/2` was written to prevent. Accounting
+  # must depend on hash persistence (it only runs when the hash write
+  # succeeds); hash persistence must never depend on accounting.
   defp record_tracked_gas_spend(order, cost_wei, state) do
     tracked? = Map.get(order, :kind, "permit") == "authorization"
     budgeted? = not is_nil(state.gas_policy.daily_gas_budget_wei)
@@ -629,6 +648,21 @@ defmodule DelegatedSpend.Keeper do
     end
 
     :ok
+  rescue
+    error ->
+      warn_gas_spend_lost(order, cost_wei, inspect(error))
+      :ok
+  catch
+    kind, reason ->
+      warn_gas_spend_lost(order, cost_wei, "#{kind}: #{inspect(reason)}")
+      :ok
+  end
+
+  defp warn_gas_spend_lost(order, cost_wei, detail) do
+    Logger.warning(
+      "order #{order.order_id}: gas spend not recorded — budget will under-count by " <>
+        "~#{cost_wei} wei (accounting write raised: #{detail})"
+    )
   end
 
   # Shared by both lanes: consume the order + open its durable :pending
