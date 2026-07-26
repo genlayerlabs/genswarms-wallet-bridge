@@ -126,9 +126,15 @@ export function briefLines(brief, productName) {
     });
   }
 
+  // Two beats, because there are two: the submission is acknowledged within
+  // seconds, the balance follows once the chain settles. Promising one minute
+  // for the balance was simply untrue — it takes two to three — and a promise
+  // the product misses reads as a failure even when everything worked.
   lines.push({
     key: "next",
-    text: "After you sign we submit it and confirm in the chat, usually within a minute.",
+    text:
+      "After you sign we submit it straight away and confirm in the chat. " +
+      "Your balance updates there once the network settles, usually a couple of minutes.",
   });
 
   return lines;

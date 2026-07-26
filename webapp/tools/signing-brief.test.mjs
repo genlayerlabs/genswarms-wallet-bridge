@@ -54,7 +54,9 @@ test("the brief says a signature is not a payment, and what happens after", () =
   assert.match(text, /signature, not a payment/);
   assert.match(text, /once/, "single use is the reassurance that makes signing safe to do");
   assert.match(text, /pay the network fee/);
-  assert.match(lines.find((l) => l.key === "next").text, /confirm in the chat/);
+  const next = lines.find((l) => l.key === "next").text;
+  assert.match(next, /confirm in the chat/);
+  assert.match(next, /couple of minutes/, "the balance takes 2-3 minutes; promising one is a miss the user reads as failure");
 });
 
 test("a terms-gated order announces that TWO signatures are coming", () => {
