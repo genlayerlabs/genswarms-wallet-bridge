@@ -80,12 +80,17 @@ defmodule DelegatedSpend.KeeperTest do
     token = Map.get(overrides, :token, @token)
 
     fake =
-      FakeRpc.start(%{
-        chain_id: 84_532,
-        nonce: 0,
-        simulate: :ok,
-        eth_call_result: "0x" <> String.duplicate("ab", 32)
-      })
+      FakeRpc.start(
+        Map.merge(
+          %{
+            chain_id: 84_532,
+            nonce: 0,
+            simulate: :ok,
+            eth_call_result: "0x" <> String.duplicate("ab", 32)
+          },
+          Map.take(overrides, [:simulate, :block_timestamp])
+        )
+      )
 
     {:ok, signer} =
       Signer.start_link(
@@ -98,8 +103,8 @@ defmodule DelegatedSpend.KeeperTest do
 
     store = MemoryStore.start()
 
-    {:ok, keeper} =
-      Keeper.start_link(
+    keeper_opts =
+      [
         signer: signer,
         chain_id: 84_532,
         store: {MemoryStore, store},
@@ -110,7 +115,12 @@ defmodule DelegatedSpend.KeeperTest do
         rpc_mod: FakeRpc,
         rpc: fake,
         sweep_ms: 3_600_000
-      )
+      ] ++
+        (overrides
+         |> Map.take([:require_owner_binding, :max_consecutive_reverts])
+         |> Map.to_list())
+
+    {:ok, keeper} = Keeper.start_link(keeper_opts)
 
     {keeper, store, fake}
   end
@@ -149,6 +159,61 @@ defmodule DelegatedSpend.KeeperTest do
   defp last_submitted_tx(fake), do: fake |> FakeRpc.calls() |> List.last()
 
   defp submitted_tx_count(fake), do: length(FakeRpc.sent(fake))
+
+  # The `i`-th 32-byte ABI word of a `"0x"<selector><words…>` calldata string,
+  # as 64 lowercase hex chars — so a destination assertion can pin the SLOT,
+  # not merely the presence of some bytes anywhere in the payload.
+  defp abi_word(calldata, i) do
+    calldata
+    |> String.replace_prefix("0x", "")
+    |> binary_part(8 + i * 64, 64)
+    |> String.downcase()
+  end
+
+  defp padded_address(addr),
+    do: String.duplicate("0", 24) <> String.replace_prefix(String.downcase(addr), "0x", "")
+
+  # Boot a keeper with an ARBITRARY authorization-config subset (the caller
+  # passes only the keys under test; `signer: :real` wires the real Signer).
+  # Traps exits so an init/1 raise comes back as {:error, {exception, _}}
+  # instead of taking the test process down.
+  defp start_keeper_with(opts) do
+    fake =
+      FakeRpc.start(%{
+        chain_id: 84_532,
+        nonce: 0,
+        simulate: :ok,
+        eth_call_result: "0x" <> String.duplicate("ab", 32)
+      })
+
+    {:ok, signer} =
+      Signer.start_link(
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000
+      )
+
+    base = %{
+      chain_id: 84_532,
+      store: {MemoryStore, MemoryStore.start()},
+      source_allowlist: ["market_phase"],
+      order_ttl_s: 600,
+      rpc_mod: FakeRpc,
+      rpc: fake,
+      sweep_ms: 3_600_000
+    }
+
+    opts =
+      Enum.reduce(opts, base, fn
+        {:signer, :real}, acc -> Map.put(acc, :signer, signer)
+        {k, v}, acc -> Map.put(acc, k, v)
+      end)
+
+    Process.flag(:trap_exit, true)
+    Keeper.start_link(opts)
+  end
 
   test "register: only allowlisted envelope sources; payload-claimed source is inert" do
     %{keeper: keeper} = start_stack()
@@ -1206,10 +1271,13 @@ defmodule DelegatedSpend.KeeperTest do
       tx = last_submitted_tx(fake)
       assert tx.to == @token
 
-      assert String.contains?(
-               tx.data,
-               String.replace_prefix(String.downcase(@treasury), "0x", "")
-             )
+      # POSITIONAL, not "contains": the destination is the SECOND ABI word of
+      # `transferWithAuthorization(from, to, …)`. A substring match would also
+      # pass if the treasury bytes merely appeared somewhere else in the
+      # calldata (e.g. as `from`), so it pins the slot the token contract
+      # actually credits.
+      assert abi_word(tx.data, 1) == padded_address(@treasury)
+      assert abi_word(tx.data, 0) == padded_address(valid_auth().from)
     end
 
     test "a retry doesn't broadcast twice" do
@@ -1228,6 +1296,295 @@ defmodule DelegatedSpend.KeeperTest do
       assert first == second
       assert submitted_tx_count(fake) == 1
     end
+
+    # ── owner binding (the permit lane's control, on this lane too) ─────────
+
+    test "an owner-bound order executes when auth.from is the bound wallet" do
+      {keeper, store, fake} = start_keeper_with_authorization_config()
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000,
+        # same wallet as valid_auth().from, differently cased — the binding is
+        # an address comparison, not a string comparison
+        expected_owner: String.downcase(valid_auth().from)
+      })
+
+      assert {:submitted, _hash} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert submitted_tx_count(fake) == 1
+    end
+
+    test "an owner-bound order refuses a different auth.from, consuming nothing" do
+      {keeper, store, fake} = start_keeper_with_authorization_config()
+
+      order =
+        put_order(store, %{
+          order_ref: "r1",
+          user_ref: "u1",
+          kind: "authorization",
+          amount: 1_000_000,
+          expected_owner: "0x" <> String.duplicate("aa", 20)
+        })
+
+      assert {:failed, :no_grant} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert submitted_tx_count(fake) == 0
+      assert MemoryStore.get_execution_status(store, order.order_id) == :unknown
+    end
+
+    test "require_owner_binding fails CLOSED on an order with no expected_owner" do
+      {keeper, store, fake} =
+        start_keeper_with_authorization_config(%{require_owner_binding: true})
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:failed, :no_grant} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert submitted_tx_count(fake) == 0
+    end
+
+    test "an unbound order on a keeper that doesn't require binding is unaffected" do
+      {keeper, store, fake} = start_keeper_with_authorization_config()
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:submitted, _hash} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert submitted_tx_count(fake) == 1
+    end
+
+    # ── field validation: typed failures, never a crash ─────────────────────
+
+    test "a non-integer valid_before is a typed failure, not a submitted tx" do
+      {keeper, store, fake} = start_keeper_with_authorization_config()
+
+      order =
+        put_order(store, %{
+          order_ref: "r1",
+          user_ref: "u1",
+          kind: "authorization",
+          amount: 1_000_000
+        })
+
+      # Elixir's total term ordering makes ANY binary greater than ANY integer,
+      # so an unguarded `valid_before > now` comparison would sail through.
+      assert {:failed, :no_grant} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", %{
+                 valid_auth()
+                 | valid_before: "9999999999"
+               })
+
+      assert submitted_tx_count(fake) == 0
+      assert MemoryStore.get_execution_status(store, order.order_id) == :unknown
+
+      # …and the order is still executable, i.e. the refusal consumed nothing
+      assert {:submitted, _} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+    end
+
+    test "non-integer valid_after / value and a zero-length signature are typed failures" do
+      {keeper, store, fake} = start_keeper_with_authorization_config()
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      for bad <- [
+            %{valid_auth() | valid_after: "0"},
+            %{valid_auth() | value: "1000000"},
+            %{valid_auth() | value: 0},
+            %{valid_auth() | signature: ""},
+            %{valid_auth() | signature: :not_a_signature},
+            Map.delete(valid_auth(), :valid_before)
+          ] do
+        assert {:failed, :no_grant} =
+                 Keeper.execute_with_authorization(keeper, "r1", "u1", bad)
+      end
+
+      assert submitted_tx_count(fake) == 0
+      assert Process.alive?(keeper)
+    end
+
+    test "a malformed auth.from is a typed failure that leaves the keeper alive" do
+      {keeper, store, fake} =
+        start_keeper_with_authorization_config(%{
+          max_consecutive_reverts: 3,
+          simulate: {:revert, %{"m" => "x"}}
+        })
+
+      # first accumulate real anti-grief state, so the assertion below that it
+      # SURVIVED is load-bearing rather than vacuously zero
+      put_order(store, %{
+        order_ref: "r0",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:failed, :reverted} =
+               Keeper.execute_with_authorization(keeper, "r0", "u1", valid_auth())
+
+      assert Keeper.backoff_count(keeper, "u1") == 1
+
+      order =
+        put_order(store, %{
+          order_ref: "r1",
+          user_ref: "u1",
+          kind: "authorization",
+          amount: 1_000_000
+        })
+
+      for junk <- ["0xnothex", "0x1234", "not-an-address", nil, "0x" <> String.duplicate("0", 40)] do
+        assert {:failed, :no_grant} =
+                 Keeper.execute_with_authorization(keeper, "r1", "u1", %{
+                   valid_auth()
+                   | from: junk
+                 })
+      end
+
+      # the §5.2.1 anti-grief state lives ONLY in the keeper's memory: a crash
+      # here restarts the keeper with `reverts: %{}`, handing a griefer a free
+      # suspension reset
+      assert Process.alive?(keeper)
+      assert Keeper.backoff_count(keeper, "u1") == 1
+      assert submitted_tx_count(fake) == 0
+      assert MemoryStore.get_execution_status(store, order.order_id) == :unknown
+    end
+
+    # ── the remaining typed atoms ──────────────────────────────────────────
+
+    test "a suspended user_ref is refused before anything is consumed" do
+      {keeper, store, fake} =
+        start_keeper_with_authorization_config(%{
+          max_consecutive_reverts: 1,
+          simulate: {:revert, %{"m" => "x"}}
+        })
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:failed, :reverted} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert Keeper.backoff_count(keeper, "u1") == 1
+
+      order2 =
+        put_order(store, %{
+          order_ref: "r2",
+          user_ref: "u1",
+          kind: "authorization",
+          amount: 1_000_000
+        })
+
+      assert {:failed, :suspended} =
+               Keeper.execute_with_authorization(keeper, "r2", "u1", valid_auth())
+
+      assert MemoryStore.get_execution_status(store, order2.order_id) == :unknown
+      assert submitted_tx_count(fake) == 0
+    end
+
+    test "an authorization not yet valid is refused, and validAfter == chain time is NOT valid" do
+      now = 1_800_000_000
+
+      {keeper, store, fake} =
+        start_keeper_with_authorization_config(%{block_timestamp: now})
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:failed, :not_yet_valid} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", %{
+                 valid_auth()
+                 | valid_after: now + 10
+               })
+
+      # EIP-3009 requires block.timestamp > validAfter STRICTLY: an
+      # authorization whose validAfter equals the current block time still
+      # reverts on-chain, so accepting it would only burn sponsor gas and
+      # advance the user's revert backoff.
+      assert {:failed, :not_yet_valid} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", %{
+                 valid_auth()
+                 | valid_after: now
+               })
+
+      assert submitted_tx_count(fake) == 0
+
+      assert {:submitted, _} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", %{
+                 valid_auth()
+                 | valid_after: now - 1
+               })
+    end
+
+    test "a keeper with no authorization config reports the lane disabled" do
+      # start_stack/1 is the permit-only deployment: signer, router, action —
+      # no :token_address, no :treasury_address.
+      %{keeper: keeper, store: store, fake: fake} = start_stack()
+
+      order =
+        put_order(store, %{
+          order_ref: "r1",
+          user_ref: "u1",
+          kind: "authorization",
+          amount: 1_000_000
+        })
+
+      assert {:failed, :authorization_lane_disabled} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert submitted_tx_count(fake) == 0
+      assert MemoryStore.get_execution_status(store, order.order_id) == :unknown
+    end
+
+    # I4: the lane must be reachable through the REAL door, not only by
+    # planting an order in the store.
+    test "an authorization order registered through register_order/3 executes end to end" do
+      {keeper, _store, fake} = start_keeper_with_authorization_config()
+
+      assert {:ok, %{order_ref: ref}} =
+               Keeper.register_order(keeper, "market_phase", %{
+                 user_ref: "u1",
+                 amount: 1_000_000,
+                 action_args: [],
+                 kind: "authorization"
+               })
+
+      assert {:ok, %{kind: "authorization"}} = Keeper.fetch_order(keeper, ref, "u1")
+
+      assert {:submitted, _hash} =
+               Keeper.execute_with_authorization(keeper, ref, "u1", valid_auth())
+
+      assert abi_word(last_submitted_tx(fake).data, 1) == padded_address(@treasury)
+    end
   end
 
   describe "authorization lane boot: DOMAIN_SEPARATOR" do
@@ -1243,6 +1600,15 @@ defmodule DelegatedSpend.KeeperTest do
 
       store = MemoryStore.start()
 
+      {:ok, signer} =
+        Signer.start_link(
+          rpc_url: fake,
+          chain_id: 84_532,
+          priv: @anvil0,
+          rpc_mod: FakeRpc,
+          sweep_ms: 3_600_000
+        )
+
       # A raise inside init/1 crashes the (linked) spawned process before the
       # start_link handshake acks — trapping exits here is what turns that
       # into a clean {:error, {exception, _stack}} return instead of taking
@@ -1253,6 +1619,7 @@ defmodule DelegatedSpend.KeeperTest do
 
       assert {:error, {%RuntimeError{message: message}, _stacktrace}} =
                Keeper.start_link(%{
+                 signer: signer,
                  chain_id: 84_532,
                  store: {MemoryStore, store},
                  source_allowlist: ["market_phase"],
@@ -1264,6 +1631,51 @@ defmodule DelegatedSpend.KeeperTest do
                })
 
       assert message =~ "DOMAIN_SEPARATOR"
+      assert message =~ String.downcase(@token)
+    end
+  end
+
+  # C2: a money lane that is only PARTLY configured must not boot. The runtime
+  # `cond` alone is not enough — a keeper that reports the lane enabled and
+  # then crashes mid-execution can strand a consumed order in durable
+  # `:pending` with no tx hash, which adoption.md forbids ever resubmitting.
+  describe "authorization lane boot: configuration coherence" do
+    test "a token address without a treasury address refuses to boot, naming the missing key" do
+      assert {:error, {%ArgumentError{message: message}, _}} =
+               start_keeper_with(%{signer: :real, token_address: @token})
+
+      assert message =~ ":treasury_address"
+      assert message =~ "authorization"
+    end
+
+    test "a treasury address without a token address refuses to boot, naming the missing key" do
+      assert {:error, {%ArgumentError{message: message}, _}} =
+               start_keeper_with(%{signer: :real, treasury_address: @treasury})
+
+      assert message =~ ":token_address"
+    end
+
+    test "the addresses without a signer refuse to boot, naming :signer" do
+      assert {:error, {%ArgumentError{message: message}, _}} =
+               start_keeper_with(%{token_address: @token, treasury_address: @treasury})
+
+      assert message =~ ":signer"
+    end
+
+    test "a permit-only deployment (neither address) boots, paying no new cost" do
+      assert {:ok, keeper} = start_keeper_with(%{signer: :real})
+      assert Process.alive?(keeper)
+    end
+
+    test "the fully configured lane boots" do
+      assert {:ok, keeper} =
+               start_keeper_with(%{
+                 signer: :real,
+                 token_address: @token,
+                 treasury_address: @treasury
+               })
+
+      assert Process.alive?(keeper)
     end
   end
 end

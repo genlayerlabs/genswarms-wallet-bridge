@@ -22,13 +22,16 @@ defmodule DelegatedSpend.Keeper do
   means one successful receipt, not confirmation depth or product credit.
 
   Typed failure reasons: `no_grant | expired | reverted | rpc_timeout |
-  not_found | suspended`. `suspended` is the §5.2.1 revert backoff — a grant
-  that produced `max_consecutive_reverts` reverts is frozen until
-  `reset_backoff/2` (the wallet dapp re-enable).
+  not_found | suspended | wrong_kind | permit_lane_disabled`, plus
+  `authorization_lane_disabled | not_yet_valid` on the EIP-3009 lane.
+  `suspended` is the §5.2.1 revert backoff — a grant that produced
+  `max_consecutive_reverts` reverts is frozen until `reset_backoff/2` (the
+  wallet dapp re-enable).
   """
   use GenServer
   require Logger
 
+  alias DelegatedSpend.Evm.Address
   alias DelegatedSpend.Keeper.{PermitLane, Signer}
 
   # :chain_id is REQUIRED (0.3.1): every order view carries the keeper's
@@ -37,6 +40,7 @@ defmodule DelegatedSpend.Keeper do
   # keeper that doesn't know its chain must not serve orders at all.
   @enforce_opts [:store, :source_allowlist, :order_ttl_s, :chain_id]
   @max_json_safe_integer 9_007_199_254_740_991
+  @uint256_max Integer.pow(2, 256) - 1
 
   # Optional :name registers the server (supervision-friendly: a restarted
   # keeper is reachable at the same name, so app ctx never holds a stale pid).
@@ -89,12 +93,15 @@ defmodule DelegatedSpend.Keeper do
 
   @impl true
   def init(opts) do
-    # Authorization lane config (EIP-3009). Both optional and gated on
-    # `:token_address`: a permit-only deployment has no EIP-3009 token and
-    # often no RPC wired at all (see the existing keeper tests), so it must
-    # not pay this boot cost or this failure mode for a lane it doesn't use.
+    # Authorization lane config (EIP-3009). Normalized ONCE, here: the lane is
+    # enabled iff `:signer`, `:token_address` and `:treasury_address` are ALL
+    # configured; a partial configuration refuses boot (see
+    # `authorization_enabled?/1`). Everything downstream reads the single
+    # boolean, so no execution path can ever discover a missing key halfway
+    # through and crash with an order already consumed.
     token_address = Map.get(opts, :token_address)
     treasury_address = Map.get(opts, :treasury_address)
+    authorization_enabled? = authorization_enabled?(opts)
 
     # DOMAIN_SEPARATOR() = 0x3644e515. READ, never recomposed: a wrongly
     # composed domain produces signatures the chain rejects without saying
@@ -115,6 +122,7 @@ defmodule DelegatedSpend.Keeper do
       token_address: token_address,
       treasury_address: treasury_address,
       domain_separator: domain_separator,
+      authorization_enabled?: authorization_enabled?,
       # The RUNTIME chain id (the app derives it from its RPC at boot). Not a
       # per-order field: order views stamp it at FETCH time, so orders
       # persisted before an upgrade still report the chain the keeper serves.
@@ -236,7 +244,7 @@ defmodule DelegatedSpend.Keeper do
               permit.value != order.amount ->
                 {:reply, {:failed, :no_grant}, state}
 
-              not owner_binding_ok?(order, permit, state) ->
+              not owner_binding_ok?(order, permit.owner, state) ->
                 {:reply, {:failed, :no_grant}, state}
 
               not deadline_slack_ok?(permit, state) ->
@@ -272,7 +280,10 @@ defmodule DelegatedSpend.Keeper do
               Map.get(order, :kind, "permit") != "authorization" ->
                 {:reply, {:failed, :wrong_kind}, state}
 
-              is_nil(state.signer) ->
+              # ONE normalized predicate, computed at boot (see
+              # `authorization_enabled?/1`): by the time we're here the lane is
+              # either fully configured or the keeper never booted.
+              not state.authorization_enabled? ->
                 {:reply, {:failed, :authorization_lane_disabled}, state}
 
               # Same anti-griefing backoff as the permit lane (spec §5.2.1) —
@@ -283,22 +294,34 @@ defmodule DelegatedSpend.Keeper do
               now_s() > order.expires_at ->
                 {:reply, {:failed, :expired}, state}
 
+              # Shape/type check BEFORE any field is compared or encoded:
+              # nothing about `auth` is trusted, and a malformed field must be
+              # a typed refusal, never a crash — the §5.2.1 revert backoff
+              # lives only in this process's memory, so a crash is a free
+              # suspension reset for a griefer.
+              not valid_authorization_fields?(auth) ->
+                {:reply, {:failed, :no_grant}, state}
+
               auth.value != order.amount ->
                 {:reply, {:failed, :no_grant}, state}
 
-              # The authorization must still be open with comfortable margin
-              # by the time the chain processes it, not merely open right
-              # now — the exact same grief shape `deadline_slack_ok?/2`
-              # guards against for permits (passes simulation, reverts once
-              # mined). Chain time when an RPC is wired, else wall clock.
-              not authorization_window_open?(auth, state) ->
-                {:reply, {:failed, :expired}, state}
-
-              auth.valid_after > chain_now(state) ->
-                {:reply, {:failed, :not_yet_valid}, state}
+              # The SAME fail-closed owner binding the permit lane enforces
+              # (shared helper, so the two lanes can't drift): an app that
+              # opted into "only this wallet may pay" must not lose that
+              # guarantee by an order taking the other lane.
+              not owner_binding_ok?(order, auth.from, state) ->
+                {:reply, {:failed, :no_grant}, state}
 
               true ->
-                execute_authorization_consumed(order, auth, state)
+                # The two validity-window checks share ONE chain-time read:
+                # two `eth_getBlockByNumber` round-trips per payment is both
+                # wasteful and incoherent (the guards could observe different
+                # timestamps). Evaluated last so the cheap refusals above
+                # never pay for an RPC call.
+                case authorization_window(auth, state) do
+                  :ok -> execute_authorization_consumed(order, auth, state)
+                  reason -> {:reply, {:failed, reason}, state}
+                end
             end
 
           status ->
@@ -370,6 +393,46 @@ defmodule DelegatedSpend.Keeper do
 
   defp receipt(_state, _hash), do: nil
 
+  # The authorization lane needs THREE things to move money: a signer to
+  # broadcast, a token to call, and a treasury to credit. Half of them is not a
+  # runtime condition, it is a broken DEPLOY — and one that is expensive to
+  # discover late: a keeper that reports the lane enabled and then raises
+  # mid-execution can leave an order durably `:pending` with no tx hash, which
+  # adoption.md forbids ever resubmitting. So it fails at boot, exactly like the
+  # DOMAIN_SEPARATOR read below.
+  #
+  # `:signer` ALONE is not a request for this lane — that's the permit-only
+  # deployment every M1 keeper runs — so the lane is only "asked for" once one
+  # of its own two address keys appears. Neither key = lane cleanly disabled,
+  # no new boot cost, no new failure mode.
+  defp authorization_enabled?(opts) do
+    configured = [
+      signer: Map.get(opts, :signer),
+      token_address: Map.get(opts, :token_address),
+      treasury_address: Map.get(opts, :treasury_address)
+    ]
+
+    requested? =
+      not (is_nil(configured[:token_address]) and is_nil(configured[:treasury_address]))
+
+    missing = for {key, nil} <- configured, do: key
+
+    cond do
+      not requested? ->
+        false
+
+      missing == [] ->
+        true
+
+      true ->
+        raise ArgumentError,
+              "keeper: authorization lane is half-configured — missing " <>
+                Enum.map_join(missing, ", ", &inspect/1) <>
+                ". Configure all of :signer, :token_address and :treasury_address, " <>
+                "or none of :token_address/:treasury_address for a permit-only deployment."
+    end
+  end
+
   # `Rpc.eth_call/3` (the plain, no-`from` view-call wrapper — unused so far
   # elsewhere, since `eth_call_from/4` is what the Signer's simulation needs)
   # either returns the raw `"0x…"` result or RAISES on transport failure
@@ -383,7 +446,7 @@ defmodule DelegatedSpend.Keeper do
         Base.decode16!(hex, case: :mixed)
 
       other ->
-        raise "keeper: no se pudo leer DOMAIN_SEPARATOR del token #{token_address}: #{inspect(other)}"
+        raise "keeper: could not read DOMAIN_SEPARATOR from token #{String.downcase(token_address)}: #{inspect(other)}"
     end
   end
 
@@ -418,7 +481,9 @@ defmodule DelegatedSpend.Keeper do
     # PermitLane.build_call above — expects `tx.data` as RAW bytes: Tx1559
     # signs over the actual byte string, not its hex spelling. Decode at this
     # boundary between the two conventions.
-    data = calldata_hex |> String.trim_leading("0x") |> Base.decode16!(case: :mixed)
+    # `replace_prefix/3`, not `trim_leading/2`: the latter strips EVERY leading
+    # occurrence ("0x0x12" -> "12"), which is never the intent for a prefix.
+    data = calldata_hex |> String.replace_prefix("0x", "") |> Base.decode16!(case: :mixed)
 
     submit_consumed(order, %{to: state.token_address, data: data, value: 0}, state)
   end
@@ -530,6 +595,12 @@ defmodule DelegatedSpend.Keeper do
       "permit" ->
         {:ok, "permit"}
 
+      # The EIP-3009 lane's kind. Registrable like "permit": the order carries
+      # no routing payload of its own — the destination is the keeper's own
+      # treasury — so there is nothing extra to validate here.
+      "authorization" ->
+        {:ok, "authorization"}
+
       "bind" ->
         {:ok, "bind"}
 
@@ -588,10 +659,14 @@ defmodule DelegatedSpend.Keeper do
   # Fail CLOSED when the app requires a binding but the loaded order has none
   # (e.g. a storage layer silently dropped `expected_owner`). Otherwise: set →
   # must match; unset → open (generic keeper / delegation lane).
-  defp owner_binding_ok?(order, permit, state) do
+  # `owner` is the address that signed the payment authorization: the permit's
+  # `owner` on the permit lane, the authorization's `from` on the EIP-3009 one.
+  # Deliberately ONE function for both — a duplicated security control is a
+  # control that eventually diverges.
+  defp owner_binding_ok?(order, owner, state) do
     case Map.get(order, :expected_owner) do
       nil -> not state.require_owner_binding
-      expected -> String.downcase(expected) == String.downcase(permit.owner)
+      expected -> Address.eq?(expected, owner)
     end
   end
 
@@ -605,13 +680,62 @@ defmodule DelegatedSpend.Keeper do
     is_integer(permit.deadline) and permit.deadline >= now + state.min_deadline_slack_s
   end
 
+  # Nothing in `auth` is server-authoritative — it is the payload a client
+  # hands us — so every field is type-checked before it is compared, encoded
+  # or handed to the Signer. Mirrors the permit lane's `is_integer(deadline)`
+  # guard, generalized: Elixir's total term ordering makes ANY binary greater
+  # than ANY integer, so an unguarded `valid_before > now` comparison lets a
+  # string sail through the expiry gate and get ABI-encoded into a uint256
+  # slot as garbage (which then reverts on-chain, on the sponsor's gas, and
+  # advances the payer's revert backoff).
+  defp valid_authorization_fields?(auth) when is_map(auth) do
+    value = Map.get(auth, :value)
+    valid_after = Map.get(auth, :valid_after)
+    valid_before = Map.get(auth, :valid_before)
+    signature = Map.get(auth, :signature)
+
+    is_integer(value) and value > 0 and value <= @uint256_max and
+      is_integer(valid_after) and valid_after >= 0 and valid_after <= @uint256_max and
+      is_integer(valid_before) and valid_before >= 0 and valid_before <= @uint256_max and
+      is_binary(signature) and byte_size(signature) > 0 and
+      address?(Map.get(auth, :from))
+  end
+
+  defp valid_authorization_fields?(_auth), do: false
+
+  # Defensive address validation at the trust boundary, in the same shape
+  # `DelegatedSpend.Orders.validate_address!/2` uses for the order-building
+  # side — as a PREDICATE, because here a malformed address must produce a
+  # typed refusal, not an exception: `Address.to_bytes/1` (via
+  # `Base.decode16!/2`) raises deep inside calldata construction otherwise.
+  # The zero address is rejected too: it is never a payer.
+  defp address?("0x" <> hex) when byte_size(hex) == 40 do
+    body = String.downcase(hex)
+    Regex.match?(~r/^[0-9a-f]{40}$/, body) and body != String.duplicate("0", 40)
+  end
+
+  defp address?(_other), do: false
+
   # Unlike `deadline_slack_ok?/2`, there is no "0 disables the check" escape
   # hatch here: `valid_before` is not an optional grief-prevention margin, it
   # is the EIP-3009 authorization's OWN on-chain validity boundary — the
   # token contract rejects the transfer once it passes, full stop.
   # `:min_deadline_slack_s` only widens that mandatory margin when set.
-  defp authorization_window_open?(auth, state),
-    do: auth.valid_before > chain_now(state) + state.min_deadline_slack_s
+  #
+  # Both bounds are checked against ONE chain-time read. `valid_after` is
+  # STRICT (`valid_after >= now` refuses): EIP-3009 requires
+  # `block.timestamp > validAfter`, so an authorization whose `validAfter`
+  # equals the current block time still reverts on-chain — accepting it would
+  # only burn sponsor gas and advance the payer's revert backoff.
+  defp authorization_window(auth, state) do
+    now = chain_now(state)
+
+    cond do
+      auth.valid_before <= now + state.min_deadline_slack_s -> :expired
+      auth.valid_after >= now -> :not_yet_valid
+      true -> :ok
+    end
+  end
 
   defp chain_now(%{rpc_mod: mod, rpc: rpc}) when not is_nil(mod) do
     mod.block_timestamp(rpc)

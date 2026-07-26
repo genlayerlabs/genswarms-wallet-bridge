@@ -34,6 +34,21 @@ Version 0.3 adds two transport order kinds beside the permit lane:
   broadcasts these kinds; `execute_with_permit/4` refuses them with
   `{:failed, :wrong_kind}` without consuming the order.
 
+There is a second **executable** kind beside `permit`:
+
+- `authorization` is the EIP-3009 lane: the payer signs a
+  `transferWithAuthorization` and the keeper broadcasts it, via
+  `execute_with_authorization/4`. The destination is the keeper's own
+  `:treasury_address` — never anything the client sends. It needs all three of
+  `:signer`, `:token_address` and `:treasury_address`; configure some but not
+  all and the keeper refuses to boot (a half-configured money lane must fail at
+  deploy time, not at the first paying user). With none of them, execution
+  returns `{:failed, :authorization_lane_disabled}`.
+
+So `begin_execution/4` — the callback that consumes an order and opens its
+durable execution record — accepts exactly the two executable kinds, `permit`
+and `authorization`, and refuses everything else.
+
 If you only need wallet-order transport, start the keeper registry-only:
 
 ```elixir
@@ -286,7 +301,8 @@ If your credit machinery scans addresses derived from a wallet-on-file, set
 `expected_owner` on every order AND start the keeper with
 `require_owner_binding: true` — then a permit signed by any other wallet
 typed-fails, and an order that *loses* its binding (e.g. a storage bug) fails
-CLOSED instead of executing. Set both; the external audit's one critical
+CLOSED instead of executing. The same control applies to the `authorization`
+lane, comparing `expected_owner` against the authorization's `from`. Set both; the external audit's one critical
 finding (F1) was exactly a SQL adapter dropping this field. The dapp enforces
 the same binding in the browser: an owner-bound order view carries
 `expected_owner`, and a mismatched connected wallet is refused (typed
@@ -310,7 +326,7 @@ Implement the `DelegatedSpend.Keeper.Store` behaviour
 | `record_spend/4`, `spent_since/3` | per-`user_ref` spend accounting |
 | `put_order/2`, `get_order/2`, `get_order_by_ref/3` | server-authoritative orders |
 | `consume_order/3` | atomic single consumption for non-execution flows such as wallet binding |
-| `begin_execution/4` | atomically consume one permit order and create durable `:pending` status |
+| `begin_execution/4` | atomically consume one **executable** order — kind `"permit"` or `"authorization"` — and create durable `:pending` status. Every other kind (`"user_tx"`, `"bind"`, anything unknown) MUST be refused with `:not_found`, consuming nothing |
 | `get_execution_status/2` | return `:unknown`, `:pending`, `{:submitted, tx}`, `{:mined, tx}`, or `{:failed, reason}` |
 | `update_inflight_hash/3`, `list_inflight/1` | append each same-nonce candidate hash before broadcast and enumerate only unresolved executions |
 | `resolve_inflight/4` | atomically persist the first terminal result, remove in-flight state, and record mined spend once; return `:new` or `:existing` |

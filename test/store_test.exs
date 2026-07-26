@@ -62,6 +62,36 @@ defmodule DelegatedSpend.StoreTest do
              MemoryStore.list_inflight(store)
   end
 
+  # The kind gate is a MONEY gate, not a detail: `begin_execution/4` consumes
+  # the order and opens its durable execution record, so whatever it accepts
+  # is what the keeper is allowed to broadcast. Both executable lanes must
+  # pass; every transport kind must be refused indistinguishably from
+  # not-found. Any host SQL adapter has to reproduce exactly this.
+  test "begin_execution accepts both executable lanes and refuses every other kind" do
+    for kind <- ["permit", "authorization"] do
+      store = MemoryStore.start()
+      :ok = MemoryStore.put_order(store, Map.put(@order, :kind, kind))
+
+      assert {:ok, %{order_id: "oid-1"}} =
+               MemoryStore.begin_execution(store, "oid-1", "u-a", "ak")
+
+      assert :pending = MemoryStore.get_execution_status(store, "oid-1")
+    end
+
+    # "user_tx" and "bind" are wallet-order transport — the USER's wallet
+    # broadcasts them, the keeper never does, and `user_tx` carries a
+    # CLIENT-SHAPED `tx` map. If someone widens the gate to `true ->`, this
+    # goes red.
+    for kind <- ["user_tx", "bind", "anything_else"] do
+      store = MemoryStore.start()
+      :ok = MemoryStore.put_order(store, Map.put(@order, :kind, kind))
+      assert :not_found = MemoryStore.begin_execution(store, "oid-1", "u-a", "ak")
+      # refused means untouched: nothing consumed, no durable execution row
+      assert :unknown = MemoryStore.get_execution_status(store, "oid-1")
+      assert {:ok, _} = MemoryStore.consume_order(store, "oid-1", "u-a")
+    end
+  end
+
   test "grant lifecycle: put, get, revoke; scoped by user_ref" do
     store = MemoryStore.start()
     assert :ok = MemoryStore.revoke_grant(store, "missing", "u-a")
