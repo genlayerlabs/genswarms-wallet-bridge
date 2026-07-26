@@ -21,10 +21,14 @@ defmodule DelegatedSpend.Orders do
   """
 
   alias DelegatedSpend.Evm.Address
+  alias DelegatedSpend.Keccak
 
   # ERC-20 transfer(address,uint256)
   @transfer_selector "a9059cbb"
   @uint256_max Integer.pow(2, 256) - 1
+
+  @authorization_domain "genswarms/topup-authorization/v1:"
+  @sweep_domain "genswarms/deposit-sweep/v1:"
 
   @doc """
   The exact `tx` map the keeper's `register order` validates for kind
@@ -190,6 +194,33 @@ defmodule DelegatedSpend.Orders do
 
   def user_ref(_platform_id, _salt) do
     raise ArgumentError, "user_ref: platform_id and salt must be binaries"
+  end
+
+  @doc """
+  `nonce` EIP-3009 de una recarga, derivado de la referencia del pedido.
+
+  Determinista a propósito: el vigilante reconoce el ingreso buscando este mismo
+  valor, sin necesidad de guardar una correspondencia aparte.
+
+  El prefijo de dominio NO es decorativo. Los `nonce` de recogida
+  (`sweep_nonce/2`) viven en otro dominio precisamente para que un barrido no
+  pueda parecerse jamás a una recarga; si coincidieran, un barrido se acreditaría
+  como pago de usuario y regalaríamos el dinero dos veces (spec §4.4).
+  """
+  @spec authorization_nonce(String.t()) :: <<_::256>>
+  def authorization_nonce(order_ref) when is_binary(order_ref) do
+    Keccak.hash_256(@authorization_domain <> order_ref)
+  end
+
+  @doc """
+  `nonce` EIP-3009 de una recogida de dirección de depósito (plan 3).
+
+  Existe ya para que la prueba de no-colisión con `authorization_nonce/1` esté
+  escrita desde el primer día.
+  """
+  @spec sweep_nonce(String.t(), non_neg_integer) :: <<_::256>>
+  def sweep_nonce(address, epoch) when is_binary(address) and is_integer(epoch) do
+    Keccak.hash_256(@sweep_domain <> address <> ":" <> Integer.to_string(epoch))
   end
 
   # ── helpers ───────────────────────────────────────────────────────────────

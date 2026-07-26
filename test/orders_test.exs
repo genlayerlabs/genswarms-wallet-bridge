@@ -307,4 +307,37 @@ defmodule DelegatedSpend.OrdersTest do
       assert_raise ArgumentError, fn -> Orders.user_ref("5681202", nil) end
     end
   end
+
+  describe "nonces de autorización" do
+    test "el nonce es determinista y de 32 bytes" do
+      ref = "abc123"
+      assert byte_size(DelegatedSpend.Orders.authorization_nonce(ref)) == 32
+
+      assert DelegatedSpend.Orders.authorization_nonce(ref) ==
+               DelegatedSpend.Orders.authorization_nonce(ref)
+    end
+
+    test "referencias distintas dan nonces distintos" do
+      refute DelegatedSpend.Orders.authorization_nonce("a") ==
+               DelegatedSpend.Orders.authorization_nonce("b")
+    end
+
+    # LA prueba que importa (spec §4.4): si los dominios se unifican alguna vez,
+    # un barrido de la entrada B pasaría por una recarga y se acreditaría dinero
+    # que ya se acreditó. Esta prueba debe ponerse ROJA si alguien lo intenta.
+    test "el dominio de recarga y el de recogida NUNCA colisionan" do
+      addr = "0x1111111111111111111111111111111111111111"
+
+      recargas = for i <- 1..200, do: DelegatedSpend.Orders.authorization_nonce("ref-#{i}")
+      recogidas = for i <- 1..200, do: DelegatedSpend.Orders.sweep_nonce(addr, i)
+
+      assert MapSet.disjoint?(MapSet.new(recargas), MapSet.new(recogidas))
+
+      # Y no sólo por suerte: el mismo texto de entrada por los dos caminos
+      # tiene que dar resultados distintos, porque el prefijo de dominio entra
+      # en el hash.
+      refute DelegatedSpend.Orders.authorization_nonce(addr <> ":1") ==
+               DelegatedSpend.Orders.sweep_nonce(addr, 1)
+    end
+  end
 end
