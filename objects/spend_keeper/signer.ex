@@ -14,13 +14,25 @@ defmodule DelegatedSpend.Keeper.Signer do
     * `action_key` idempotency: a retry of the same action can never
       double-broadcast — it returns the recorded hash/terminal state;
     * sweep: stuck transactions are rebroadcast at the SAME nonce with
-      bumped fees.
+      bumped fees;
+    * low-balance alarm (Task 3b, spec §5 — the most likely failure mode):
+      the SAME periodic sweep reads the relayer's native balance and, below
+      the optional `:low_balance_wei`, logs a `warning` naming the
+      `keeper_relayer_low_balance` metric — there is no metrics framework in
+      this package, so a host that wants to alert on it scrapes the log line;
+    * `cost_estimate/2`: the wei cost (gas * max_fee) already computed for a
+      still-in-flight `action_key`, read back — not re-derived — by the
+      keeper right after a successful submit to record the day's gas spend.
+      It is an ESTIMATE (the ceiling used, not the gas actually burned) and
+      only exists while the entry is in flight: once resolved, `done` keeps
+      just the terminal status, not its params.
 
   The Keeper Store, not this process, owns durable execution status across
   restarts. Keeper supplies the request-critical hash writer used before each
   initial or replacement broadcast.
   """
   use GenServer
+  require Logger
 
   alias DelegatedSpend.Evm.{Address, Rpc, Tx1559}
 
@@ -51,6 +63,13 @@ defmodule DelegatedSpend.Keeper.Signer do
   def address(server), do: GenServer.call(server, :address)
   def sweep_now(server), do: GenServer.call(server, :sweep_now, 60_000)
 
+  @doc """
+  The estimated wei cost (gas * max_fee) of the still-in-flight entry for
+  `action_key` — `{:ok, wei}`, or `:unknown` once it never existed or has
+  already resolved (see moduledoc).
+  """
+  def cost_estimate(server, action_key), do: GenServer.call(server, {:cost_estimate, action_key})
+
   @impl true
   def init(opts) do
     rpc_mod = Map.get(opts, :rpc_mod, Rpc)
@@ -72,7 +91,12 @@ defmodule DelegatedSpend.Keeper.Signer do
           pending: %{},
           done: %{},
           sweep_ms: Map.get(opts, :sweep_ms, 15_000),
-          bump_after_ms: Map.get(opts, :bump_after_ms, 30_000)
+          bump_after_ms: Map.get(opts, :bump_after_ms, 30_000),
+          # Task 3b: optional — absent means no alarm, consistent with
+          # GasPolicy's own "no limit configured" rule. Nil also means the
+          # sweep never pays for the extra `eth_getBalance` read at all (see
+          # `check_low_balance/1`).
+          low_balance_wei: Map.get(opts, :low_balance_wei)
         }
 
         Process.send_after(self(), :sweep, state.sweep_ms)
@@ -101,6 +125,16 @@ defmodule DelegatedSpend.Keeper.Signer do
   end
 
   def handle_call(:sweep_now, _from, state), do: {:reply, :ok, do_sweep(state)}
+
+  def handle_call({:cost_estimate, key}, _from, state) do
+    reply =
+      case state.pending[key] do
+        %{params: %{gas: gas, max_fee: max_fee}} -> {:ok, gas * max_fee}
+        nil -> :unknown
+      end
+
+    {:reply, reply, state}
+  end
 
   def handle_call({:submit, key, tx, persist_hash_fn}, _from, state) do
     cond do
@@ -217,6 +251,8 @@ defmodule DelegatedSpend.Keeper.Signer do
   # ── sweep: receipts + same-nonce fee-bumped rebroadcast ──────────────────
 
   defp do_sweep(state) do
+    check_low_balance(state)
+
     Enum.reduce(state.pending, state, fn {key, entry}, acc ->
       # Check EVERY same-nonce variant — after a bump, the original tx can
       # still be the one that mines.
@@ -237,6 +273,42 @@ defmodule DelegatedSpend.Keeper.Signer do
           if now_ms() - entry.sent_at > acc.bump_after_ms, do: bump(acc, key, entry), else: acc
       end
     end)
+  end
+
+  # Task 3b, spec §5: the single most likely way this whole system fails is
+  # the relayer's own wallet running dry mid-day — it has to warn BEFORE
+  # zero, not after. `nil` (unset) skips the check entirely: no RPC call, no
+  # cost, for a deployment that hasn't picked a threshold yet.
+  defp check_low_balance(%{low_balance_wei: nil}), do: :ok
+
+  defp check_low_balance(state) do
+    case safe_balance(state) do
+      nil ->
+        :ok
+
+      balance when balance < state.low_balance_wei ->
+        # No metrics/telemetry framework exists in this package — the metric
+        # NAME is embedded in the log line itself (first token, key=value
+        # after it) so a host that scrapes logs can alert on
+        # `keeper_relayer_low_balance` without us inventing a framework here.
+        Logger.warning(
+          "keeper_relayer_low_balance addr=#{state.addr} balance_wei=#{balance} " <>
+            "threshold_wei=#{state.low_balance_wei}"
+        )
+
+      _balance ->
+        :ok
+    end
+  end
+
+  # A transient RPC error reading the balance must not crash the sweep, same
+  # reasoning as `safe_receipt/2` below.
+  defp safe_balance(state) do
+    state.rpc_mod.balance(state.rpc, state.addr)
+  rescue
+    _ -> nil
+  catch
+    _kind, _reason -> nil
   end
 
   # A transient RPC error while polling a receipt (the real Rpc.receipt uses

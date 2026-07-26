@@ -88,7 +88,7 @@ defmodule DelegatedSpend.KeeperTest do
             simulate: :ok,
             eth_call_result: "0x" <> String.duplicate("ab", 32)
           },
-          Map.take(overrides, [:simulate, :block_timestamp])
+          Map.take(overrides, [:simulate, :block_timestamp, :gas_price])
         )
       )
 
@@ -117,7 +117,13 @@ defmodule DelegatedSpend.KeeperTest do
         sweep_ms: 3_600_000
       ] ++
         (overrides
-         |> Map.take([:require_owner_binding, :max_consecutive_reverts])
+         |> Map.take([
+           :require_owner_binding,
+           :max_consecutive_reverts,
+           :max_gas_wei,
+           :daily_gas_budget_wei,
+           :min_order_units
+         ])
          |> Map.to_list())
 
     {:ok, keeper} = Keeper.start_link(keeper_opts)
@@ -1584,6 +1590,140 @@ defmodule DelegatedSpend.KeeperTest do
                Keeper.execute_with_authorization(keeper, ref, "u1", valid_auth())
 
       assert abi_word(last_submitted_tx(fake).data, 1) == padded_address(@treasury)
+    end
+  end
+
+  # Task 3b (spec §5): the three economic brakes, consulted BEFORE the
+  # Signer, on the authorization lane only. Each rejection is a typed
+  # `{:failed, _}` that consumes nothing (money never left, nothing was
+  # broadcast) — mirrors every other typed-failure test above.
+  describe "execute_with_authorization/4: economic brakes (Task 3b)" do
+    test "gas price ceiling: above :max_gas_wei is refused, nothing consumed or broadcast" do
+      {keeper, store, fake} =
+        start_keeper_with_authorization_config(%{max_gas_wei: 10, gas_price: 50})
+
+      order =
+        put_order(store, %{
+          order_ref: "r1",
+          user_ref: "u1",
+          kind: "authorization",
+          amount: 1_000_000
+        })
+
+      assert {:failed, :gas_too_expensive} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert submitted_tx_count(fake) == 0
+      assert MemoryStore.get_execution_status(store, order.order_id) == :unknown
+
+      # the refusal consumed nothing — a cheaper gas price still executes
+      FakeRpc.put(fake, :gas_price, 5)
+
+      assert {:submitted, _hash} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+    end
+
+    test "daily gas budget: at or over :daily_gas_budget_wei is refused" do
+      {keeper, store, fake} =
+        start_keeper_with_authorization_config(%{daily_gas_budget_wei: 1_000})
+
+      # pre-existing gas spend today, seeded directly at the store — the
+      # keeper reads this back via `gas_spent_since/2` before ever calling
+      # the Signer.
+      :ok = MemoryStore.record_gas_spend(store, 1_000, System.os_time(:second))
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:failed, :budget_exhausted} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert submitted_tx_count(fake) == 0
+    end
+
+    test "daily gas budget ignores spend older than the rolling 24h window" do
+      {keeper, store, fake} =
+        start_keeper_with_authorization_config(%{daily_gas_budget_wei: 1_000})
+
+      # this spend is more than a day old — it must NOT count toward today's
+      # accumulated total
+      :ok = MemoryStore.record_gas_spend(store, 1_000, System.os_time(:second) - 90_000)
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:submitted, _hash} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert submitted_tx_count(fake) == 1
+    end
+
+    test "minimum order size: below :min_order_units is refused" do
+      {keeper, store, fake} =
+        start_keeper_with_authorization_config(%{min_order_units: 2_000_000})
+
+      order =
+        put_order(store, %{
+          order_ref: "r1",
+          user_ref: "u1",
+          kind: "authorization",
+          amount: 1_000_000
+        })
+
+      assert {:failed, :below_minimum} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert submitted_tx_count(fake) == 0
+      assert MemoryStore.get_execution_status(store, order.order_id) == :unknown
+    end
+
+    test "no brakes configured: extreme gas price and prior spend never block (empty config admits all)" do
+      {keeper, store, fake} =
+        start_keeper_with_authorization_config(%{gas_price: 999_999_999_999})
+
+      :ok = MemoryStore.record_gas_spend(store, 999_999_999_999, System.os_time(:second))
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:submitted, _hash} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert submitted_tx_count(fake) == 1
+    end
+
+    test "a successful submit records the estimated gas cost in the store" do
+      {keeper, store, _fake} =
+        start_keeper_with_authorization_config(%{daily_gas_budget_wei: 999_999_999_999_999})
+
+      put_order(store, %{
+        order_ref: "r1",
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert MemoryStore.gas_spent_since(store, 0) == 0
+
+      assert {:submitted, _hash} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      # gas(100_000, headroomed 1.3x) * max_fee(base 10e9 *2 + prio 1e9) —
+      # FakeRpc's defaults, the SAME numbers the Signer itself computed at
+      # submit time (an ESTIMATE, not the mined cost: see Signer moduledoc).
+      assert MemoryStore.gas_spent_since(store, 0) == div(100_000 * 13, 10) * 21_000_000_000
     end
   end
 

@@ -227,6 +227,65 @@ defmodule DelegatedSpend.SignerTest do
     assert raw_create != raw_address
   end
 
+  # ── Task 3b: gas-spend accounting + low-balance alarm ────────────────────
+
+  test "cost_estimate: available right after submit, gone once resolved" do
+    {fake, signer} = start_signer()
+    assert :unknown = Signer.cost_estimate(signer, "k1")
+
+    {:ok, hash} = Signer.submit(signer, "k1", @tx)
+    # gas(100_000, headroomed 1.3x) * max_fee(base 10e9 *2 + prio 1e9) = the
+    # SAME numbers do_submit itself computed — read back, not re-derived.
+    assert {:ok, cost} = Signer.cost_estimate(signer, "k1")
+    assert cost == div(100_000 * 13, 10) * 21_000_000_000
+
+    # once the entry has gone terminal (mined), `done` only remembers the
+    # terminal status — an ESTIMATE only exists for what is still in flight,
+    # by construction.
+    FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
+    Signer.sweep_now(signer)
+    assert Signer.status(signer, "k1") == {:mined, hash}
+    assert :unknown = Signer.cost_estimate(signer, "k1")
+  end
+
+  defp start_signer_with_balance(low_balance_wei, balance) do
+    fake = FakeRpc.start(%{chain_id: 84_532, nonce: 5, simulate: :ok, balance: balance})
+
+    {:ok, signer} =
+      Signer.start_link(
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000,
+        low_balance_wei: low_balance_wei
+      )
+
+    {fake, signer}
+  end
+
+  test "low_balance_wei: below threshold warns once per sweep with the metric name in the log" do
+    {_fake, signer} = start_signer_with_balance(1_000, 500)
+
+    log = ExUnit.CaptureLog.capture_log(fn -> Signer.sweep_now(signer) end)
+    assert log =~ "keeper_relayer_low_balance"
+    assert log =~ "500"
+    assert log =~ "1000"
+  end
+
+  test "low_balance_wei: at or above threshold stays quiet" do
+    {_fake, signer} = start_signer_with_balance(1_000, 1_000)
+    log = ExUnit.CaptureLog.capture_log(fn -> Signer.sweep_now(signer) end)
+    refute log =~ "keeper_relayer_low_balance"
+  end
+
+  test "low_balance_wei absent: no warning even on a near-empty wallet" do
+    {fake, signer} = start_signer()
+    FakeRpc.put(fake, :balance, 0)
+    log = ExUnit.CaptureLog.capture_log(fn -> Signer.sweep_now(signer) end)
+    refute log =~ "keeper_relayer_low_balance"
+  end
+
   test "unexpected info messages do not disturb signer state" do
     {_fake, signer} = start_signer()
     send(signer, :noise)

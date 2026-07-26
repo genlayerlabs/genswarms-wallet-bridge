@@ -23,7 +23,9 @@ defmodule DelegatedSpend.Keeper do
 
   Typed failure reasons: `no_grant | expired | reverted | rpc_timeout |
   not_found | suspended | wrong_kind | permit_lane_disabled`, plus
-  `authorization_lane_disabled | not_yet_valid` on the EIP-3009 lane.
+  `authorization_lane_disabled | not_yet_valid` on the EIP-3009 lane, plus
+  `gas_too_expensive | budget_exhausted | below_minimum` (Task 3b's economic
+  brakes, `GasPolicy.admit/2`, EIP-3009 lane only — see `gas_policy_admit/2`).
   `suspended` is the §5.2.1 revert backoff — a grant that produced
   `max_consecutive_reverts` reverts is frozen until `reset_backoff/2` (the
   wallet dapp re-enable).
@@ -32,7 +34,13 @@ defmodule DelegatedSpend.Keeper do
   require Logger
 
   alias DelegatedSpend.Evm.Address
-  alias DelegatedSpend.Keeper.{PermitLane, Signer}
+  alias DelegatedSpend.Keeper.{GasPolicy, PermitLane, Signer}
+
+  # Task 3b: the daily gas budget is a ROLLING 24h window, not a calendar-day
+  # boundary — simpler (no timezone/midnight edge cases) and matches the
+  # spec's real intent (bound what a gas-price spike can burn in ANY 24h
+  # stretch, not reset a clock at UTC midnight for a griefer to exploit).
+  @gas_budget_window_s 86_400
 
   # :chain_id is REQUIRED (0.3.1): every order view carries the keeper's
   # runtime chain id so the wallet dapp can refuse to run against a stale
@@ -151,7 +159,18 @@ defmodule DelegatedSpend.Keeper do
       result_fn: Map.get(opts, :result_fn, fn _ -> :ok end),
       rpc_mod: Map.get(opts, :rpc_mod),
       rpc: Map.get(opts, :rpc),
-      sweep_ms: Map.get(opts, :sweep_ms, 5_000)
+      sweep_ms: Map.get(opts, :sweep_ms, 5_000),
+      # Task 3b economic brakes (spec §5), EIP-3009 lane only. ALL optional —
+      # an absent key does not limit (GasPolicy's own deliberate rule; see its
+      # moduledoc). Deliberately NOT in `authorization_enabled?/1`'s
+      # half-config check below: a deployment with none of these configured
+      # is a legal, just UNBRAKED, deployment — real numbers are fixed by
+      # measurement (Task 7), not required at boot.
+      gas_policy: %{
+        max_gas_wei: Map.get(opts, :max_gas_wei),
+        daily_gas_budget_wei: Map.get(opts, :daily_gas_budget_wei),
+        min_order_units: Map.get(opts, :min_order_units)
+      }
     }
 
     Process.send_after(self(), :sweep, state.sweep_ms)
@@ -319,8 +338,17 @@ defmodule DelegatedSpend.Keeper do
                 # timestamps). Evaluated last so the cheap refusals above
                 # never pay for an RPC call.
                 case authorization_window(auth, state) do
-                  :ok -> execute_authorization_consumed(order, auth, state)
-                  reason -> {:reply, {:failed, reason}, state}
+                  :ok ->
+                    # Task 3b (spec §5): the economic brakes, consulted
+                    # BEFORE the Signer sees this order — a rejected order
+                    # must not be consumed (see submit_consumed below).
+                    case gas_policy_admit(auth.value, state) do
+                      :ok -> execute_authorization_consumed(order, auth, state)
+                      {:reject, reason} -> {:reply, {:failed, reason}, state}
+                    end
+
+                  reason ->
+                    {:reply, {:failed, reason}, state}
                 end
             end
 
@@ -503,7 +531,88 @@ defmodule DelegatedSpend.Keeper do
     # occurrence ("0x0x12" -> "12"), which is never the intent for a prefix.
     data = calldata_hex |> String.replace_prefix("0x", "") |> Base.decode16!(case: :mixed)
 
-    submit_consumed(order, %{to: state.token_address, data: data, value: 0}, state)
+    case submit_consumed(order, %{to: state.token_address, data: data, value: 0}, state) do
+      {:reply, {:submitted, _hash}, _new_state} = result ->
+        record_gas_spend(order.order_id, state)
+        result
+
+      other ->
+        other
+    end
+  end
+
+  # Task 3b: consult the three economic brakes as ONE pure decision
+  # (`GasPolicy.admit/2`), fetching the two dynamic readings it needs ONLY
+  # when at least one brake is actually configured — a keeper with none of
+  # `:max_gas_wei` / `:daily_gas_budget_wei` / `:min_order_units` set pays no
+  # extra RPC call or store read for a policy that would always answer `:ok`
+  # anyway (mirrors `deadline_slack_ok?/2`'s "0 disables the check" shape).
+  defp gas_policy_admit(order_units, state) do
+    config = state.gas_policy
+
+    if gas_policy_config_empty?(config) do
+      :ok
+    else
+      case current_gas_price(state) do
+        {:error, reason} ->
+          {:reject, reason}
+
+        price ->
+          GasPolicy.admit(
+            %{
+              gas_price_wei: price,
+              spent_today_wei: gas_spent_today(state),
+              order_units: order_units
+            },
+            config
+          )
+      end
+    end
+  end
+
+  defp gas_policy_config_empty?(%{
+         max_gas_wei: nil,
+         daily_gas_budget_wei: nil,
+         min_order_units: nil
+       }),
+       do: true
+
+  defp gas_policy_config_empty?(_config), do: false
+
+  # `Rpc.gas_price/1` (eth_gasPrice) — the SAME typed wrapper `evm/rpc.ex`
+  # already exposes, reused as-is rather than inventing a new RPC helper.
+  # `rpc_mod`/`rpc` are guaranteed present here: the authorization lane
+  # requires them at boot (the DOMAIN_SEPARATOR read above), and this helper
+  # only ever runs on that lane. A transient RPC failure must not crash the
+  # keeper — nothing has been consumed yet, so it degrades to the same typed
+  # `:rpc_timeout` the submit path already uses for RPC trouble.
+  defp current_gas_price(%{rpc_mod: mod, rpc: rpc}) do
+    mod.gas_price(rpc)
+  rescue
+    _ -> {:error, :rpc_timeout}
+  catch
+    _kind, _reason -> {:error, :rpc_timeout}
+  end
+
+  defp gas_spent_today(state),
+    do: store(state).gas_spent_since(store_ref(state), now_s() - @gas_budget_window_s)
+
+  # Spend is recorded AFTER a successful submit, as an ESTIMATE (gas * the
+  # max_fee the Signer actually used) — the mined cost is not known yet, and
+  # may never be observed synchronously here (see `Signer.cost_estimate/2`
+  # moduledoc). `state` (the PRE-submit state) is fine to reuse for
+  # `store`/`store_ref` — those never change across a submit.
+  defp record_gas_spend(order_id, state) do
+    case safe_cost_estimate(state.signer, order_id) do
+      {:ok, wei} -> store(state).record_gas_spend(store_ref(state), wei, now_s())
+      :unknown -> :ok
+    end
+  end
+
+  defp safe_cost_estimate(signer, order_id) do
+    Signer.cost_estimate(signer, order_id)
+  catch
+    _kind, _reason -> :unknown
   end
 
   # Shared by both lanes: consume the order + open its durable :pending

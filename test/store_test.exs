@@ -112,6 +112,18 @@ defmodule DelegatedSpend.StoreTest do
     assert MemoryStore.spent_since(store, "u-a", 0) == 30
   end
 
+  # Gas-policy accounting (Task 3b, spec §5): the RELAYER's own gas spend,
+  # tracked WITHOUT a user_ref — it protects the sponsor's balance/day as a
+  # whole, not any single payer's grant, unlike the product-spend mirror
+  # above.
+  test "gas spend accounting mirror: relayer-wide, no user_ref" do
+    store = MemoryStore.start()
+    :ok = MemoryStore.record_gas_spend(store, 10, 100)
+    :ok = MemoryStore.record_gas_spend(store, 20, 200)
+    assert MemoryStore.gas_spent_since(store, 150) == 20
+    assert MemoryStore.gas_spent_since(store, 0) == 30
+  end
+
   test "execution status is durable and the first terminal result records mined spend once" do
     store = MemoryStore.start()
     :ok = MemoryStore.put_order(store, @order)

@@ -53,6 +53,12 @@ defmodule DelegatedSpend.Keeper.Store do
   @callback record_spend(ref :: term, user_ref, amount :: non_neg_integer, at :: integer) :: :ok
   @callback spent_since(ref :: term, user_ref, since :: integer) :: non_neg_integer
 
+  # Gas-policy accounting (Task 3b, spec §5): the RELAYER's own gas spend, NOT
+  # scoped by user_ref — the daily gas budget protects the sponsor's balance
+  # as a whole, not any one payer's grant, so there is nothing to key it by.
+  @callback record_gas_spend(ref :: term, wei :: non_neg_integer, at :: integer) :: :ok
+  @callback gas_spent_since(ref :: term, since :: integer) :: non_neg_integer
+
   @callback put_order(ref :: term, order) :: :ok
   @callback get_order(ref :: term, order_id :: String.t()) :: order | nil
   @callback get_order_by_ref(ref :: term, order_ref :: String.t(), user_ref) :: order | nil
@@ -93,6 +99,7 @@ defmodule DelegatedSpend.Keeper.MemoryStore do
         %{
           grants: %{},
           spends: [],
+          gas_spends: [],
           orders: %{},
           by_ref: %{},
           consumed: %{},
@@ -143,6 +150,19 @@ defmodule DelegatedSpend.Keeper.MemoryStore do
       s.spends
       |> Enum.filter(fn {ur, _a, at} -> ur == user_ref and at >= since end)
       |> Enum.reduce(0, fn {_ur, a, _at}, acc -> acc + a end)
+    end)
+  end
+
+  @impl true
+  def record_gas_spend(pid, wei, at),
+    do: Agent.update(pid, &%{&1 | gas_spends: [{wei, at} | &1.gas_spends]})
+
+  @impl true
+  def gas_spent_since(pid, since) do
+    Agent.get(pid, fn s ->
+      s.gas_spends
+      |> Enum.filter(fn {_wei, at} -> at >= since end)
+      |> Enum.reduce(0, fn {wei, _at}, acc -> acc + wei end)
     end)
   end
 

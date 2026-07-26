@@ -41,6 +41,13 @@ defmodule DelegatedSpend.FakeRpc do
   def estimate_gas(pid, _tx), do: {:ok, Agent.get(pid, &Map.get(&1, :gas, 100_000))}
   def code(pid, addr), do: Agent.get(pid, &Map.fetch!(&1.codes, addr))
 
+  # Task 3b: the gas-ceiling check (keeper) and the low-balance alarm
+  # (signer sweep) each need one more typed reading. Configurable via
+  # `:gas_price` / `:balance`, defaulting to values no economic-brake test
+  # would ever trip by accident.
+  def gas_price(pid), do: Agent.get(pid, &Map.get(&1, :gas_price, 1_000_000_000))
+  def balance(pid, _addr), do: Agent.get(pid, &Map.get(&1, :balance, 1_000_000_000_000_000_000))
+
   def block_timestamp(pid),
     do: Agent.get(pid, &Map.get(&1, :block_timestamp, System.os_time(:second)))
 
