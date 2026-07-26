@@ -17,13 +17,35 @@
     .muted { color: #777; font-size: 0.85rem; }
     [hidden] { display: none !important; }
     #open-wallet { display: inline-block; font-size: 1.1rem; padding: 0.6rem 1.2rem; border: 1px solid #ccc; border-radius: 8px; text-decoration: none; }
+    #wallet-list { list-style: none; padding: 0; margin: 0.5rem 0 0; display: flex; flex-direction: column; gap: 0.5rem; }
+    #wallet-list button { display: flex; align-items: center; gap: 0.6rem; width: 100%; text-align: left; font-size: 1rem; }
+    #wallet-list img { width: 1.5rem; height: 1.5rem; }
+    #brief { margin: 1rem 0; }
+    #brief p { margin: 0.5rem 0; }
+    .brief-headline { font-size: 1.3rem; font-weight: 600; }
+    .brief-steps { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; color: #777; }
+    .brief-destination { user-select: all; word-break: break-all; font-size: 0.9rem; }
+    .brief-raw { background: #f4f4f4; border-left: 3px solid #ccc; padding: 0.6rem 0.8rem; font-size: 0.9rem; }
   </style>
   <link rel="stylesheet" href="./theme.css" />
 </head>
 <body>
   <h1>Fast payments</h1>
   <p id="summary">Loading order…</p>
+  <section id="brief" hidden>
+    <p id="brief-steps" class="brief-steps" hidden></p>
+    <p id="brief-headline" class="brief-headline"></p>
+    <p><code id="brief-destination" class="brief-destination"></code></p>
+    <p id="brief-nature"></p>
+    <p id="brief-raw" class="brief-raw"></p>
+    <p id="brief-expiry" class="muted" hidden></p>
+  </section>
   <button id="pay" disabled>Review &amp; sign</button>
+  <p id="brief-next" class="muted" hidden></p>
+  <div id="wallet-picker" hidden>
+    <p class="muted">More than one wallet is installed. Which one is paying?</p>
+    <ul id="wallet-list"></ul>
+  </div>
   <p id="status"></p>
   <p><a id="open-wallet" hidden>Open in MetaMask</a></p>
   <div id="terms" hidden>

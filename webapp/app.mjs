@@ -2,7 +2,9 @@
 // (tested headlessly); this file only wires optional Telegram initData,
 // the injected EIP-1193 provider, and the DOM elements.
 
-import { applyProductName } from "./lib/brand.mjs";
+import { applyProductName, productName } from "./lib/brand.mjs";
+import { authorizationBrief, briefLines } from "./lib/signing-brief.mjs";
+import { discoverProviders, needsChoice } from "./lib/providers.mjs";
 import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, runAuthorizationFlow, runBindFlow, runPermitFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -32,6 +34,76 @@ export const MESSAGES = {
   terms_stale: "The terms were updated — please review and accept the new version.",
   authorization_unavailable: "This payment link isn't active — please ask for a new one.",
 };
+
+// How long a finished payment stays on screen before the page returns the
+// user to the chat. Long enough to READ the confirmation — the previous 1.5s
+// closed the window before most people finished the sentence, which reads as
+// "it vanished", not as "it worked".
+export const RETURN_DELAY_S = 5;
+
+// Closes the Telegram web view after a successful payment, counting down so
+// the close is expected rather than abrupt.
+//
+// ONLY inside Telegram. In an ordinary browser tab there is nothing to call:
+// a page cannot close a tab it did not itself open, so the user closes it. It
+// is never called on a failure — an error the user cannot finish reading is
+// worse than a tab left open.
+export function scheduleReturn(tg, get = $, setTimeoutFn = setTimeout) {
+  if (!tg || typeof tg.close !== "function") return false;
+
+  const status = get("status");
+  const done = status.textContent;
+  let left = RETURN_DELAY_S;
+
+  const tick = () => {
+    if (left <= 0) {
+      tg.close();
+      return;
+    }
+
+    status.textContent = `${done} Returning to the chat in ${left}…`;
+    left -= 1;
+    setTimeoutFn(tick, 1000);
+  };
+
+  tick();
+  return true;
+}
+
+// Renders one button per discovered wallet and resolves with the provider the
+// user taps. Nothing else on the page arms until then: the choice decides who
+// gets asked to sign, so it cannot be a change made after the fact.
+export function askWhichWallet(wallets, get = $, doc = document) {
+  const picker = get("wallet-picker");
+  const list = get("wallet-list");
+  list.textContent = "";
+
+  return new Promise((resolve) => {
+    for (const { info, provider } of wallets) {
+      const item = doc.createElement("li");
+      const button = doc.createElement("button");
+      button.type = "button";
+
+      if (info.icon) {
+        const icon = doc.createElement("img");
+        icon.src = info.icon;
+        icon.alt = "";
+        button.appendChild(icon);
+      }
+
+      button.appendChild(doc.createTextNode(info.name || info.rdns));
+      button.addEventListener("click", () => {
+        picker.hidden = true;
+        resolve(provider);
+      });
+
+      item.appendChild(button);
+      list.appendChild(item);
+    }
+
+    picker.hidden = false;
+  });
+}
 
 function showManual(order, get = $) {
   const manual = order?.kind === "permit" && order.display?.manual;
@@ -131,7 +203,13 @@ async function main() {
 
   const config = await (await fetch("./config.json")).json();
   applyProductName(document, config);
-  const provider = globalThis.ethereum;
+
+  // Which wallet pays is the USER's call when more than one is installed.
+  // Reading `globalThis.ethereum` alone would hand the payment to whichever
+  // extension won the injection race — invisible, unchangeable, and wrong
+  // whenever the funds are in the other one.
+  const wallets = await discoverProviders({ target: globalThis, injected: globalThis.ethereum });
+  const provider = needsChoice(wallets) ? await askWhichWallet(wallets) : wallets[0]?.provider;
 
   if (!provider) {
     // Dead state: the pay button can never arm without a provider — hide it
@@ -221,7 +299,7 @@ async function setupPermit(deps, order, orderRef, tg) {
 
     if (result.ok) {
       paintStatus($("status"), "Payment submitted ✓ — you can return to the chat.", "success");
-      if (tg) setTimeout(() => tg.close(), 1500);
+      scheduleReturn(tg);
     } else if (result.reason === "wrong_wallet") {
       blockWrongWallet(result.expected);
     } else if (result.reason === "terms_required") {
@@ -271,6 +349,40 @@ function authorizationSummaryText(deps, order) {
       `(gasless — the operator pays network fees).`;
 }
 
+// Fills the pre-signature brief. Every line is derived from the order the
+// server served, never from anything typed here, so what the page promises is
+// what the wallet will be handed.
+//
+// Hidden — not emptied — when there is no brief: an order still waiting on
+// terms has no signable fields yet, and half a brief is worse than none.
+export function renderBrief(order, config, get = $, now = new Date()) {
+  const brief = authorizationBrief(order, config, now);
+  const section = get("brief");
+  const next = get("brief-next");
+
+  if (!brief) {
+    section.hidden = true;
+    next.hidden = true;
+    return null;
+  }
+
+  const lines = new Map(briefLines(brief, productName(config)).map((line) => [line.key, line.text]));
+
+  for (const key of ["headline", "destination", "nature", "raw"]) {
+    get(`brief-${key}`).textContent = lines.get(key) || "";
+  }
+
+  for (const key of ["steps", "expiry", "next"]) {
+    const el = get(`brief-${key}`);
+    const text = lines.get(key);
+    el.textContent = text || "";
+    el.hidden = !text;
+  }
+
+  section.hidden = false;
+  return brief;
+}
+
 // (review N2) `to`/`domain`/`nonce` are withheld ONLY while the current terms
 // are unaccepted (see above). If they are missing for any OTHER reason — a
 // config-drifted restart that lands the keeper back on a permit-only build is
@@ -290,6 +402,7 @@ export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
   }
 
   get("summary").textContent = authorizationSummaryText(deps, order);
+  renderBrief(order, deps.config, get);
   if (!(await enforceOwnerAtLoad(deps, order, get))) return;
   get("pay").disabled = false;
 
@@ -300,7 +413,7 @@ export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
 
     if (result.ok) {
       paintStatus(get("status"), "Payment submitted ✓ — you can return to the chat.", "success");
-      if (tg) setTimeout(() => tg.close(), 1500);
+      scheduleReturn(tg, get);
     } else if (result.reason === "wrong_wallet") {
       blockWrongWallet(result.expected, get);
     } else if (result.reason === "terms_required") {
@@ -313,6 +426,9 @@ export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
           retry: run,
           renderSummary: (refreshedOrder) => {
             get("summary").textContent = authorizationSummaryText(deps, refreshedOrder);
+            // The terms signature just cleared, so the server now serves the
+            // signable fields: this is the first moment a brief can be built.
+            renderBrief(refreshedOrder, deps.config, get);
           },
         },
         get
@@ -338,7 +454,7 @@ async function setupUserTx(deps, order, orderRef, tg) {
     const result = await runUserTxFlow(deps, orderRef, fetched);
     if (result.ok) {
       paintStatus($("status"), "Transaction sent ✓ — you can return to the chat.", "success");
-      if (tg) setTimeout(() => tg.close(), 1500);
+      scheduleReturn(tg);
     } else if (result.reason === "wrong_wallet") {
       blockWrongWallet(result.expected);
     } else if (result.reason === "terms_required") {
@@ -365,7 +481,7 @@ function setupBind(deps, order, bindRef, tg) {
     const result = await runBindFlow(deps, bindRef, fetched);
     if (result.ok) {
       paintStatus($("status"), "Wallet bound ✓ — you can return to the chat.", "success");
-      if (tg) setTimeout(() => tg.close(), 1500);
+      scheduleReturn(tg);
     } else if (result.reason === "terms_required") {
       showTermsPrompt(deps, { account: result.account, terms: result.terms, ref: bindRef, retry: run });
     } else if (result.reason === "geo_blocked") {

@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { MESSAGES, entryRef, paintStatus, setupAuthorization, showTermsPrompt } from "../app.mjs";
+import { MESSAGES, RETURN_DELAY_S, askWhichWallet, entryRef, paintStatus, renderBrief, scheduleReturn, setupAuthorization, showTermsPrompt } from "../app.mjs";
 
 const ACCOUNT = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 const TREASURY = "0x000000000000000000000000000000000000cccc";
@@ -18,6 +18,14 @@ function fakeDom() {
     "manual-address": { textContent: "" },
     "manual-amount": { textContent: "" },
     status: { textContent: "", dataset: {} },
+    brief: { hidden: true },
+    "brief-steps": { textContent: "", hidden: true },
+    "brief-headline": { textContent: "" },
+    "brief-destination": { textContent: "" },
+    "brief-nature": { textContent: "" },
+    "brief-raw": { textContent: "" },
+    "brief-expiry": { textContent: "", hidden: true },
+    "brief-next": { textContent: "", hidden: true },
   };
   return { elements, get: (id) => elements[id] };
 }
@@ -45,6 +53,141 @@ test("entryRef accepts order refs, bind refs, and Telegram start_param", () => {
     entryRef({ initDataUnsafe: { start_param: "tg-ref" } }, new URLSearchParams("order=o1&bind=b1")),
     "tg-ref"
   );
+});
+
+test("the pre-signature brief renders the full destination, not a truncation", () => {
+  const { elements, get } = fakeDom();
+  const brief = renderBrief(
+    { kind: "authorization", to: TREASURY, value: 1000000, valid_before: 4102444800 },
+    { tokenName: "USDC", productName: "Wingston" },
+    get,
+  );
+
+  assert.ok(brief);
+  assert.equal(elements.brief.hidden, false);
+  assert.equal(
+    elements["brief-destination"].textContent,
+    TREASURY,
+    "the address the user compares against the wallet must be complete",
+  );
+  assert.match(elements["brief-raw"].textContent, /value 1000000/);
+  assert.equal(elements["brief-next"].hidden, false);
+  assert.equal(elements["brief-steps"].hidden, true, "one signature: no step counter");
+});
+
+test("an order still waiting on terms shows NO brief at all", () => {
+  const { elements, get } = fakeDom();
+
+  assert.equal(renderBrief({ kind: "authorization" }, { tokenName: "USDC" }, get), null);
+  assert.equal(elements.brief.hidden, true, "hidden, not half-filled");
+  assert.equal(elements["brief-next"].hidden, true);
+});
+
+// Returning to the chat after a successful payment.
+function fakeStatusDom(text = "Payment submitted ✓ — you can return to the chat.") {
+  const elements = { status: { textContent: text, dataset: { state: "success" } } };
+  return { elements, get: (id) => elements[id] };
+}
+
+// A setTimeout stand-in that runs pending callbacks on demand, so the test
+// spends no wall-clock waiting for a countdown it is asserting about.
+function manualClock() {
+  const queue = [];
+  const setTimeoutFn = (fn) => queue.push(fn);
+  const runAll = () => {
+    while (queue.length) queue.shift()();
+  };
+  return { setTimeoutFn, runAll, pending: () => queue.length };
+}
+
+test("a successful payment counts down and then closes the Telegram view", () => {
+  const { elements, get } = fakeStatusDom();
+  const clock = manualClock();
+  let closed = 0;
+
+  const armed = scheduleReturn({ close: () => (closed += 1) }, get, clock.setTimeoutFn);
+
+  assert.equal(armed, true);
+  assert.match(elements.status.textContent, new RegExp(`Returning to the chat in ${RETURN_DELAY_S}…$`));
+  assert.match(elements.status.textContent, /Payment submitted ✓/, "the confirmation stays readable");
+  assert.equal(closed, 0, "it does not close before the countdown runs out");
+
+  clock.runAll();
+
+  assert.equal(closed, 1, "closed exactly once");
+  assert.match(elements.status.textContent, /Returning to the chat in 1…$/, "the last frame counted down to 1");
+});
+
+test("outside Telegram nothing is scheduled — a page cannot close a tab it did not open", () => {
+  const { elements, get } = fakeStatusDom("Payment submitted ✓");
+  const clock = manualClock();
+
+  assert.equal(scheduleReturn(undefined, get, clock.setTimeoutFn), false);
+  assert.equal(scheduleReturn({}, get, clock.setTimeoutFn), false, "a Telegram object with no close() is not a way out");
+  assert.equal(clock.pending(), 0);
+  assert.equal(elements.status.textContent, "Payment submitted ✓", "the status text is left alone");
+});
+
+// The wallet picker's whole job is that the wallet the user TAPS is the one
+// that gets asked to sign. A picker that renders correctly and then resolves
+// with the wrong provider would move the payment to the account the user was
+// trying to avoid — silently, since both wallets can sign.
+function fakePickerDom() {
+  const make = () => {
+    const node = {
+      children: [],
+      hidden: false,
+      textContent: "",
+      appendChild(child) {
+        this.children.push(child);
+        return child;
+      },
+      addEventListener(_event, handler) {
+        this.onclick = handler;
+      },
+    };
+    return node;
+  };
+
+  const elements = { "wallet-picker": make(), "wallet-list": make() };
+  const doc = { createElement: () => make(), createTextNode: (text) => ({ text }) };
+  return { elements, get: (id) => elements[id], doc };
+}
+
+test("the picker resolves with the provider of the wallet the user taps", async () => {
+  const rabby = { request: async () => ["0xrabby"] };
+  const metamask = { request: async () => ["0xmetamask"] };
+  const { elements, get, doc } = fakePickerDom();
+
+  const chosen = askWhichWallet(
+    [
+      { info: { rdns: "io.metamask", name: "MetaMask" }, provider: metamask },
+      { info: { rdns: "io.rabby", name: "Rabby" }, provider: rabby },
+    ],
+    get,
+    doc,
+  );
+
+  const list = elements["wallet-list"];
+  assert.equal(list.children.length, 2, "one row per wallet");
+  assert.equal(elements["wallet-picker"].hidden, false, "the picker is shown while it waits");
+
+  // Tap the SECOND wallet, not the first — a picker that always returned
+  // wallets[0] would pass a one-wallet test.
+  list.children[1].children[0].onclick();
+
+  assert.equal(await chosen, rabby);
+  assert.equal(elements["wallet-picker"].hidden, true, "the picker closes once chosen");
+});
+
+test("re-rendering the picker does not stack rows from a previous render", () => {
+  const { elements, get, doc } = fakePickerDom();
+  const wallets = [{ info: { rdns: "io.rabby", name: "Rabby" }, provider: { request: async () => [] } }];
+
+  askWhichWallet(wallets, get, doc);
+  askWhichWallet(wallets, get, doc);
+
+  assert.equal(elements["wallet-list"].textContent, "", "the list is cleared before rendering");
 });
 
 test("paintStatus stamps terminal states and clears the stamp on progress text", () => {
