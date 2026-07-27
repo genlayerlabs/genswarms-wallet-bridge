@@ -875,10 +875,9 @@ defmodule DelegatedSpend.Keeper do
   defp settle(state, order_id, result) do
     case store(state).resolve_inflight(store_ref(state), order_id, result, now_s()) do
       :new ->
-        state =
-          update_backoff(state, store(state).get_order(store_ref(state), order_id), result)
-
-        notify_result(state.result_fn, order_id, result)
+        order = store(state).get_order(store_ref(state), order_id)
+        state = update_backoff(state, order, result)
+        notify_result(state.result_fn, order_id, order, result)
         state
 
       :existing ->
@@ -886,8 +885,27 @@ defmodule DelegatedSpend.Keeper do
     end
   end
 
-  defp notify_result(result_fn, order_id, result) do
-    result_fn.({order_id, result})
+  # The notification carries the caller's OWN identifier, not just ours.
+  #
+  # `order_id` is minted here, from random bytes, and a producer has no way to
+  # resolve it: nothing it stored is keyed by it. A callback that can only say
+  # "some order finished" cannot tell anyone WHICH — a real consumer wired this
+  # up to notify the paying user and silently notified nobody, because every
+  # lookup by that id missed. `order_ref` is the identifier the producer minted
+  # and stored, so it is the one that can be joined back to.
+  #
+  # nil order_ref/user_ref/kind mean the order row is gone (a store that
+  # forgot, or a terminal result for an order pruned underneath us): the
+  # result is still worth delivering, and a consumer that cannot resolve it
+  # simply does nothing.
+  defp notify_result(result_fn, order_id, order, result) do
+    result_fn.(%{
+      order_id: order_id,
+      order_ref: order && Map.get(order, :order_ref),
+      user_ref: order && Map.get(order, :user_ref),
+      kind: order && Map.get(order, :kind),
+      result: result
+    })
   rescue
     error ->
       Logger.error(

@@ -317,8 +317,20 @@ Keeper.order_status(keeper, order_id)   # durable source of technical truth
 Keeper.reconcile_boot(keeper)           # persist receipts found after restart
 ```
 
-`result_fn` receives `{order_id, result}` after each newly persisted terminal
-transition. It is a best-effort technical-status notification: raises, exits,
+`result_fn` receives a map after each newly persisted terminal transition:
+
+```elixir
+%{order_id: "0x…",       # ours, random — nothing you stored is keyed by it
+  order_ref: "…",        # YOURS: the ref you minted, the one to join back on
+  user_ref: "…",
+  kind: "permit" | "user_tx" | "authorization" | nil,
+  result: {:mined, tx} | {:failed, reason}}
+```
+
+Resolve on `order_ref`. `order_id` identifies the order inside the keeper and
+cannot be looked up on your side. The three caller-side fields are `nil` when
+the order row is gone (pruned, or a store that forgot) — the result is still
+delivered, and a consumer that cannot resolve it should simply do nothing. It is a best-effort technical-status notification: raises, exits,
 and throws are logged, never retried, and never crash the Keeper. It can be
 lost, so poll `order_status/2` for recovery. **`{:mined, tx}` means one
 successful receipt, nothing more** — never use it as product-credit authority;

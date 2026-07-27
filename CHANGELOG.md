@@ -11,6 +11,23 @@ package releases can ship zero contract bytecode changes. `scripts/check-version
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (unreleased): `result_fn` now receives a map, not `{order_id,
+  result}`.** The tuple carried only the keeper's own `order_id`, which is
+  minted here from random bytes — a producer has nothing keyed by it, so a
+  callback could report that *some* order finished but never which. A consumer
+  wired it up to notify the paying user and notified nobody, silently, on
+  every real payment. The map carries the producer's own identifiers
+  alongside ours:
+
+  ```elixir
+  %{order_id: "0x…", order_ref: "…", user_ref: "…", kind: "…", result: {:mined, tx}}
+  ```
+
+  Resolve on `order_ref`. The three caller-side fields are `nil` when the
+  order row is gone; the result is still delivered.
+
 ### Added
 
 - **The authorization lane (EIP-3009 `transferWithAuthorization`) is now

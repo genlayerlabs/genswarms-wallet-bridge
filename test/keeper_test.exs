@@ -347,7 +347,7 @@ defmodule DelegatedSpend.KeeperTest do
       )
 
     assert Process.whereis(:spend_keeper_named_test) == keeper
-    assert_receive {:result, {"0xdead", {:mined, "0xhash"}}}, 1_000
+    assert_receive {:result, %{order_id: "0xdead", result: {:mined, "0xhash"}}}, 1_000
     # and the keeper answers by name
     assert {:ok, _} = Keeper.register_order(:spend_keeper_named_test, "market_phase", order_req())
   end
@@ -392,11 +392,36 @@ defmodule DelegatedSpend.KeeperTest do
     FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
     Signer.sweep_now(signer)
     Keeper.sweep_now(keeper)
-    assert_receive {:result, {^oid, {:mined, ^hash}}}
+    assert_receive {:result, %{order_id: ^oid, result: {:mined, ^hash}}}
     assert Keeper.order_status(keeper, oid) == {:mined, hash}
     assert MemoryStore.spent_since(store, "u-a", 0) == 25_000_000
     Keeper.sweep_now(keeper)
-    refute_receive {:result, {^oid, _}}, 50
+    refute_receive {:result, %{order_id: ^oid}}, 50
+  end
+
+  # The whole point of the callback is that the producer can tell WHICH of its
+  # orders finished. `order_id` is minted here from random bytes and nothing on
+  # the producer's side is keyed by it; `order_ref` is the identifier the
+  # producer minted and stored. A real consumer wired this up to notify the
+  # paying user and notified nobody, because every lookup by order_id missed.
+  test "a terminal result carries the CALLER's order_ref, not only our internal id" do
+    %{keeper: keeper, fake: fake, signer: signer} = start_stack()
+
+    {:ok, %{order_ref: ref, order_id: oid}} =
+      Keeper.register_order(keeper, "market_phase", order_req())
+
+    assert {:submitted, hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+    FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
+    Signer.sweep_now(signer)
+    Keeper.sweep_now(keeper)
+
+    assert_receive {:result, notification}
+    assert notification.order_ref == ref, "the ref register_order handed back"
+    assert notification.order_id == oid
+    assert notification.user_ref == "u-a"
+    assert notification.kind == "permit"
+    assert notification.result == {:mined, hash}
+    refute notification.order_ref == notification.order_id
   end
 
   test "expired order: typed failure, nothing consumed, nothing broadcast" do
@@ -469,7 +494,7 @@ defmodule DelegatedSpend.KeeperTest do
              Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
 
     assert FakeRpc.sent(fake) == []
-    assert_receive {:result, {^oid, {:failed, :reverted}}}
+    assert_receive {:result, %{order_id: ^oid, result: {:failed, :reverted}}}
   end
 
   test "boot reconciliation persists mined before delivering the late result" do
@@ -485,7 +510,7 @@ defmodule DelegatedSpend.KeeperTest do
 
     {:ok, restarted} =
       start_keeper(fake, signer, store, %{
-        result_fn: fn {order_id, result} = notification ->
+        result_fn: fn %{order_id: order_id, result: result} = notification ->
           send(
             parent,
             {:result, notification, MemoryStore.get_execution_status(store, order_id), result}
@@ -494,7 +519,8 @@ defmodule DelegatedSpend.KeeperTest do
       })
 
     :ok = Keeper.reconcile_boot(restarted)
-    assert_receive {:result, {^oid, {:mined, ^hash}}, {:mined, ^hash}, {:mined, ^hash}}
+    assert_receive {:result, notification, {:mined, ^hash}, {:mined, ^hash}}
+    assert %{order_id: ^oid, order_ref: ^ref, result: {:mined, ^hash}} = notification
     assert {:mined, ^hash} = Keeper.order_status(restarted, oid)
   end
 
@@ -712,7 +738,7 @@ defmodule DelegatedSpend.KeeperTest do
     FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x0"}})
     Signer.sweep_now(signer)
     Keeper.sweep_now(keeper)
-    assert_receive {:result, {^oid, {:failed, :reverted}}}
+    assert_receive {:result, %{order_id: ^oid, result: {:failed, :reverted}}}
     assert MemoryStore.spent_since(store, "u-a", 0) == 0
   end
 
@@ -772,7 +798,7 @@ defmodule DelegatedSpend.KeeperTest do
     FakeRpc.put(fake, :receipts, %{hashA => %{"status" => "0x0"}})
     :ok = Keeper.reconcile_boot(keeper)
 
-    assert_receive {:result, {^oidA, {:failed, :reverted}}}
+    assert_receive {:result, %{order_id: ^oidA, result: {:failed, :reverted}}}
     # B has no receipt → must NOT be settled; it stays inflight
     refute_receive {:result, {^oidB, _}}, 100
     assert Enum.any?(MemoryStore.list_inflight(store), &(&1.order_id == oidB))
@@ -957,7 +983,7 @@ defmodule DelegatedSpend.KeeperTest do
     FakeRpc.put(fake, :receipts, %{mined_hash => %{"status" => "0x1"}})
     Signer.sweep_now(signer)
     Keeper.sweep_now(keeper)
-    assert_receive {:result, {^mined_id, {:mined, ^mined_hash}}}
+    assert_receive {:result, %{order_id: ^mined_id, result: {:mined, ^mined_hash}}}
 
     FakeRpc.put(fake, :simulate, {:revert, %{"message" => "no"}})
 
@@ -967,7 +993,7 @@ defmodule DelegatedSpend.KeeperTest do
     assert {:failed, :reverted} =
              Keeper.execute_with_permit(keeper, failed_ref, "u-a", permit(25_000_000))
 
-    assert_receive {:result, {^failed_id, {:failed, :reverted}}}
+    assert_receive {:result, %{order_id: ^failed_id, result: {:failed, :reverted}}}
 
     sent_before_restart = length(FakeRpc.sent(fake))
     GenServer.stop(keeper)
@@ -1003,7 +1029,7 @@ defmodule DelegatedSpend.KeeperTest do
     FakeRpc.put(fake, :receipts, %{hash => %{"status" => "0x1"}})
     Signer.sweep_now(signer)
     Keeper.sweep_now(keeper)
-    assert_receive {:result, {^oid, {:mined, ^hash}}}
+    assert_receive {:result, %{order_id: ^oid, result: {:mined, ^hash}}}
     assert {:mined, ^hash} = Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
     assert length(FakeRpc.sent(fake)) == 1
   end
@@ -1170,7 +1196,7 @@ defmodule DelegatedSpend.KeeperTest do
       # the timer tick itself, not the sweep_now call door — in production this
       # is the ONLY thing that settles orders nobody polls
       send(keeper, :sweep)
-      assert_receive {:result, {^oid, {:mined, ^hash}}}
+      assert_receive {:result, %{order_id: ^oid, result: {:mined, ^hash}}}
       # stray mail is ignored and the keeper keeps serving
       send(keeper, :bogus)
       assert {:ok, _} = Keeper.register_order(keeper, "market_phase", order_req())
