@@ -9,7 +9,7 @@ The package version is stamped in `VERSION`, `vectors/VERSION`, `mix.exs`, and
 package releases can ship zero contract bytecode changes. `scripts/check-version.sh`
 (run in CI) fails on divergence.
 
-## [Unreleased]
+## [0.8.0] - 2026-07-27
 
 ### Changed
 
