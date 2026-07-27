@@ -415,8 +415,21 @@ defmodule DelegatedSpend.Intake do
     case {params["token"], Map.get(ctx, :token_secret)} do
       {token, secret} when is_binary(token) and is_binary(secret) ->
         case Token.verify(secret, ref, token, now_s) do
-          {:ok, user_ref} -> {:ok, user_ref}
-          {:error, _reason} -> {:error, 401, %{"error" => "unauthorized"}}
+          {:ok, user_ref} ->
+            {:ok, user_ref}
+
+          # An expired token with a VALID mac is proof of possession — naming
+          # its expiry reveals nothing the holder didn't have, and the truth
+          # is actionable ("ask the chat for a fresh link"). The 2026-07-27
+          # live test read "could not verify your Telegram session" on a
+          # simply-stale link, whose advice (reopen the same page) loops the
+          # user back into the same dead link.
+          {:error, :expired} ->
+            {:error, 401, %{"error" => "link_expired"}}
+
+          # A token that fails the mac stays reason-blind: no probe help.
+          {:error, _reason} ->
+            {:error, 401, %{"error" => "unauthorized"}}
         end
 
       _ ->

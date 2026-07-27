@@ -22,6 +22,11 @@ export function paintStatus(el, text, state) {
 
 export const MESSAGES = {
   order_not_found: "This payment link expired or was already used. Go back to the chat and tap again.",
+  // An authentic-but-stale link: the ONE wrong move is re-opening the same
+  // page (it will never work again) — say what to do instead. Nothing was
+  // signed and nothing was charged.
+  link_expired:
+    "This payment link has expired — nothing was charged. Send /topup in the chat for a fresh one.",
   unauthorized: "Could not verify your Telegram session. Reopen this page from the chat button.",
   version_mismatch: "This page is outdated. Close and reopen it from the chat.",
   user_rejected: "Signature declined — nothing was paid.",

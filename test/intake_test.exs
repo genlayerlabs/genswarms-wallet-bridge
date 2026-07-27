@@ -522,9 +522,15 @@ defmodule DelegatedSpend.IntakeTest do
                  ctx
                )
 
+      # An expired-but-AUTHENTIC token names its truth: the live test
+      # 2026-07-27 hit "Could not verify your Telegram session" on a simply
+      # stale link, whose advice (reopen the same page) loops the user back
+      # into the same dead link forever. A valid HMAC is proof of possession
+      # — "link_expired" reveals nothing the holder didn't have. A FORGED
+      # token stays reason-blind ("unauthorized") below.
       stale = DelegatedSpend.Intake.Token.mint("tsecret", ref_a, "ref-#{@user_id}", 1)
 
-      assert {401, _} =
+      assert {401, %{"error" => "link_expired"}} =
                Intake.handle_order(
                  %{"order_ref" => ref_a, "token" => stale, "v" => ctx.pinned.version},
                  ctx
