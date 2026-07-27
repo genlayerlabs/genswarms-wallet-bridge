@@ -882,6 +882,12 @@ defmodule DelegatedSpend.Keeper do
 
   @error_string_selector "08c379a0"
 
+  # The transport (Rpc.call) hands the JSON-RPC error object wrapped as
+  # {:rpc_error, method, err} — unwrap first. The first live refusal shipped
+  # without this clause (the test fake returned a bare map) and every real
+  # reason decoded to nil.
+  defp refusal_reason({:rpc_error, _method, err}), do: refusal_reason(err)
+
   defp refusal_reason(%{"data" => "0x" <> @error_string_selector <> hex}) do
     with {:ok, bin} <- Base.decode16(hex, case: :mixed),
          [reason] when is_binary(reason) <-

@@ -62,8 +62,16 @@ defmodule DelegatedSpend.FakeRpc do
     Agent.update(pid, &%{&1 | calls: [%{to: to, data: data} | &1.calls]})
 
     case Agent.get(pid, & &1.simulate) do
-      :ok -> {:ok, "0x"}
-      {:revert, info} -> {:error, info}
+      :ok ->
+        {:ok, "0x"}
+
+      # Mirror the REAL transport's error shape (Rpc.call wraps the JSON-RPC
+      # error object as {:rpc_error, method, err} — rpc.ex). The first live
+      # refusal proved why fidelity matters: the keeper's reason decoder was
+      # written against this fake's old bare-map shape, so in production it
+      # met the tuple, decoded nothing, and the user got the generic copy.
+      {:revert, info} ->
+        {:error, {:rpc_error, "eth_call", info}}
     end
   end
 
