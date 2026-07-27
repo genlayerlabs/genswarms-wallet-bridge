@@ -168,6 +168,12 @@ defmodule DelegatedSpend.Intake do
             {:failed, reason} ->
               {422, %{"status" => "failed", "reason" => to_string(reason)}}
 
+            # Simulation refused pre-broadcast: same wire status (the dapp's
+            # failure rendering already says "Nothing was charged", which is
+            # exactly true here) but the node's own reason instead of an atom.
+            {:refused, reason} ->
+              {422, %{"status" => "failed", "reason" => reason || "refused"}}
+
             :unknown ->
               {404, %{"error" => "not found"}}
           end
@@ -223,6 +229,12 @@ defmodule DelegatedSpend.Intake do
 
             {:failed, reason} ->
               {422, %{"status" => "failed", "reason" => to_string(reason)}}
+
+            # Simulation refused pre-broadcast: same wire status (the dapp's
+            # failure rendering already says "Nothing was charged", which is
+            # exactly true here) but the node's own reason instead of an atom.
+            {:refused, reason} ->
+              {422, %{"status" => "failed", "reason" => reason || "refused"}}
 
             :unknown ->
               {404, %{"error" => "not found"}}

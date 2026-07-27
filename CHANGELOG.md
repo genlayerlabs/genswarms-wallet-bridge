@@ -13,6 +13,21 @@ package releases can ship zero contract bytecode changes. `scripts/check-version
 
 ### Changed
 
+- **BREAKING (unreleased): a simulation refusal is `{:refused, reason}`, no
+  longer `{:failed, :reverted}`.** The simulation gate declining to broadcast
+  (zero gas spent, relayer nonce untouched) and the chain reverting a real
+  broadcast (gas spent) are opposite truths that shared one word. The first
+  live run collapsed them for a user: `/topup 100` against a 19.5-USDC wallet
+  was refused pre-broadcast, exactly as designed, and the user was told it
+  "didn't go through on the chain". `reason` is the node's decoded
+  `Error(string)` revert reason (e.g. USDC's "transfer amount exceeds
+  balance") with a message fallback, `nil` when undecodable — it was already
+  in hand and was dropped on one line. Surfaces updated: keeper results and
+  `order_status/2`, the store's `execution_status`/`resolve_inflight`
+  contract, the object door (`"status" => "refused"`), and the intake (same
+  `"failed"` wire status for the dapp, reason string passed through). A
+  refusal still counts toward the §5.2.1 anti-grief backoff.
+
 - **BREAKING (unreleased): `result_fn` now receives a map, not `{order_id,
   result}`.** The tuple carried only the keeper's own `order_id`, which is
   minted here from random bytes — a producer has nothing keyed by it, so a

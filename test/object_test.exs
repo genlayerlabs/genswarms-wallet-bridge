@@ -345,7 +345,7 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
     assert %{"ok" => true, "status" => "mined", "tx" => ^hash} = mined
   end
 
-  test "order_status returns failed terminal status through the door" do
+  test "order_status returns the refused terminal status through the door" do
     %{state: state, opts: opts} = start_object()
     fake = opts.rpc
 
@@ -354,7 +354,7 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
 
     FakeRpc.put(fake, :simulate, {:revert, %{"message" => "no"}})
 
-    assert {:failed, :reverted} =
+    assert {:refused, "no"} =
              Keeper.execute_with_permit(state.keeper, @ref, "u-a", %{
                owner: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
                value: 25_000_000,
@@ -371,7 +371,7 @@ defmodule DelegatedSpend.Keeper.ObjectTest do
         Jason.encode!(%{"action" => "order_status", "order_id" => order_id})
       )
 
-    assert %{"ok" => true, "status" => "failed", "reason" => "reverted"} = failed
+    assert %{"ok" => true, "status" => "refused", "reason" => "no"} = failed
   end
 
   test "terminate tolerates invalid owned keeper pid" do

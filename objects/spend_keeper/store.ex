@@ -33,6 +33,9 @@ defmodule DelegatedSpend.Keeper.Store do
           | {:submitted, String.t()}
           | {:mined, String.t()}
           | {:failed, term}
+          # simulation gate declined pre-broadcast: zero gas spent. The term
+          # is the node's decoded revert reason (or nil) — see Keeper moduledoc.
+          | {:refused, String.t() | nil}
   @type order :: %{
           required(:order_id) => String.t(),
           required(:order_ref) => String.t(),
@@ -91,7 +94,7 @@ defmodule DelegatedSpend.Keeper.Store do
   @callback resolve_inflight(
               ref :: term,
               order_id :: String.t(),
-              result :: {:mined, String.t()} | {:failed, term},
+              result :: {:mined, String.t()} | {:failed, term} | {:refused, String.t() | nil},
               at :: integer
             ) :: :new | :existing
   @callback list_inflight(ref :: term) :: [

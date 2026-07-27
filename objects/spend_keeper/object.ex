@@ -191,6 +191,9 @@ defmodule DelegatedSpend.Keeper.Object do
       {:submitted, hash} -> %{"ok" => true, "status" => "submitted", "tx" => hash}
       {:mined, hash} -> %{"ok" => true, "status" => "mined", "tx" => hash}
       {:failed, reason} -> %{"ok" => true, "status" => "failed", "reason" => to_string(reason)}
+      # pre-broadcast simulation refusal — zero gas spent, distinct from
+      # "failed" so a consumer can tell the user nothing was sent
+      {:refused, reason} -> %{"ok" => true, "status" => "refused", "reason" => reason}
     end
   end
 

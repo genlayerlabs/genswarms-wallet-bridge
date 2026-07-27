@@ -484,17 +484,77 @@ defmodule DelegatedSpend.KeeperTest do
     assert length(FakeRpc.sent(fake)) == 1
   end
 
-  test "simulation revert: typed failure, zero broadcast, result recorded" do
+  test "simulation revert: typed refusal, zero broadcast, result recorded" do
     %{keeper: keeper, fake: fake} = start_stack(%{simulate: {:revert, %{"message" => "no"}}})
 
     {:ok, %{order_ref: ref, order_id: oid}} =
       Keeper.register_order(keeper, "market_phase", order_req())
 
-    assert {:failed, :reverted} =
+    assert {:refused, "no"} =
              Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
 
     assert FakeRpc.sent(fake) == []
-    assert_receive {:result, %{order_id: ^oid, result: {:failed, :reverted}}}
+    assert_receive {:result, %{order_id: ^oid, result: {:refused, "no"}}}
+  end
+
+  # ── refused (pre-broadcast) vs reverted (on-chain): two truths, two words ──
+  #
+  # The 2026-07-27 live run: /topup 100 against a wallet holding 19.5 USDC.
+  # The simulation refused it — zero gas, nonce untouched, exactly as designed
+  # — and the user was told it "didn't go through on the chain". False (it
+  # never reached the chain) and useless (no hint that the amount was the
+  # problem). The node's revert reason was in hand the whole time and was
+  # dropped on one line. These tests pin the split: a submit-time simulation
+  # refusal is `{:refused, reason}` carrying the decoded reason; only a
+  # broadcast that the chain itself reverted may say `{:failed, :reverted}`.
+
+  test "submit-time simulation refusal is {:refused, reason} with the decoded Error(string)" do
+    reason = "FiatToken: transfer amount exceeds balance"
+
+    revert_data =
+      "0x08c379a0" <>
+        Base.encode16(DelegatedSpend.Evm.Abi.encode_constructor([:string], [reason]),
+          case: :lower
+        )
+
+    %{keeper: keeper, fake: fake} =
+      start_stack(%{
+        simulate: {:revert, %{"message" => "execution reverted", "data" => revert_data}}
+      })
+
+    {:ok, %{order_ref: ref, order_id: oid}} =
+      Keeper.register_order(keeper, "market_phase", order_req())
+
+    assert {:refused, ^reason} =
+             Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+
+    # nothing broadcast, and the terminal result survives a re-ask
+    # (idempotent, from the store). The refusal-counts-toward-backoff
+    # property is pinned by the §5.2.1 authorization-lane tests below,
+    # where the backoff is actually configured.
+    assert FakeRpc.sent(fake) == []
+    assert_receive {:result, %{order_id: ^oid, result: {:refused, ^reason}}}
+
+    assert {:refused, ^reason} =
+             Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+  end
+
+  test "a node that only gives a message still yields a usable refusal reason" do
+    %{keeper: keeper} =
+      start_stack(%{simulate: {:revert, %{"message" => "execution reverted: nope"}}})
+
+    {:ok, %{order_ref: ref}} = Keeper.register_order(keeper, "market_phase", order_req())
+
+    assert {:refused, "nope"} =
+             Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+  end
+
+  test "an undecodable refusal is {:refused, nil} — never disguised as an on-chain revert" do
+    %{keeper: keeper} = start_stack(%{simulate: {:revert, %{"weird" => true}}})
+    {:ok, %{order_ref: ref}} = Keeper.register_order(keeper, "market_phase", order_req())
+
+    assert {:refused, nil} =
+             Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
   end
 
   test "boot reconciliation persists mined before delivering the late result" do
@@ -587,7 +647,7 @@ defmodule DelegatedSpend.KeeperTest do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert {:failed, :reverted} =
+          assert {:refused, "no"} =
                    Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
 
           assert Process.alive?(keeper)
@@ -907,11 +967,11 @@ defmodule DelegatedSpend.KeeperTest do
   test "revert backoff (§5.2.1): N consecutive reverts suspend the grant until reset" do
     %{fake: fake, keeper: keeper} = start_backoff_stack(2)
 
-    # two simulation-reverts accumulate the streak (zero gas each — sim gate)
+    # two simulation-refusals accumulate the streak (zero gas each — sim gate)
     for _ <- 1..2 do
       {:ok, %{order_ref: ref}} = Keeper.register_order(keeper, "market_phase", order_req())
 
-      assert {:failed, :reverted} =
+      assert {:refused, nil} =
                Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
     end
 
@@ -929,7 +989,7 @@ defmodule DelegatedSpend.KeeperTest do
     reqb = %{order_req() | user_ref: "u-b"}
     {:ok, %{order_ref: refb}} = Keeper.register_order(keeper, "market_phase", reqb)
 
-    assert {:failed, :reverted} =
+    assert {:refused, nil} =
              Keeper.execute_with_permit(keeper, refb, "u-b", permit(25_000_000))
 
     # reset re-enables u-a; a now-OK simulation submits
@@ -945,7 +1005,7 @@ defmodule DelegatedSpend.KeeperTest do
 
     {:ok, %{order_ref: r1}} = Keeper.register_order(keeper, "market_phase", order_req())
 
-    assert {:failed, :reverted} =
+    assert {:refused, nil} =
              Keeper.execute_with_permit(keeper, r1, "u-a", permit(25_000_000))
 
     assert Keeper.backoff_count(keeper, "u-a") == 1
@@ -960,7 +1020,7 @@ defmodule DelegatedSpend.KeeperTest do
     assert Keeper.backoff_count(keeper, "u-a") == 0
   end
 
-  test "keeper restart preserves pending, submitted, mined, and failed without rebroadcast" do
+  test "keeper restart preserves pending, submitted, mined, and refused without rebroadcast" do
     %{keeper: keeper, fake: fake, store: store, signer: signer} = start_stack()
 
     {:ok, %{order_ref: pending_ref, order_id: pending_id}} =
@@ -990,10 +1050,10 @@ defmodule DelegatedSpend.KeeperTest do
     {:ok, %{order_ref: failed_ref, order_id: failed_id}} =
       Keeper.register_order(keeper, "market_phase", order_req())
 
-    assert {:failed, :reverted} =
+    assert {:refused, "no"} =
              Keeper.execute_with_permit(keeper, failed_ref, "u-a", permit(25_000_000))
 
-    assert_receive {:result, %{order_id: ^failed_id, result: {:failed, :reverted}}}
+    assert_receive {:result, %{order_id: ^failed_id, result: {:refused, "no"}}}
 
     sent_before_restart = length(FakeRpc.sent(fake))
     GenServer.stop(keeper)
@@ -1002,7 +1062,7 @@ defmodule DelegatedSpend.KeeperTest do
     assert :pending = Keeper.order_status(restarted, pending_id)
     assert {:submitted, ^submitted_hash} = Keeper.order_status(restarted, submitted_id)
     assert {:mined, ^mined_hash} = Keeper.order_status(restarted, mined_id)
-    assert {:failed, :reverted} = Keeper.order_status(restarted, failed_id)
+    assert {:refused, "no"} = Keeper.order_status(restarted, failed_id)
 
     assert :pending =
              Keeper.execute_with_permit(restarted, pending_ref, "u-a", permit(25_000_000))
@@ -1013,7 +1073,7 @@ defmodule DelegatedSpend.KeeperTest do
     assert {:mined, ^mined_hash} =
              Keeper.execute_with_permit(restarted, mined_ref, "u-a", permit(25_000_000))
 
-    assert {:failed, :reverted} =
+    assert {:refused, "no"} =
              Keeper.execute_with_permit(restarted, failed_ref, "u-a", permit(25_000_000))
 
     assert length(FakeRpc.sent(fake)) == sent_before_restart
@@ -1236,7 +1296,7 @@ defmodule DelegatedSpend.KeeperTest do
 
       {:ok, %{order_ref: r1}} = Keeper.register_order(keeper, "market_phase", order_req())
 
-      assert {:failed, :reverted} =
+      assert {:refused, nil} =
                Keeper.execute_with_permit(keeper, r1, "u-a", permit(25_000_000))
 
       assert Keeper.backoff_count(keeper, "u-a") == 1
@@ -1500,7 +1560,7 @@ defmodule DelegatedSpend.KeeperTest do
         amount: 1_000_000
       })
 
-      assert {:failed, :reverted} =
+      assert {:refused, nil} =
                Keeper.execute_with_authorization(keeper, "r0", "u1", valid_auth())
 
       assert Keeper.backoff_count(keeper, "u1") == 1
@@ -1546,7 +1606,7 @@ defmodule DelegatedSpend.KeeperTest do
         amount: 1_000_000
       })
 
-      assert {:failed, :reverted} =
+      assert {:refused, nil} =
                Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
 
       assert Keeper.backoff_count(keeper, "u1") == 1

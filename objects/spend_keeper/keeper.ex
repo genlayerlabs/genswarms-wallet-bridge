@@ -29,6 +29,16 @@ defmodule DelegatedSpend.Keeper do
   `suspended` is the §5.2.1 revert backoff — a grant that produced
   `max_consecutive_reverts` reverts is frozen until `reset_backoff/2` (the
   wallet dapp re-enable).
+
+  `{:refused, reason}` is NOT a failure of a broadcast: it is the simulation
+  gate declining to broadcast at all — zero gas spent, relayer nonce
+  untouched. `reason` is the node's decoded revert string (e.g. USDC's
+  "transfer amount exceeds balance"), or `nil` when the node gave none.
+  `{:failed, :reverted}` is reserved for the opposite truth: a transaction
+  that WAS broadcast and that the chain reverted (gas was spent). Callers
+  presenting results to users must not collapse the two — the first live
+  deployment did, and told a user with insufficient USDC that their payment
+  "didn't go through on the chain" when nothing had been sent.
   """
   use GenServer
   require Logger
@@ -845,8 +855,13 @@ defmodule DelegatedSpend.Keeper do
           {:ok, hash} ->
             {:reply, {:submitted, hash}, state}
 
-          {:error, {:reverted, _info}} ->
-            {:reply, {:failed, :reverted}, settle(state, order.order_id, {:failed, :reverted})}
+          {:error, {:reverted, info}} ->
+            # The simulation gate said no BEFORE anything was broadcast: zero
+            # gas, nonce untouched. That is a different truth from an on-chain
+            # revert and gets a different word — with the node's own reason,
+            # which was previously dropped right here.
+            result = {:refused, refusal_reason(info)}
+            {:reply, result, settle(state, order.order_id, result)}
 
           {:error, _reason} ->
             {:reply, {:failed, :rpc_timeout},
@@ -854,6 +869,40 @@ defmodule DelegatedSpend.Keeper do
         end
     end
   end
+
+  # ── refusal reasons ───────────────────────────────────────────────────────
+  #
+  # The node's eth_call error carries the contract's revert reason twice over:
+  # ABI-encoded `Error(string)` bytes under "data" (selector 0x08c379a0), and
+  # usually a human "message" too. Prefer the data — it is the contract's own
+  # words, unmangled by node formatting — and fall back to the message with
+  # the standard "execution reverted" prefix stripped. Every branch degrades
+  # to nil rather than raising: this runs on the submit path, and a weird node
+  # error must yield {:refused, nil}, never a crash.
+
+  @error_string_selector "08c379a0"
+
+  defp refusal_reason(%{"data" => "0x" <> @error_string_selector <> hex}) do
+    with {:ok, bin} <- Base.decode16(hex, case: :mixed),
+         [reason] when is_binary(reason) <-
+           DelegatedSpend.Evm.Abi.decode_result([:string], bin) do
+      reason
+    else
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp refusal_reason(%{"message" => msg}) when is_binary(msg) do
+    case msg |> String.replace_prefix("execution reverted:", "") |> String.trim() do
+      "" -> nil
+      "execution reverted" -> nil
+      reason -> reason
+    end
+  end
+
+  defp refusal_reason(_info), do: nil
 
   # ── result delivery ───────────────────────────────────────────────────────
 
@@ -928,6 +977,12 @@ defmodule DelegatedSpend.Keeper do
     do: %{state | reverts: Map.delete(state.reverts, user_ref)}
 
   defp update_backoff(state, %{user_ref: user_ref}, {:failed, :reverted}),
+    do: %{state | reverts: Map.update(state.reverts, user_ref, 1, &(&1 + 1))}
+
+  # A simulation refusal counts too: signing authorizations that cannot clear
+  # is exactly the griefing this counter exists to bound (§5.2.1), whether or
+  # not the broadcast happened.
+  defp update_backoff(state, %{user_ref: user_ref}, {:refused, _reason}),
     do: %{state | reverts: Map.update(state.reverts, user_ref, 1, &(&1 + 1))}
 
   defp update_backoff(state, _order, _result), do: state
