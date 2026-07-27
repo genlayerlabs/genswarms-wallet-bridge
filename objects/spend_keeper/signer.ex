@@ -182,26 +182,46 @@ defmodule DelegatedSpend.Keeper.Signer do
 
           case persist_hash(persist_hash_fn, hash, cost_wei) do
             :ok ->
-              _ = rpc_mod.send_raw(rpc, raw)
+              case rpc_mod.send_raw(rpc, raw) do
+                # A PARSED JSON-RPC error object is the node ANSWERING no —
+                # insufficient relayer funds, invalid tx — not an unknowable
+                # transport failure. The 2026-07-27 dry-relayer live test:
+                # fire-and-forget here reported {:ok, hash} over the node's
+                # `insufficient funds`, the user read "submitted ✓" and would
+                # have waited forever, and the advanced local nonce bricked
+                # the relayer until restart. Nothing entered the pool: free
+                # the nonce, watch nothing, tell the caller the truth. (The
+                # pre-broadcast gas-spend record stays — over-counting the
+                # rolling budget errs in the safe direction.)
+                {:error, {:rpc_error, _method, err}} ->
+                  {:reply, {:error, {:rejected, err}}, state}
 
-              # `hashes` keeps every same-nonce variant ever broadcast for this
-              # action: after a fee bump BOTH transactions are valid at the
-              # nonce and EITHER may mine — the sweep must watch them all.
-              entry = %{
-                hash: hash,
-                hashes: [hash],
-                params: params,
-                persist_hash_fn: persist_hash_fn,
-                sent_at: now_ms(),
-                bumps: 0
-              }
+                # Anything else — accepted, or a transport-level failure
+                # (curl death, garbled response) — keeps the deliberate
+                # optimistic stance: node acceptance is unknowable, the hash
+                # stays pending and the nonce stays reserved so a same-nonce
+                # double payment can't happen if the tx DID reach the node.
+                _accepted_or_ambiguous ->
+                  # `hashes` keeps every same-nonce variant ever broadcast for
+                  # this action: after a fee bump BOTH transactions are valid
+                  # at the nonce and EITHER may mine — the sweep must watch
+                  # them all.
+                  entry = %{
+                    hash: hash,
+                    hashes: [hash],
+                    params: params,
+                    persist_hash_fn: persist_hash_fn,
+                    sent_at: now_ms(),
+                    bumps: 0
+                  }
 
-              {:reply, {:ok, hash},
-               %{
-                 state
-                 | next_nonce: state.next_nonce + 1,
-                   pending: Map.put(state.pending, key, entry)
-               }}
+                  {:reply, {:ok, hash},
+                   %{
+                     state
+                     | next_nonce: state.next_nonce + 1,
+                       pending: Map.put(state.pending, key, entry)
+                   }}
+              end
 
             {:error, reason} ->
               {:reply, {:error, reason}, state}

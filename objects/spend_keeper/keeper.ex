@@ -863,6 +863,20 @@ defmodule DelegatedSpend.Keeper do
             result = {:refused, refusal_reason(info)}
             {:reply, result, settle(state, order.order_id, result)}
 
+          {:error, {:rejected, info}} ->
+            # The node PARSED the broadcast and answered no (dry relayer,
+            # 2026-07-27 live test: `insufficient funds`). Nothing entered
+            # the pool, the Signer freed the nonce — a terminal the user
+            # hears about instead of waiting forever on "submitted ✓". The
+            # reason is an OPERATOR signal (it is OUR wallet that can't pay),
+            # logged here, never shown raw to a chat user.
+            Logger.warning(
+              "keeper_submit_rejected order_id=#{order.order_id} info=#{inspect(info)}"
+            )
+
+            result = {:failed, :submit_rejected}
+            {:reply, result, settle(state, order.order_id, result)}
+
           {:error, _reason} ->
             {:reply, {:failed, :rpc_timeout},
              settle(state, order.order_id, {:failed, :rpc_timeout})}

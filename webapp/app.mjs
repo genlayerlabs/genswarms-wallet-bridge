@@ -27,6 +27,10 @@ export const MESSAGES = {
   // signed and nothing was charged.
   link_expired:
     "This payment link has expired — nothing was charged. Send /topup in the chat for a fresh one.",
+  // The node refused our broadcast (e.g. the relayer can't cover the network
+  // fee right now). The user's signature cost them nothing.
+  submit_rejected:
+    "We couldn't submit your payment to the network — nothing was charged. Try /topup again in a few minutes.",
   unauthorized: "Could not verify your Telegram session. Reopen this page from the chat button.",
   version_mismatch: "This page is outdated. Close and reopen it from the chat.",
   user_rejected: "Signature declined — nothing was paid.",

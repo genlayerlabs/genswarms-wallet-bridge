@@ -802,6 +802,30 @@ defmodule DelegatedSpend.KeeperTest do
     assert MemoryStore.spent_since(store, "u-a", 0) == 0
   end
 
+  test "a definitive node rejection is a terminal the user hears about (dry relayer)" do
+    # The 2026-07-27 live test: relayer drained below one authorization's
+    # gas, node answered `insufficient funds`, user read "submitted ✓" and
+    # would have waited forever. A parsed JSON-RPC error is the node saying
+    # no: terminal {:failed, :submit_rejected}, result_fn fires, durably
+    # re-queryable, nothing broadcast.
+    %{keeper: keeper, fake: fake} =
+      start_stack(%{
+        send_raw_fail:
+          {:rpc_error, "eth_sendRawTransaction",
+           %{"code" => -32003, "message" => "insufficient funds for gas * price + value"}}
+      })
+
+    {:ok, %{order_ref: ref, order_id: oid}} =
+      Keeper.register_order(keeper, "market_phase", order_req())
+
+    assert {:failed, :submit_rejected} =
+             Keeper.execute_with_permit(keeper, ref, "u-a", permit(25_000_000))
+
+    assert FakeRpc.sent(fake) == []
+    assert_receive {:result, %{order_id: ^oid, result: {:failed, :submit_rejected}}}
+    assert {:failed, :submit_rejected} = Keeper.order_status(keeper, oid)
+  end
+
   test "broadcast error remains submitted because node acceptance is unknowable" do
     %{keeper: keeper, fake: fake, store: store} = start_stack(%{send_raw_fail: :nonce_race})
 

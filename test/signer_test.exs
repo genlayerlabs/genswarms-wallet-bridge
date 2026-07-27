@@ -129,6 +129,36 @@ defmodule DelegatedSpend.SignerTest do
     _ = original_hash
   end
 
+  # The 2026-07-27 dry-relayer live test: the node answered
+  # `insufficient funds` — a PARSED, definitive "no" — and the fire-and-forget
+  # broadcast reported {:ok, hash} anyway. The user read "Payment submitted ✓"
+  # and would have waited forever; the local nonce advanced past the chain's
+  # and bricked the relayer until restart. A clean JSON-RPC error object IS
+  # the node answering; only transport-level failures are ambiguous.
+  test "a definitive node rejection frees the nonce and reports {:rejected, err}" do
+    {fake, signer} = start_signer()
+
+    FakeRpc.put(
+      fake,
+      :send_raw_fail,
+      {:rpc_error, "eth_sendRawTransaction",
+       %{"code" => -32003, "message" => "insufficient funds for gas * price + value"}}
+    )
+
+    assert {:error, {:rejected, %{"code" => -32003}}} = Signer.submit(signer, "k1", @tx)
+
+    # nothing broadcast, nothing pending — the sweep must not watch a ghost
+    assert FakeRpc.sent(fake) == []
+    assert Signer.status(signer, "k1") == :unknown
+
+    # the nonce was NOT consumed: after a refill the next action uses it,
+    # instead of queueing forever behind a gap the chain never saw
+    FakeRpc.put(fake, :send_raw_fail, nil)
+    assert {:ok, _} = Signer.submit(signer, "k2", @tx)
+    assert [raw] = FakeRpc.sent(fake)
+    assert nonce_of(raw) == 5
+  end
+
   test "broadcast error is ambiguous: hash stays pending and nonce remains reserved" do
     {fake, signer} = start_signer(%{send_raw_fail: :nonce_race})
     assert {:ok, hash} = Signer.submit(signer, "k1", @tx)
