@@ -9,7 +9,113 @@ The package version is stamped in `VERSION`, `vectors/VERSION`, `mix.exs`, and
 package releases can ship zero contract bytecode changes. `scripts/check-version.sh`
 (run in CI) fails on divergence.
 
-## [Unreleased]
+## [0.8.0] - 2026-07-27
+
+### Changed
+
+- **BREAKING (unreleased): a simulation refusal is `{:refused, reason}`, no
+  longer `{:failed, :reverted}`.** The simulation gate declining to broadcast
+  (zero gas spent, relayer nonce untouched) and the chain reverting a real
+  broadcast (gas spent) are opposite truths that shared one word. The first
+  live run collapsed them for a user: `/topup 100` against a 19.5-USDC wallet
+  was refused pre-broadcast, exactly as designed, and the user was told it
+  "didn't go through on the chain". `reason` is the node's decoded
+  `Error(string)` revert reason (e.g. USDC's "transfer amount exceeds
+  balance") with a message fallback, `nil` when undecodable — it was already
+  in hand and was dropped on one line. Surfaces updated: keeper results and
+  `order_status/2`, the store's `execution_status`/`resolve_inflight`
+  contract, the object door (`"status" => "refused"`), and the intake (same
+  `"failed"` wire status for the dapp, reason string passed through). A
+  refusal still counts toward the §5.2.1 anti-grief backoff.
+
+- **BREAKING (unreleased): `result_fn` now receives a map, not `{order_id,
+  result}`.** The tuple carried only the keeper's own `order_id`, which is
+  minted here from random bytes — a producer has nothing keyed by it, so a
+  callback could report that *some* order finished but never which. A consumer
+  wired it up to notify the paying user and notified nobody, silently, on
+  every real payment. The map carries the producer's own identifiers
+  alongside ours:
+
+  ```elixir
+  %{order_id: "0x…", order_ref: "…", user_ref: "…", kind: "…", result: {:mined, tx}}
+  ```
+
+  Resolve on `order_ref`. The three caller-side fields are `nil` when the
+  order row is gone; the result is still delivered.
+
+### Added
+
+- **The authorization lane (EIP-3009 `transferWithAuthorization`) is now
+  exposed end to end** — a gasless sibling to the permit lane that pays the
+  keeper's own `:treasury_address` directly on the real USDC contract,
+  instead of routing through `SpendRouter`. No Solidity bytes changed and
+  `CONTRACT_VERSION` stays put: this lane never touches the router or the
+  package's own contract, it calls Circle's USDC deployment's
+  `transferWithAuthorization` directly.
+  - `DelegatedSpend.Keeper.Eip3009` — the digest/calldata pair (spec-mirror
+    of `PermitLane`, distinct typehash) plus `domain_separator/4`, the pure
+    EIP-712 domain formula used to PROVE what the keeper serves is correct
+    (see the boot check below).
+  - `DelegatedSpend.Keeper.execute_with_authorization/4` — the EIP-3009
+    sibling of `execute_with_permit/4`: same order-lookup →
+    execution-status idempotency → typed-failure `cond` shape, plus the
+    authorization's OWN `valid_after`/`valid_before` on-chain validity
+    window (checked against chain time, not just the order's TTL) and
+    `GasPolicy`'s economic brakes (price ceiling, rolling 24h budget,
+    minimum order size).
+  - `DelegatedSpend.Keeper.GasPolicy` — the three independent, all-optional
+    economic brakes gating the authorization lane's broadcast: a gas-price
+    ceiling, a rolling 24h gas budget, and a minimum order size.
+  - **Store-contract change:** the keeper's store behaviour gained
+    `record_gas_spend/4` and `gas_spent_since/2` (gas-budget accounting,
+    scoped to the authorization lane's orders only). **This is a breaking
+    change for consumer-supplied stores** — any store module implementing
+    the keeper's store contract (see `DelegatedSpend.Keeper.Store`) must add
+    both callbacks; `MemoryStore` ships the reference implementation.
+  - `DelegatedSpend.Intake.handle_authorization/3` — `POST /authorization`'s
+    pure handler, the EIP-3009 sibling of `handle_grant/3`: the SAME five
+    authority gates in the SAME order (geofence → `initData` authentication
+    → rate limit → terms → `GrantValidation` against pinned config), and the
+    `user_ref` derives ONLY from verified `initData`, never from the
+    request body.
+  - `DelegatedSpend.Intake.GrantValidation.validate_authorization/2` — same
+    shape as `validate_permit/2`: `chain_id`/`token`/`version` checked
+    against pinned config (no `router` pin — this lane never touches the
+    router), `from`/`value`/`valid_after`/`valid_before`/`signature`
+    type-checked. There is no `"to"` in the envelope at all — the
+    destination is the keeper's `:treasury_address`, set server-side, and a
+    client-sent `to` is never even parsed.
+  - `DelegatedSpend.Intake.Plug` now routes `POST <intakeUrl>/authorization`
+    — unlike the permit grant lane (`/grants`, `/wallet`, still intentionally
+    unrouted here), this lane needs no router/action ABI and no host
+    `wallet_fn`, only the keeper's own treasury/token config, so it fits this
+    plug's existing deployment shape. Transport only: every authority
+    decision still lives inside `handle_authorization/3`.
+  - `DelegatedSpend.Keeper.Object`'s `register_order` action, given
+    `kind: "authorization"`, now returns an enriched ack — `nonce` (0x-hex,
+    deterministic from the order ref), `to` (the treasury — shown, never
+    chosen by the caller), `value`, `valid_after`/`valid_before`, `token`,
+    `chain_id`, and the EIP-712 `domain` — everything the wallet dapp needs
+    to compose a `TransferWithAuthorization` signature. `DelegatedSpend
+    .Keeper.authorization_domain/1` exposes the same fields for
+    `Intake.handle_order/3`'s order view (withheld until terms are accepted,
+    exactly like the `user_tx` lane's `tx` field).
+  - **Boot-time EIP-712 domain verification:** the keeper now reads the
+    token's `name()`/`version()` at boot (in addition to the existing
+    `DOMAIN_SEPARATOR()` read) and recomposes the domain hash from them,
+    refusing to boot if it disagrees with the separator actually read from
+    the contract. This is the only way to prove the `name`/`version` served
+    to the dapp are the TRUE preimage rather than a hardcoded guess — a
+    domain that merely looks plausible produces signatures the chain
+    silently rejects, discovered only after a real user tries to pay.
+  - The wallet dapp (`webapp/`) signs `TransferWithAuthorization` via
+    `eth_signTypedData_v4` for `kind: "authorization"` orders instead of
+    sending a transaction — `webapp/lib/authorization.mjs` (typed-data +
+    envelope encoding, the sibling of `lib/permit.mjs`) and
+    `runAuthorizationFlow`/`signAndSubmitAuthorization` in `lib/flow.mjs`.
+    `to` and `value` are shown prominently before the wallet's signing
+    prompt ever appears; every field signed comes from the server-served
+    order view, never recomputed client-side.
 
 ### Planned
 
@@ -18,6 +124,39 @@ package releases can ship zero contract bytecode changes. `scripts/check-version
   router path. The base contract already carries the `delegationManager`
   introspection view and the keeper's grant registry stores delegation
   grants, but no redemption path exists yet.
+
+## [0.7.0] - 2026-07-24
+
+Consumer-helpers release: the generic glue every adopting host was
+reinventing moves into the package. No Solidity bytes changed;
+`CONTRACT_VERSION` remains `0.2.0`.
+
+### Added
+
+- **`DelegatedSpend.Orders`** — order-building helpers for the `user_tx`
+  lane: `erc20_transfer_order/3` / `transfer_calldata/2` (the exact tx shape
+  `register_order` kind `"user_tx"` validates; raises on malformed
+  addresses), `parse_token_amount/3` (integer-only, decimals-bounded,
+  caller-stated `:max_units` cap — no business default), `format_units/2`,
+  `mint_order_ref/0` (the keeper's caller-minted 64-lowercase-hex shape),
+  and `user_ref/2` with a REQUIRED non-empty salt. The salt requirement
+  fixes a known weakness in the reference consumer implementation: unsalted
+  refs over enumerable platform-id spaces are offline-reversible.
+- **`DelegatedSpend.Intake.Plug`** — a mountable HTTP surface over the pure
+  intake handlers: packaged `webapp/` statics (traversal-guarded),
+  `GET /config.json` from the host-provided map (case-insensitively matched
+  — the `/Config.json` stale-pin bypass in the reference implementation is
+  not reproducible here), `POST <intakeUrl>/orders` and
+  `POST <intakeUrl>/orders/submitted` with capped raw bodies (413 oversize,
+  400 bad JSON, 401 before any work without a verifiable credential shape,
+  500/503 on handler raise/exit — never a crash). `plug ~> 1.15` is a new
+  OPTIONAL dependency; without it the module compiles to nothing and
+  existing consumers are untouched.
+- **`swarm-object.json`** — the engine loader entry file
+  (`DelegatedSpend.Keeper.Object` + dependency-ordered source list) the
+  notarized tree previously lacked; consumers no longer hand-roll it.
+  `objects/spend_keeper/intake/plug.ex` is deliberately not listed (host
+  plane, optional dep).
 
 ## [0.6.0] - 2026-07-21
 

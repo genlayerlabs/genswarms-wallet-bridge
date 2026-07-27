@@ -2,8 +2,10 @@
 // (tested headlessly); this file only wires optional Telegram initData,
 // the injected EIP-1193 provider, and the DOM elements.
 
-import { applyProductName } from "./lib/brand.mjs";
-import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, runBindFlow, runPermitFlow, runUserTxFlow, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
+import { applyProductName, productName } from "./lib/brand.mjs";
+import { authorizationBrief, briefLines } from "./lib/signing-brief.mjs";
+import { discoverProviders, needsChoice } from "./lib/providers.mjs";
+import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, runAuthorizationFlow, runBindFlow, runPermitFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -20,6 +22,15 @@ export function paintStatus(el, text, state) {
 
 export const MESSAGES = {
   order_not_found: "This payment link expired or was already used. Go back to the chat and tap again.",
+  // An authentic-but-stale link: the ONE wrong move is re-opening the same
+  // page (it will never work again) — say what to do instead. Nothing was
+  // signed and nothing was charged.
+  link_expired:
+    "This payment link has expired — nothing was charged. Send /topup in the chat for a fresh one.",
+  // The node refused our broadcast (e.g. the relayer can't cover the network
+  // fee right now). The user's signature cost them nothing.
+  submit_rejected:
+    "We couldn't submit your payment to the network — nothing was charged. Try /topup again in a few minutes.",
   unauthorized: "Could not verify your Telegram session. Reopen this page from the chat button.",
   version_mismatch: "This page is outdated. Close and reopen it from the chat.",
   user_rejected: "Signature declined — nothing was paid.",
@@ -30,7 +41,78 @@ export const MESSAGES = {
   config_drift: "This page's configuration is out of date (wrong network). Ask the operator to redeploy the wallet app.",
   geo_blocked: "This service isn't available in your region.",
   terms_stale: "The terms were updated — please review and accept the new version.",
+  authorization_unavailable: "This payment link isn't active — please ask for a new one.",
 };
+
+// How long a finished payment stays on screen before the page returns the
+// user to the chat. Long enough to READ the confirmation — the previous 1.5s
+// closed the window before most people finished the sentence, which reads as
+// "it vanished", not as "it worked".
+export const RETURN_DELAY_S = 5;
+
+// Closes the Telegram web view after a successful payment, counting down so
+// the close is expected rather than abrupt.
+//
+// ONLY inside Telegram. In an ordinary browser tab there is nothing to call:
+// a page cannot close a tab it did not itself open, so the user closes it. It
+// is never called on a failure — an error the user cannot finish reading is
+// worse than a tab left open.
+export function scheduleReturn(tg, get = $, setTimeoutFn = setTimeout) {
+  if (!tg || typeof tg.close !== "function") return false;
+
+  const status = get("status");
+  const done = status.textContent;
+  let left = RETURN_DELAY_S;
+
+  const tick = () => {
+    if (left <= 0) {
+      tg.close();
+      return;
+    }
+
+    status.textContent = `${done} Returning to the chat in ${left}…`;
+    left -= 1;
+    setTimeoutFn(tick, 1000);
+  };
+
+  tick();
+  return true;
+}
+
+// Renders one button per discovered wallet and resolves with the provider the
+// user taps. Nothing else on the page arms until then: the choice decides who
+// gets asked to sign, so it cannot be a change made after the fact.
+export function askWhichWallet(wallets, get = $, doc = document) {
+  const picker = get("wallet-picker");
+  const list = get("wallet-list");
+  list.textContent = "";
+
+  return new Promise((resolve) => {
+    for (const { info, provider } of wallets) {
+      const item = doc.createElement("li");
+      const button = doc.createElement("button");
+      button.type = "button";
+
+      if (info.icon) {
+        const icon = doc.createElement("img");
+        icon.src = info.icon;
+        icon.alt = "";
+        button.appendChild(icon);
+      }
+
+      button.appendChild(doc.createTextNode(info.name || info.rdns));
+      button.addEventListener("click", () => {
+        picker.hidden = true;
+        resolve(provider);
+      });
+
+      item.appendChild(button);
+      list.appendChild(item);
+    }
+
+    picker.hidden = false;
+  });
+}
 
 function showManual(order, get = $) {
   const manual = order?.kind === "permit" && order.display?.manual;
@@ -48,7 +130,7 @@ function enterGeoDeadState(target, get = $) {
   paintStatus(target, MESSAGES.geo_blocked, "error");
 }
 
-export function showTermsPrompt(deps, { account, terms, ref, retry }, get = $, acceptFn = acceptTerms) {
+export function showTermsPrompt(deps, { account, terms, ref, retry, renderSummary }, get = $, acceptFn = acceptTerms) {
   const box = get("terms");
   const button = get("terms-accept");
   const pay = get("pay");
@@ -98,6 +180,12 @@ export function showTermsPrompt(deps, { account, terms, ref, retry }, get = $, a
         return;
       }
       if (refreshed.ok) showManual(refreshed.order, get);
+      // N1 fix: the enriched order is exactly what just arrived from the
+      // re-fetch above — recompose the summary from it BEFORE retry() can
+      // reach the signing step, so a lane whose summary depends on
+      // server-served fields (destination, amount) never signs while still
+      // showing the terms-pending copy. No-op for lanes that don't need it.
+      if (refreshed.ok && typeof renderSummary === "function") renderSummary(refreshed.order);
       box.hidden = true;
       pay.hidden = false;
       await retry(refreshed);
@@ -124,7 +212,13 @@ async function main() {
 
   const config = await (await fetch("./config.json")).json();
   applyProductName(document, config);
-  const provider = globalThis.ethereum;
+
+  // Which wallet pays is the USER's call when more than one is installed.
+  // Reading `globalThis.ethereum` alone would hand the payment to whichever
+  // extension won the injection race — invisible, unchangeable, and wrong
+  // whenever the funds are in the other one.
+  const wallets = await discoverProviders({ target: globalThis, injected: globalThis.ethereum });
+  const provider = needsChoice(wallets) ? await askWhichWallet(wallets) : wallets[0]?.provider;
 
   if (!provider) {
     // Dead state: the pay button can never arm without a provider — hide it
@@ -165,6 +259,7 @@ async function main() {
 
   if (fetched.order.kind === "user_tx") return setupUserTx(deps, fetched.order, orderRef, tg);
   if (fetched.order.kind === "bind") return setupBind(deps, fetched.order, orderRef, tg);
+  if (fetched.order.kind === "authorization") return setupAuthorization(deps, fetched.order, orderRef, tg);
   setupPermit(deps, fetched.order, orderRef, tg);
 }
 
@@ -175,21 +270,25 @@ async function main() {
 // dead-state pattern: hide #pay, stamp the error. The re-check inside each
 // pay path is the load-bearing one (accounts change mid-session); this
 // load-time pass and the accountsChanged listener just surface it early.
-function blockWrongWallet(expected) {
-  $("pay").hidden = true;
-  paintStatus($("status"), wrongWalletMessage(expected), "error");
+// `get` defaults to the real DOM accessor (M9: threaded through so lanes that
+// pass their own `get` — e.g. setupAuthorization's fake-DOM tests — can reach
+// this branch too; production is unaffected since every existing caller keeps
+// the default).
+function blockWrongWallet(expected, get = $) {
+  get("pay").hidden = true;
+  paintStatus(get("status"), wrongWalletMessage(expected), "error");
 }
 
-async function enforceOwnerAtLoad(deps, order) {
+async function enforceOwnerAtLoad(deps, order, get = $) {
   if (!order.expected_owner) return true;
   if (typeof deps.provider.on === "function") {
     deps.provider.on("accountsChanged", (accounts) => {
-      if (ownerMismatch(order, accounts && accounts[0])) blockWrongWallet(order.expected_owner);
+      if (ownerMismatch(order, accounts && accounts[0])) blockWrongWallet(order.expected_owner, get);
     });
   }
   const conn = await connectWallet(deps).catch(() => ({ ok: false }));
   if (conn.ok && ownerMismatch(order, conn.account)) {
-    blockWrongWallet(order.expected_owner);
+    blockWrongWallet(order.expected_owner, get);
     return false;
   }
   return true; // connect refusals stay non-fatal — the pay path re-checks
@@ -209,7 +308,7 @@ async function setupPermit(deps, order, orderRef, tg) {
 
     if (result.ok) {
       paintStatus($("status"), "Payment submitted ✓ — you can return to the chat.", "success");
-      if (tg) setTimeout(() => tg.close(), 1500);
+      scheduleReturn(tg);
     } else if (result.reason === "wrong_wallet") {
       blockWrongWallet(result.expected);
     } else if (result.reason === "terms_required") {
@@ -224,6 +323,144 @@ async function setupPermit(deps, order, orderRef, tg) {
   $("pay").onclick = () => run();
 }
 
+// The authorization (EIP-3009) lane: same skeleton as setupPermit — a
+// gasless signature, not a wallet-sent transaction — but the destination and
+// amount are shown UP FRONT and prominently: the user must see where the
+// money goes before the wallet's own signing prompt ever appears.
+//
+// `order.to`/`order.value` are WITHHELD by the server
+// (`DelegatedSpend.Intake.handle_order/3`) until the current terms are
+// accepted — exactly like `user_tx`'s `tx` — while `order.amount` never is
+// (review C1: this used to read `order.value`, which is `undefined` in the
+// terms-pending state, throwing before the terms prompt could ever be
+// reached and permanently bricking the page for every first-time user on a
+// compliance-enabled deployment). So the destination line is composed ONLY
+// once `termsRequired(order)` is false; the terms-pending case shows the
+// amount alone and defers the destination + signing to the first pay click,
+// whose `runAuthorizationFlow` re-fetch surfaces `terms_required` and opens
+// the very same `showTermsPrompt` every other lane uses.
+//
+// `get` defaults to the real DOM accessor and is threaded through (instead
+// of the module-level `$`) so this function is unit-testable with a fake
+// DOM — see webapp/tools/app.test.mjs.
+//
+// (review N1) The destination line only means anything once `order.to` is
+// actually present, and that happens at TWO points in time: first paint when
+// terms are already accepted, and — for a first-time user — right after
+// `showTermsPrompt`'s post-acceptance re-fetch. Both call the same
+// `authorizationSummaryText`, so the promised copy ("accept the terms to see
+// the destination and pay") is never left stale once it has been kept.
+function authorizationSummaryText(deps, order) {
+  const amount = (order.amount / 1_000_000).toFixed(2);
+  return termsRequired(order)
+    ? `${deps.config.actionLabel}: ${amount} USDC — accept the terms to see the destination and pay.`
+    : `${deps.config.actionLabel}: ${amount} USDC to ${shortAddress(order.to)} ` +
+      `(gasless — the operator pays network fees).`;
+}
+
+// Fills the pre-signature brief. Every line is derived from the order the
+// server served, never from anything typed here, so what the page promises is
+// what the wallet will be handed.
+//
+// Hidden — not emptied — when there is no brief: an order still waiting on
+// terms has no signable fields yet, and half a brief is worse than none.
+export function renderBrief(order, config, get = $, now = new Date()) {
+  const brief = authorizationBrief(order, config, now);
+  const section = get("brief");
+  const next = get("brief-next");
+
+  if (!brief) {
+    section.hidden = true;
+    next.hidden = true;
+    return null;
+  }
+
+  const lines = new Map(briefLines(brief, productName(config)).map((line) => [line.key, line.text]));
+
+  for (const key of ["headline", "destination", "nature", "raw"]) {
+    get(`brief-${key}`).textContent = lines.get(key) || "";
+  }
+
+  for (const key of ["steps", "expiry", "next"]) {
+    const el = get(`brief-${key}`);
+    const text = lines.get(key);
+    el.textContent = text || "";
+    el.hidden = !text;
+  }
+
+  section.hidden = false;
+  return brief;
+}
+
+// (review N2) `to`/`domain`/`nonce` are withheld ONLY while the current terms
+// are unaccepted (see above). If they are missing for any OTHER reason — a
+// config-drifted restart that lands the keeper back on a permit-only build is
+// the proven case (probe P8) — `shortAddress`'s falsy guard would otherwise
+// render a fabricated destination ("to an address") with pay enabled, walking
+// the user into a wallet prompt for structurally invalid typed data
+// (`domain: undefined`). An honest failure beats a plausible page.
+function authorizationEnrichmentMissing(order) {
+  return !termsRequired(order) && (!order.to || !order.domain || !order.nonce);
+}
+
+// The brief SUPERSEDES the one-line summary — same facts, but with the full
+// destination instead of a truncated one. Rendering both says everything
+// twice and puts back the shortened address the brief exists to replace.
+//
+// The summary is emptied rather than hidden: the geo-blocked and
+// enrichment-missing dead states paint their message into this same element,
+// and an error written into a hidden element is an error the user never sees.
+export function renderAuthorizationScreen(deps, order, get = $) {
+  const brief = renderBrief(order, deps.config, get);
+  get("summary").textContent = brief ? "" : authorizationSummaryText(deps, order);
+  return brief;
+}
+
+export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
+  if (authorizationEnrichmentMissing(order)) {
+    get("pay").hidden = true;
+    paintStatus(get("summary"), MESSAGES.authorization_unavailable, "error");
+    return;
+  }
+
+  renderAuthorizationScreen(deps, order, get);
+  if (!(await enforceOwnerAtLoad(deps, order, get))) return;
+  get("pay").disabled = false;
+
+  const run = async (fetched) => {
+    get("pay").disabled = true;
+    paintStatus(get("status"), "Connecting wallet…");
+    const result = await runAuthorizationFlow(deps, orderRef, fetched);
+
+    if (result.ok) {
+      paintStatus(get("status"), "Payment submitted ✓ — you can return to the chat.", "success");
+      scheduleReturn(tg, get);
+    } else if (result.reason === "wrong_wallet") {
+      blockWrongWallet(result.expected, get);
+    } else if (result.reason === "terms_required") {
+      showTermsPrompt(
+        deps,
+        {
+          account: result.account,
+          terms: result.terms,
+          ref: orderRef,
+          retry: run,
+          // The terms signature just cleared, so the server now serves the
+          // signable fields: this is the first moment a brief can be built.
+          renderSummary: (refreshedOrder) => renderAuthorizationScreen(deps, refreshedOrder, get),
+        },
+        get
+      );
+    } else if (result.reason === "geo_blocked") {
+      enterGeoDeadState(get("status"), get);
+    } else {
+      paintStatus(get("status"), MESSAGES[result.reason] || `Payment failed (${result.reason}). Nothing was charged — reopen this page from the chat button to retry.`, "error");
+      get("pay").disabled = false;
+    }
+  };
+  get("pay").onclick = () => run();
+}
+
 async function setupUserTx(deps, order, orderRef, tg) {
   $("summary").textContent = summaryLines(order);
   $("pay").textContent = "Review & sign in wallet";
@@ -235,7 +472,7 @@ async function setupUserTx(deps, order, orderRef, tg) {
     const result = await runUserTxFlow(deps, orderRef, fetched);
     if (result.ok) {
       paintStatus($("status"), "Transaction sent ✓ — you can return to the chat.", "success");
-      if (tg) setTimeout(() => tg.close(), 1500);
+      scheduleReturn(tg);
     } else if (result.reason === "wrong_wallet") {
       blockWrongWallet(result.expected);
     } else if (result.reason === "terms_required") {
@@ -262,7 +499,7 @@ function setupBind(deps, order, bindRef, tg) {
     const result = await runBindFlow(deps, bindRef, fetched);
     if (result.ok) {
       paintStatus($("status"), "Wallet bound ✓ — you can return to the chat.", "success");
-      if (tg) setTimeout(() => tg.close(), 1500);
+      scheduleReturn(tg);
     } else if (result.reason === "terms_required") {
       showTermsPrompt(deps, { account: result.account, terms: result.terms, ref: bindRef, retry: run });
     } else if (result.reason === "geo_blocked") {
@@ -284,4 +521,21 @@ export function entryRef(tg, params) {
   return (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || params.get("order") || params.get("bind");
 }
 
-if (typeof document !== "undefined") main();
+// Fatal-error backstop (review C1): `main()` had no `.catch()`, so ANY
+// uncaught throw along the way (a malformed order shape, a config.json
+// parse failure, …) left the page silently stuck on "Loading order…" with
+// #pay disabled forever — no in-dapp signal, no way for the user to tell a
+// bug from a slow network. This is the same "dead end with no workaround"
+// bug class as C1 itself, one layer further out; every other failure path
+// in this file already ends in a typed, visible status.
+export function handleFatalError(err, get = $) {
+  console.error(err);
+  const pay = get("pay");
+  if (pay) pay.hidden = true;
+  const summary = get("summary");
+  if (summary) {
+    paintStatus(summary, "Something went wrong loading this page. Reopen it from the chat button.", "error");
+  }
+}
+
+if (typeof document !== "undefined") main().catch(handleFatalError);

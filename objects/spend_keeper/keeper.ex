@@ -22,14 +22,35 @@ defmodule DelegatedSpend.Keeper do
   means one successful receipt, not confirmation depth or product credit.
 
   Typed failure reasons: `no_grant | expired | reverted | rpc_timeout |
-  not_found | suspended`. `suspended` is the §5.2.1 revert backoff — a grant
-  that produced `max_consecutive_reverts` reverts is frozen until
-  `reset_backoff/2` (the wallet dapp re-enable).
+  not_found | suspended | wrong_kind | permit_lane_disabled`, plus
+  `authorization_lane_disabled | not_yet_valid` on the EIP-3009 lane, plus
+  `gas_too_expensive | budget_exhausted | below_minimum` (Task 3b's economic
+  brakes, `GasPolicy.admit/2`, EIP-3009 lane only — see `gas_policy_admit/2`).
+  `suspended` is the §5.2.1 revert backoff — a grant that produced
+  `max_consecutive_reverts` reverts is frozen until `reset_backoff/2` (the
+  wallet dapp re-enable).
+
+  `{:refused, reason}` is NOT a failure of a broadcast: it is the simulation
+  gate declining to broadcast at all — zero gas spent, relayer nonce
+  untouched. `reason` is the node's decoded revert string (e.g. USDC's
+  "transfer amount exceeds balance"), or `nil` when the node gave none.
+  `{:failed, :reverted}` is reserved for the opposite truth: a transaction
+  that WAS broadcast and that the chain reverted (gas was spent). Callers
+  presenting results to users must not collapse the two — the first live
+  deployment did, and told a user with insufficient USDC that their payment
+  "didn't go through on the chain" when nothing had been sent.
   """
   use GenServer
   require Logger
 
-  alias DelegatedSpend.Keeper.{PermitLane, Signer}
+  alias DelegatedSpend.Evm.Address
+  alias DelegatedSpend.Keeper.{GasPolicy, PermitLane, Signer}
+
+  # Task 3b: the daily gas budget is a ROLLING 24h window, not a calendar-day
+  # boundary — simpler (no timezone/midnight edge cases) and matches the
+  # spec's real intent (bound what a gas-price spike can burn in ANY 24h
+  # stretch, not reset a clock at UTC midnight for a griefer to exploit).
+  @gas_budget_window_s 86_400
 
   # :chain_id is REQUIRED (0.3.1): every order view carries the keeper's
   # runtime chain id so the wallet dapp can refuse to run against a stale
@@ -37,6 +58,7 @@ defmodule DelegatedSpend.Keeper do
   # keeper that doesn't know its chain must not serve orders at all.
   @enforce_opts [:store, :source_allowlist, :order_ttl_s, :chain_id]
   @max_json_safe_integer 9_007_199_254_740_991
+  @uint256_max Integer.pow(2, 256) - 1
 
   # Optional :name registers the server (supervision-friendly: a restarted
   # keeper is reachable at the same name, so app ctx never holds a stale pid).
@@ -65,7 +87,63 @@ defmodule DelegatedSpend.Keeper do
   def execute_with_permit(keeper, order_ref, user_ref, permit),
     do: GenServer.call(keeper, {:execute, order_ref, user_ref, permit}, 60_000)
 
+  @doc """
+  The EIP-3009 sibling of `execute_with_permit/4`. `auth` is
+  `%{from:, value:, valid_after:, valid_before:, signature:}` — note there is
+  no `to`: the destination is the keeper's own `:treasury_address`, never a
+  client-supplied field (see `execute_authorization_consumed/3`).
+  """
+  def execute_with_authorization(keeper, order_ref, user_ref, auth),
+    do: GenServer.call(keeper, {:execute_authorization, order_ref, user_ref, auth}, 60_000)
+
   def order_status(keeper, order_id), do: GenServer.call(keeper, {:order_status, order_id})
+
+  @doc """
+  The EIP-712 domain the wallet dapp needs to compose a
+  `TransferWithAuthorization` signature — `name`/`version` are the ones READ
+  and CROSS-CHECKED at boot (see `read_and_verify_domain_fields/5`), never a
+  hardcoded guess, plus the keeper's runtime `chain_id` and the
+  treasury/token addresses. `:disabled` when the authorization lane isn't
+  configured (nothing to serve, and nothing was read).
+  """
+  def authorization_domain(keeper), do: GenServer.call(keeper, :authorization_domain)
+
+  @doc """
+  Shared enrichment for every view of an `"authorization"`-kind order — the
+  registration ack (`DelegatedSpend.Keeper.Object`) and the wallet dapp's
+  order view (`DelegatedSpend.Intake.handle_order/3`) both need the SAME
+  nonce/destination/domain fields, computed from the SAME boot-verified
+  `authorization_domain/1`; this is the one place that does it (review M7 —
+  the two call sites merge into a differently-shaped `base` map and disagree
+  on what `:disabled` should mean, so only the domain-lookup-and-merge core
+  is shared; each caller still decides its own `:disabled` fallback).
+  """
+  def authorization_view_fields(keeper, order_ref, amount, expires_at, base) do
+    case authorization_domain(keeper) do
+      {:ok, domain} ->
+        {:ok,
+         Map.merge(base, %{
+           "nonce" =>
+             "0x" <>
+               Base.encode16(DelegatedSpend.Orders.authorization_nonce(order_ref), case: :lower),
+           "to" => domain.treasury_address,
+           "value" => amount,
+           "valid_after" => 0,
+           "valid_before" => expires_at,
+           "token" => domain.token_address,
+           "chain_id" => domain.chain_id,
+           "domain" => %{
+             "name" => domain.name,
+             "version" => domain.version,
+             "chainId" => domain.chain_id,
+             "verifyingContract" => domain.token_address
+           }
+         })}
+
+      :disabled ->
+        :disabled
+    end
+  end
 
   @doc "Clear a suspended grant's revert backoff (the wallet dapp re-enable path)."
   def reset_backoff(keeper, user_ref), do: GenServer.call(keeper, {:reset_backoff, user_ref})
@@ -80,8 +158,47 @@ defmodule DelegatedSpend.Keeper do
 
   @impl true
   def init(opts) do
+    # Authorization lane config (EIP-3009). Normalized ONCE, here: the lane is
+    # enabled iff `:signer`, `:token_address` and `:treasury_address` are ALL
+    # configured; a partial configuration refuses boot (see
+    # `authorization_enabled?/1`). Everything downstream reads the single
+    # boolean, so no execution path can ever discover a missing key halfway
+    # through and crash with an order already consumed.
+    token_address = Map.get(opts, :token_address)
+    treasury_address = Map.get(opts, :treasury_address)
+    authorization_enabled? = authorization_enabled?(opts)
+
+    # DOMAIN_SEPARATOR() = 0x3644e515. READ, never recomposed: a wrongly
+    # composed domain produces signatures the chain rejects without saying
+    # why (mirrors the Eip3009 moduledoc). Failing boot here is correct — with
+    # no domain no signature can ever be validated on-chain, and booting
+    # without it would only move the failure to the first paying user.
+    {domain_separator, token_name, token_version} =
+      case token_address do
+        nil ->
+          {nil, nil, nil}
+
+        addr ->
+          rpc_mod = Map.fetch!(opts, :rpc_mod)
+          rpc = Map.fetch!(opts, :rpc)
+          ds = read_domain_separator(rpc_mod, rpc, addr)
+          {name, version} = read_and_verify_domain_fields(rpc_mod, rpc, addr, opts.chain_id, ds)
+          {ds, name, version}
+      end
+
     state = %{
       signer: Map.get(opts, :signer),
+      token_address: token_address,
+      treasury_address: treasury_address,
+      domain_separator: domain_separator,
+      # Boot-VERIFIED name/version (see `read_and_verify_domain_fields/5`
+      # below) — the only fields ever served to the dapp as the EIP-712
+      # domain, because they are proven to hash to the on-chain
+      # DOMAIN_SEPARATOR read above, not merely assumed from public knowledge
+      # of the real token deployments.
+      token_name: token_name,
+      token_version: token_version,
+      authorization_enabled?: authorization_enabled?,
       # The RUNTIME chain id (the app derives it from its RPC at boot). Not a
       # per-order field: order views stamp it at FETCH time, so orders
       # persisted before an upgrade still report the chain the keeper serves.
@@ -110,7 +227,18 @@ defmodule DelegatedSpend.Keeper do
       result_fn: Map.get(opts, :result_fn, fn _ -> :ok end),
       rpc_mod: Map.get(opts, :rpc_mod),
       rpc: Map.get(opts, :rpc),
-      sweep_ms: Map.get(opts, :sweep_ms, 5_000)
+      sweep_ms: Map.get(opts, :sweep_ms, 5_000),
+      # Task 3b economic brakes (spec §5), EIP-3009 lane only. ALL optional —
+      # an absent key does not limit (GasPolicy's own deliberate rule; see its
+      # moduledoc). Deliberately NOT in `authorization_enabled?/1`'s
+      # half-config check below: a deployment with none of these configured
+      # is a legal, just UNBRAKED, deployment — real numbers are fixed by
+      # measurement (Task 7), not required at boot.
+      gas_policy: %{
+        max_gas_wei: Map.get(opts, :max_gas_wei),
+        daily_gas_budget_wei: Map.get(opts, :daily_gas_budget_wei),
+        min_order_units: Map.get(opts, :min_order_units)
+      }
     }
 
     Process.send_after(self(), :sweep, state.sweep_ms)
@@ -127,7 +255,7 @@ defmodule DelegatedSpend.Keeper do
   def handle_call({:register_order, source, req}, _from, state) do
     with true <- MapSet.member?(state.allowlist, source) || {:error, {:unknown_source, source}},
          %{user_ref: user_ref, amount: amount, action_args: args} = req,
-         {:ok, kind} <- order_kind(req),
+         {:ok, kind} <- order_kind(req, state),
          {:ok, order_ref} <- order_ref(state, req, user_ref) do
       order = %{
         order_id: "0x" <> hex(:crypto.strong_rand_bytes(32)),
@@ -203,7 +331,7 @@ defmodule DelegatedSpend.Keeper do
               permit.value != order.amount ->
                 {:reply, {:failed, :no_grant}, state}
 
-              not owner_binding_ok?(order, permit, state) ->
+              not owner_binding_ok?(order, permit.owner, state) ->
                 {:reply, {:failed, :no_grant}, state}
 
               not deadline_slack_ok?(permit, state) ->
@@ -217,6 +345,103 @@ defmodule DelegatedSpend.Keeper do
             {:reply, status, state}
         end
     end
+  end
+
+  # The EIP-3009 sibling of {:execute, ...} — same shape (order lookup →
+  # execution-status idempotency door → typed-failure cond → consume+submit),
+  # with two differences from the permit path: the expected kind is
+  # "authorization", and the AUTHORIZATION'S OWN validity window (valid_after/
+  # valid_before) is checked in addition to the order's own expiry — a
+  # transferWithAuthorization the token contract itself will reject on-chain
+  # once validBefore passes, so that check is mandatory here, not an optional
+  # anti-grief slack like the permit lane's deadline check.
+  def handle_call({:execute_authorization, order_ref, user_ref, auth}, _from, state) do
+    case store(state).get_order_by_ref(store_ref(state), order_ref, user_ref) do
+      nil ->
+        {:reply, {:failed, :not_found}, state}
+
+      order ->
+        case store(state).get_execution_status(store_ref(state), order.order_id) do
+          :unknown ->
+            cond do
+              Map.get(order, :kind, "permit") != "authorization" ->
+                {:reply, {:failed, :wrong_kind}, state}
+
+              # ONE normalized predicate, computed at boot (see
+              # `authorization_enabled?/1`): by the time we're here the lane is
+              # either fully configured or the keeper never booted.
+              not state.authorization_enabled? ->
+                {:reply, {:failed, :authorization_lane_disabled}, state}
+
+              # Same anti-griefing backoff as the permit lane (spec §5.2.1) —
+              # one revert streak per user_ref, shared across both lanes.
+              suspended?(order.user_ref, state) ->
+                {:reply, {:failed, :suspended}, state}
+
+              now_s() > order.expires_at ->
+                {:reply, {:failed, :expired}, state}
+
+              # Shape/type check BEFORE any field is compared or encoded:
+              # nothing about `auth` is trusted, and a malformed field must be
+              # a typed refusal, never a crash — the §5.2.1 revert backoff
+              # lives only in this process's memory, so a crash is a free
+              # suspension reset for a griefer.
+              not valid_authorization_fields?(auth) ->
+                {:reply, {:failed, :no_grant}, state}
+
+              auth.value != order.amount ->
+                {:reply, {:failed, :no_grant}, state}
+
+              # The SAME fail-closed owner binding the permit lane enforces
+              # (shared helper, so the two lanes can't drift): an app that
+              # opted into "only this wallet may pay" must not lose that
+              # guarantee by an order taking the other lane.
+              not owner_binding_ok?(order, auth.from, state) ->
+                {:reply, {:failed, :no_grant}, state}
+
+              true ->
+                # The two validity-window checks share ONE chain-time read:
+                # two `eth_getBlockByNumber` round-trips per payment is both
+                # wasteful and incoherent (the guards could observe different
+                # timestamps). Evaluated last so the cheap refusals above
+                # never pay for an RPC call.
+                case authorization_window(auth, state) do
+                  :ok ->
+                    # Task 3b (spec §5): the economic brakes, consulted
+                    # BEFORE the Signer sees this order — a rejected order
+                    # must not be consumed (see submit_consumed below).
+                    case gas_policy_admit(auth.value, state) do
+                      :ok -> execute_authorization_consumed(order, auth, state)
+                      {:reject, reason} -> {:reply, {:failed, reason}, state}
+                    end
+
+                  reason ->
+                    {:reply, {:failed, reason}, state}
+                end
+            end
+
+          status ->
+            {:reply, status, state}
+        end
+    end
+  end
+
+  def handle_call(:authorization_domain, _from, state) do
+    reply =
+      if state.authorization_enabled? do
+        {:ok,
+         %{
+           treasury_address: state.treasury_address,
+           token_address: state.token_address,
+           chain_id: state.chain_id,
+           name: state.token_name,
+           version: state.token_version
+         }}
+      else
+        :disabled
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call({:reset_backoff, user_ref}, _from, state) do
@@ -282,9 +507,323 @@ defmodule DelegatedSpend.Keeper do
 
   defp receipt(_state, _hash), do: nil
 
+  # The authorization lane needs THREE things to move money: a signer to
+  # broadcast, a token to call, and a treasury to credit. Half of them is not a
+  # runtime condition, it is a broken DEPLOY — and one that is expensive to
+  # discover late: a keeper that reports the lane enabled and then raises
+  # mid-execution can leave an order durably `:pending` with no tx hash, which
+  # adoption.md forbids ever resubmitting. So it fails at boot, exactly like the
+  # DOMAIN_SEPARATOR read below.
+  #
+  # `:signer` ALONE is not a request for this lane — that's the permit-only
+  # deployment every M1 keeper runs — so the lane is only "asked for" once one
+  # of its own two address keys appears. Neither key = lane cleanly disabled,
+  # no new boot cost, no new failure mode.
+  defp authorization_enabled?(opts) do
+    configured = [
+      signer: Map.get(opts, :signer),
+      token_address: Map.get(opts, :token_address),
+      treasury_address: Map.get(opts, :treasury_address)
+    ]
+
+    requested? =
+      not (is_nil(configured[:token_address]) and is_nil(configured[:treasury_address]))
+
+    missing = for {key, nil} <- configured, do: key
+
+    cond do
+      not requested? ->
+        false
+
+      missing != [] ->
+        raise ArgumentError,
+              "keeper: authorization lane is half-configured — missing " <>
+                Enum.map_join(missing, ", ", &inspect/1) <>
+                ". Configure all of :signer, :token_address and :treasury_address, " <>
+                "or none of :token_address/:treasury_address for a permit-only deployment."
+
+      true ->
+        validate_authorization_address!(:treasury_address, configured[:treasury_address])
+        validate_authorization_address!(:token_address, configured[:token_address])
+        true
+    end
+  end
+
+  # R1 (re-review): presence is not shape. `Address.to_bytes/1` has a raw
+  # `<<_::binary-size(20)>>` pass-through clause, so a config value that is
+  # merely *20 characters long* — a truncated paste, e.g. a copy that lost
+  # its tail — is silently accepted and used AS THE RAW ADDRESS BYTES,
+  # ASCII and all: a deploy-time typo becomes an unrecoverable destination,
+  # discovered only after real funds move. Reusing `address?/1` (0x + 40 hex,
+  # the same predicate that already guards `auth.from` at execution time)
+  # catches this at boot, before any order can be consumed.
+  defp validate_authorization_address!(key, value) do
+    unless address?(value) do
+      raise ArgumentError,
+            "keeper: authorization lane #{inspect(key)} is not a well-formed address " <>
+              "(expected \"0x\" + 40 hex chars), got: #{inspect(value)}"
+    end
+  end
+
+  # `Rpc.eth_call/3` (the plain, no-`from` view-call wrapper — unused so far
+  # elsewhere, since `eth_call_from/4` is what the Signer's simulation needs)
+  # either returns the raw `"0x…"` result or RAISES on transport failure
+  # (`call!` underneath). We only add our own message for the shape-mismatch
+  # case: a call that "succeeded" but didn't return a 32-byte word is not a
+  # transport error, it's a wrong contract/network, and deserves its own
+  # diagnosis rather than a generic rpc-failed message.
+  defp read_domain_separator(rpc_mod, rpc, token_address) do
+    case rpc_mod.eth_call(rpc, token_address, "0x3644e515") do
+      "0x" <> hex when byte_size(hex) == 64 ->
+        Base.decode16!(hex, case: :mixed)
+
+      other ->
+        raise "keeper: could not read DOMAIN_SEPARATOR from token #{String.downcase(token_address)}: #{inspect(other)}"
+    end
+  end
+
+  # name() = 0x06fdde03, version() = 0x54fd4d50. Proves the fields this
+  # keeper will later serve as the EIP-712 domain are the TRUE preimage of
+  # the on-chain DOMAIN_SEPARATOR already read above, rather than a
+  # hardcoded guess — even though both values are public knowledge for the
+  # real deployments this package targets ("USDC" / "2" on both Base
+  # chains), reading and cross-checking them here is the only way to prove
+  # what gets served is correct: composing a domain that merely LOOKS
+  # plausible and handing it to the dapp would produce signatures the chain
+  # silently rejects (see the Eip3009 moduledoc), discovered only after a
+  # real user tries to pay. Boot fails closed on any mismatch or malformed
+  # read, exactly like the DOMAIN_SEPARATOR read and BootCheck's codehash
+  # pin.
+  defp read_and_verify_domain_fields(rpc_mod, rpc, token_address, chain_id, domain_separator) do
+    name = read_token_string(rpc_mod, rpc, token_address, "0x06fdde03", "name")
+    version = read_token_string(rpc_mod, rpc, token_address, "0x54fd4d50", "version")
+
+    computed =
+      DelegatedSpend.Keeper.Eip3009.domain_separator(name, version, chain_id, token_address)
+
+    unless computed == domain_separator do
+      raise "keeper: token #{String.downcase(token_address)} name()/version() " <>
+              "(#{inspect(name)}, #{inspect(version)}) do not hash to the on-chain " <>
+              "DOMAIN_SEPARATOR — refusing to serve an unverified EIP-712 domain to the dapp " <>
+              "(expected 0x#{Base.encode16(domain_separator, case: :lower)}, computed " <>
+              "0x#{Base.encode16(computed, case: :lower)})"
+    end
+
+    {name, version}
+  end
+
+  defp read_token_string(rpc_mod, rpc, token_address, selector, label) do
+    case rpc_mod.eth_call(rpc, token_address, selector) do
+      "0x" <> hex ->
+        case decode_abi_string(hex) do
+          {:ok, str} ->
+            str
+
+          :error ->
+            raise "keeper: could not decode #{label}() from token " <>
+                    "#{String.downcase(token_address)}: malformed ABI string"
+        end
+
+      other ->
+        raise "keeper: could not read #{label}() from token " <>
+                "#{String.downcase(token_address)}: #{inspect(other)}"
+    end
+  end
+
+  # Minimal ABI decode for a single dynamic `string` return: offset word (32
+  # bytes, ignored — always 0x20 for a direct single-value return), length
+  # word, then the UTF-8 bytes themselves (right-padded to a multiple of 32,
+  # which `binary_part/3` below simply ignores).
+  defp decode_abi_string(hex) do
+    bytes = Base.decode16!(hex, case: :mixed)
+
+    case bytes do
+      <<_offset::256, len::256, rest::binary>> when byte_size(rest) >= len ->
+        {:ok, binary_part(rest, 0, len)}
+
+      _ ->
+        :error
+    end
+  rescue
+    _ -> :error
+  end
+
   # ── execution ─────────────────────────────────────────────────────────────
 
   defp execute_consumed(order, permit, state) do
+    calldata = PermitLane.build_call(state.action, order.action_args, permit)
+    submit_consumed(order, %{to: state.router, data: calldata}, state)
+  end
+
+  # The destination is picked by the SERVER, from `:treasury_address` —
+  # NEVER from `auth`. A `to` that arrives from outside is a `to` an attacker
+  # chooses; this keeper's whole authority model (see moduledoc) rests on
+  # calldata being built solely from server-held config/state, never from
+  # client-supplied routing.
+  defp execute_authorization_consumed(order, auth, state) do
+    nonce = DelegatedSpend.Orders.authorization_nonce(order.order_ref)
+
+    calldata_hex =
+      DelegatedSpend.Keeper.Eip3009.transfer_with_authorization_calldata(
+        auth.from,
+        state.treasury_address,
+        auth.value,
+        auth.valid_after,
+        auth.valid_before,
+        nonce,
+        auth.signature
+      )
+
+    # Eip3009 returns calldata as "0x…" text (shaped for an external
+    # consumer, e.g. an HTTP response), but the Signer — like
+    # PermitLane.build_call above — expects `tx.data` as RAW bytes: Tx1559
+    # signs over the actual byte string, not its hex spelling. Decode at this
+    # boundary between the two conventions.
+    # `replace_prefix/3`, not `trim_leading/2`: the latter strips EVERY leading
+    # occurrence ("0x0x12" -> "12"), which is never the intent for a prefix.
+    data = calldata_hex |> String.replace_prefix("0x", "") |> Base.decode16!(case: :mixed)
+
+    # Fix wave (Important #1+#2): gas-spend recording is no longer a
+    # post-submit side effect here — it happens INSIDE submit_consumed's
+    # persist_hash_fn, at the same durable pre-broadcast moment the Signer
+    # already writes the tx hash, for both the initial broadcast and every
+    # fee-bumped replacement. See `record_tracked_gas_spend/3`.
+    submit_consumed(order, %{to: state.token_address, data: data, value: 0}, state)
+  end
+
+  # Task 3b: consult the three economic brakes as ONE pure decision
+  # (`GasPolicy.admit/2`), fetching the two dynamic readings it needs ONLY
+  # when at least one brake is actually configured — a keeper with none of
+  # `:max_gas_wei` / `:daily_gas_budget_wei` / `:min_order_units` set pays no
+  # extra RPC call or store read for a policy that would always answer `:ok`
+  # anyway (mirrors `deadline_slack_ok?/2`'s "0 disables the check" shape).
+  defp gas_policy_admit(order_units, state) do
+    config = state.gas_policy
+
+    if gas_policy_config_empty?(config) do
+      :ok
+    else
+      case current_gas_price(state) do
+        {:error, reason} ->
+          {:reject, reason}
+
+        price ->
+          GasPolicy.admit(
+            %{
+              gas_price_wei: price,
+              spent_today_wei: gas_spent_today(state),
+              order_units: order_units
+            },
+            config
+          )
+      end
+    end
+  end
+
+  defp gas_policy_config_empty?(%{
+         max_gas_wei: nil,
+         daily_gas_budget_wei: nil,
+         min_order_units: nil
+       }),
+       do: true
+
+  defp gas_policy_config_empty?(_config), do: false
+
+  # `Rpc.gas_price/1` (eth_gasPrice) — the SAME typed wrapper `evm/rpc.ex`
+  # already exposes, reused as-is rather than inventing a new RPC helper.
+  # `rpc_mod`/`rpc` are guaranteed present here: the authorization lane
+  # requires them at boot (the DOMAIN_SEPARATOR read above), and this helper
+  # only ever runs on that lane. A transient RPC failure must not crash the
+  # keeper — nothing has been consumed yet, so it degrades to the same typed
+  # `:rpc_timeout` the submit path already uses for RPC trouble.
+  defp current_gas_price(%{rpc_mod: mod, rpc: rpc}) do
+    mod.gas_price(rpc)
+  rescue
+    _ -> {:error, :rpc_timeout}
+  catch
+    _kind, _reason -> {:error, :rpc_timeout}
+  end
+
+  defp gas_spent_today(state),
+    do: store(state).gas_spent_since(store_ref(state), now_s() - @gas_budget_window_s)
+
+  # Fix wave (Important #1+#2, structural fix): gas-spend is recorded at the
+  # SAME durable pre-broadcast moment the Signer already persists the
+  # inflight tx hash (persist_hash_fn, called before EVERY initial broadcast
+  # AND every fee-bumped replacement — see signer.ex's do_submit/bump). This
+  # makes under-counting structurally impossible: a crash right after
+  # broadcast has already had its spend recorded; a broadcast that then
+  # fails to send overcounts by one estimate, which is conservative (the
+  # budget brake trips earlier, never later).
+  #
+  # `cost_wei` is the full estimate on an initial broadcast, or only the
+  # DELTA versus the previous broadcast on a fee-bumped replacement (signer.ex
+  # computes which one applies); either way this function just adds it.
+  #
+  # Scoped to the authorization lane only — `order.kind == "authorization"` —
+  # so a permit-lane order on a keeper that ALSO has the authorization lane
+  # (and a daily gas budget) configured records nothing, keeping the permit
+  # lane byte-for-byte unchanged (spec mandate).
+  #
+  # Gated on `:daily_gas_budget_wei` being configured (Minor #3): a keeper
+  # that never set a daily budget performs zero extra store writes, not just
+  # zero extra RPC/read cost — nothing ever reads this history back, so
+  # nothing should be paying to write it. Enabling the budget later starts a
+  # fresh window with no retroactive history, which is fine since the window
+  # itself is rolling 24h, not a fixed epoch.
+  #
+  # Re-review fix (Important): this runs INSIDE the same `persist_hash_fn`
+  # closure as the durable tx-hash write (see `submit_consumed/3`), but its
+  # own outcome must never be allowed to affect that closure's return value.
+  # The hash write is the anti-double-broadcast control — a caller
+  # (signer.ex's `persist_hash/3`) that sees this closure raise cannot tell
+  # "the accounting write failed" apart from "the hash failed to persist,"
+  # and treats both as a reason to refuse the broadcast; keeper.ex's caller
+  # then durably overwrites the order to a TERMINAL `{:failed, :rpc_timeout}`
+  # — even though the hash had already been written and nothing was ever
+  # broadcast twice. That would kill a perfectly good order over a lost
+  # accounting row. So: rescue/catch everything here, log a warning naming
+  # the order and the wei amount that won't be counted, and always return
+  # `:ok`. Losing one row under-counts the daily budget by a bounded amount
+  # (this one broadcast's cost) — a nuisance the operator is warned about;
+  # losing a legitimate, already-consumed order is much worse and is exactly
+  # what the old `safe_cost_estimate/2` was written to prevent. Accounting
+  # must depend on hash persistence (it only runs when the hash write
+  # succeeds); hash persistence must never depend on accounting.
+  defp record_tracked_gas_spend(order, cost_wei, state) do
+    tracked? = Map.get(order, :kind, "permit") == "authorization"
+    budgeted? = not is_nil(state.gas_policy.daily_gas_budget_wei)
+
+    if tracked? and budgeted? and cost_wei > 0 do
+      at = now_s()
+      store(state).record_gas_spend(store_ref(state), cost_wei, at, at - @gas_budget_window_s)
+    end
+
+    :ok
+  rescue
+    error ->
+      warn_gas_spend_lost(order, cost_wei, inspect(error))
+      :ok
+  catch
+    kind, reason ->
+      warn_gas_spend_lost(order, cost_wei, "#{kind}: #{inspect(reason)}")
+      :ok
+  end
+
+  defp warn_gas_spend_lost(order, cost_wei, detail) do
+    Logger.warning(
+      "order #{order.order_id}: gas spend not recorded — budget will under-count by " <>
+        "~#{cost_wei} wei (accounting write raised: #{detail})"
+    )
+  end
+
+  # Shared by both lanes: consume the order + open its durable :pending
+  # execution record + hand the built tx to the Signer. Extracted so permit
+  # and authorization can never diverge on idempotency handling — the
+  # `action_key` (the order_id) is what makes a retry return the recorded
+  # result instead of broadcasting again (signer.ex, "action_key
+  # idempotency").
+  defp submit_consumed(order, tx, state) do
     case store(state).begin_execution(
            store_ref(state),
            order.order_id,
@@ -298,23 +837,45 @@ defmodule DelegatedSpend.Keeper do
         {:reply, store(state).get_execution_status(store_ref(state), order.order_id), state}
 
       {:ok, order} ->
-        calldata = PermitLane.build_call(state.action, order.action_args, permit)
-
-        persist_hash_fn = fn hash ->
-          store(state).update_inflight_hash(store_ref(state), order.order_id, hash)
+        # The hash write and the gas-spend record are both durable
+        # PRE-broadcast side effects the Signer triggers via this one
+        # callback, before every initial and fee-bumped broadcast (see
+        # signer.ex moduledoc) — recording only happens once the hash write
+        # itself succeeds (`result == :ok`): if the durable write fails, the
+        # Signer never broadcasts (do_submit/bump both refuse on a
+        # non-:ok persist_hash_fn), so nothing was spent and nothing should
+        # be recorded either.
+        persist_hash_fn = fn hash, cost_wei ->
+          result = store(state).update_inflight_hash(store_ref(state), order.order_id, hash)
+          if result == :ok, do: record_tracked_gas_spend(order, cost_wei, state)
+          result
         end
 
-        case Signer.submit(
-               state.signer,
-               order.order_id,
-               %{to: state.router, data: calldata},
-               persist_hash_fn
-             ) do
+        case Signer.submit(state.signer, order.order_id, tx, persist_hash_fn) do
           {:ok, hash} ->
             {:reply, {:submitted, hash}, state}
 
-          {:error, {:reverted, _info}} ->
-            {:reply, {:failed, :reverted}, settle(state, order.order_id, {:failed, :reverted})}
+          {:error, {:reverted, info}} ->
+            # The simulation gate said no BEFORE anything was broadcast: zero
+            # gas, nonce untouched. That is a different truth from an on-chain
+            # revert and gets a different word — with the node's own reason,
+            # which was previously dropped right here.
+            result = {:refused, refusal_reason(info)}
+            {:reply, result, settle(state, order.order_id, result)}
+
+          {:error, {:rejected, info}} ->
+            # The node PARSED the broadcast and answered no (dry relayer,
+            # 2026-07-27 live test: `insufficient funds`). Nothing entered
+            # the pool, the Signer freed the nonce — a terminal the user
+            # hears about instead of waiting forever on "submitted ✓". The
+            # reason is an OPERATOR signal (it is OUR wallet that can't pay),
+            # logged here, never shown raw to a chat user.
+            Logger.warning(
+              "keeper_submit_rejected order_id=#{order.order_id} info=#{inspect(info)}"
+            )
+
+            result = {:failed, :submit_rejected}
+            {:reply, result, settle(state, order.order_id, result)}
 
           {:error, _reason} ->
             {:reply, {:failed, :rpc_timeout},
@@ -322,6 +883,46 @@ defmodule DelegatedSpend.Keeper do
         end
     end
   end
+
+  # ── refusal reasons ───────────────────────────────────────────────────────
+  #
+  # The node's eth_call error carries the contract's revert reason twice over:
+  # ABI-encoded `Error(string)` bytes under "data" (selector 0x08c379a0), and
+  # usually a human "message" too. Prefer the data — it is the contract's own
+  # words, unmangled by node formatting — and fall back to the message with
+  # the standard "execution reverted" prefix stripped. Every branch degrades
+  # to nil rather than raising: this runs on the submit path, and a weird node
+  # error must yield {:refused, nil}, never a crash.
+
+  @error_string_selector "08c379a0"
+
+  # The transport (Rpc.call) hands the JSON-RPC error object wrapped as
+  # {:rpc_error, method, err} — unwrap first. The first live refusal shipped
+  # without this clause (the test fake returned a bare map) and every real
+  # reason decoded to nil.
+  defp refusal_reason({:rpc_error, _method, err}), do: refusal_reason(err)
+
+  defp refusal_reason(%{"data" => "0x" <> @error_string_selector <> hex}) do
+    with {:ok, bin} <- Base.decode16(hex, case: :mixed),
+         [reason] when is_binary(reason) <-
+           DelegatedSpend.Evm.Abi.decode_result([:string], bin) do
+      reason
+    else
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp refusal_reason(%{"message" => msg}) when is_binary(msg) do
+    case msg |> String.replace_prefix("execution reverted:", "") |> String.trim() do
+      "" -> nil
+      "execution reverted" -> nil
+      reason -> reason
+    end
+  end
+
+  defp refusal_reason(_info), do: nil
 
   # ── result delivery ───────────────────────────────────────────────────────
 
@@ -343,10 +944,9 @@ defmodule DelegatedSpend.Keeper do
   defp settle(state, order_id, result) do
     case store(state).resolve_inflight(store_ref(state), order_id, result, now_s()) do
       :new ->
-        state =
-          update_backoff(state, store(state).get_order(store_ref(state), order_id), result)
-
-        notify_result(state.result_fn, order_id, result)
+        order = store(state).get_order(store_ref(state), order_id)
+        state = update_backoff(state, order, result)
+        notify_result(state.result_fn, order_id, order, result)
         state
 
       :existing ->
@@ -354,8 +954,27 @@ defmodule DelegatedSpend.Keeper do
     end
   end
 
-  defp notify_result(result_fn, order_id, result) do
-    result_fn.({order_id, result})
+  # The notification carries the caller's OWN identifier, not just ours.
+  #
+  # `order_id` is minted here, from random bytes, and a producer has no way to
+  # resolve it: nothing it stored is keyed by it. A callback that can only say
+  # "some order finished" cannot tell anyone WHICH — a real consumer wired this
+  # up to notify the paying user and silently notified nobody, because every
+  # lookup by that id missed. `order_ref` is the identifier the producer minted
+  # and stored, so it is the one that can be joined back to.
+  #
+  # nil order_ref/user_ref/kind mean the order row is gone (a store that
+  # forgot, or a terminal result for an order pruned underneath us): the
+  # result is still worth delivering, and a consumer that cannot resolve it
+  # simply does nothing.
+  defp notify_result(result_fn, order_id, order, result) do
+    result_fn.(%{
+      order_id: order_id,
+      order_ref: order && Map.get(order, :order_ref),
+      user_ref: order && Map.get(order, :user_ref),
+      kind: order && Map.get(order, :kind),
+      result: result
+    })
   rescue
     error ->
       Logger.error(
@@ -380,6 +999,12 @@ defmodule DelegatedSpend.Keeper do
   defp update_backoff(state, %{user_ref: user_ref}, {:failed, :reverted}),
     do: %{state | reverts: Map.update(state.reverts, user_ref, 1, &(&1 + 1))}
 
+  # A simulation refusal counts too: signing authorizations that cannot clear
+  # is exactly the griefing this counter exists to bound (§5.2.1), whether or
+  # not the broadcast happened.
+  defp update_backoff(state, %{user_ref: user_ref}, {:refused, _reason}),
+    do: %{state | reverts: Map.update(state.reverts, user_ref, 1, &(&1 + 1))}
+
   defp update_backoff(state, _order, _result), do: state
 
   defp suspended?(_user_ref, %{max_reverts: 0}), do: false
@@ -387,10 +1012,24 @@ defmodule DelegatedSpend.Keeper do
   defp suspended?(user_ref, state),
     do: Map.get(state.reverts, user_ref, 0) >= state.max_reverts
 
-  defp order_kind(req) do
+  # `state` is threaded through so the "authorization" branch can refuse
+  # BEFORE the caller ever reaches `order_ref/3`/`put_order/2` (review I2): a
+  # disabled lane must not persist a phantom order or burn the caller-minted
+  # `order_ref` — a rejected registration must be retriable, byte-identical,
+  # with no trace left behind. `authorization_enabled?` is the same
+  # boot-computed predicate `execute_authorization` already trusts.
+  defp order_kind(req, state) do
     case Map.get(req, :kind, "permit") do
       "permit" ->
         {:ok, "permit"}
+
+      # The EIP-3009 lane's kind. Registrable like "permit": the order carries
+      # no routing payload of its own — the destination is the keeper's own
+      # treasury — so there is nothing extra to validate here.
+      "authorization" ->
+        if state.authorization_enabled?,
+          do: {:ok, "authorization"},
+          else: {:error, :authorization_lane_disabled}
 
       "bind" ->
         {:ok, "bind"}
@@ -450,10 +1089,14 @@ defmodule DelegatedSpend.Keeper do
   # Fail CLOSED when the app requires a binding but the loaded order has none
   # (e.g. a storage layer silently dropped `expected_owner`). Otherwise: set →
   # must match; unset → open (generic keeper / delegation lane).
-  defp owner_binding_ok?(order, permit, state) do
+  # `owner` is the address that signed the payment authorization: the permit's
+  # `owner` on the permit lane, the authorization's `from` on the EIP-3009 one.
+  # Deliberately ONE function for both — a duplicated security control is a
+  # control that eventually diverges.
+  defp owner_binding_ok?(order, owner, state) do
     case Map.get(order, :expected_owner) do
       nil -> not state.require_owner_binding
-      expected -> String.downcase(expected) == String.downcase(permit.owner)
+      expected -> Address.eq?(expected, owner)
     end
   end
 
@@ -465,6 +1108,63 @@ defmodule DelegatedSpend.Keeper do
   defp deadline_slack_ok?(permit, state) do
     now = chain_now(state)
     is_integer(permit.deadline) and permit.deadline >= now + state.min_deadline_slack_s
+  end
+
+  # Nothing in `auth` is server-authoritative — it is the payload a client
+  # hands us — so every field is type-checked before it is compared, encoded
+  # or handed to the Signer. Mirrors the permit lane's `is_integer(deadline)`
+  # guard, generalized: Elixir's total term ordering makes ANY binary greater
+  # than ANY integer, so an unguarded `valid_before > now` comparison lets a
+  # string sail through the expiry gate and get ABI-encoded into a uint256
+  # slot as garbage (which then reverts on-chain, on the sponsor's gas, and
+  # advances the payer's revert backoff).
+  defp valid_authorization_fields?(auth) when is_map(auth) do
+    value = Map.get(auth, :value)
+    valid_after = Map.get(auth, :valid_after)
+    valid_before = Map.get(auth, :valid_before)
+    signature = Map.get(auth, :signature)
+
+    is_integer(value) and value > 0 and value <= @uint256_max and
+      is_integer(valid_after) and valid_after >= 0 and valid_after <= @uint256_max and
+      is_integer(valid_before) and valid_before >= 0 and valid_before <= @uint256_max and
+      is_binary(signature) and byte_size(signature) > 0 and
+      address?(Map.get(auth, :from))
+  end
+
+  defp valid_authorization_fields?(_auth), do: false
+
+  # Defensive address validation at the trust boundary, in the same shape
+  # `DelegatedSpend.Orders.validate_address!/2` uses for the order-building
+  # side — as a PREDICATE, because here a malformed address must produce a
+  # typed refusal, not an exception: `Address.to_bytes/1` (via
+  # `Base.decode16!/2`) raises deep inside calldata construction otherwise.
+  # The zero address is rejected too: it is never a payer.
+  defp address?("0x" <> hex) when byte_size(hex) == 40 do
+    body = String.downcase(hex)
+    Regex.match?(~r/^[0-9a-f]{40}$/, body) and body != String.duplicate("0", 40)
+  end
+
+  defp address?(_other), do: false
+
+  # Unlike `deadline_slack_ok?/2`, there is no "0 disables the check" escape
+  # hatch here: `valid_before` is not an optional grief-prevention margin, it
+  # is the EIP-3009 authorization's OWN on-chain validity boundary — the
+  # token contract rejects the transfer once it passes, full stop.
+  # `:min_deadline_slack_s` only widens that mandatory margin when set.
+  #
+  # Both bounds are checked against ONE chain-time read. `valid_after` is
+  # STRICT (`valid_after >= now` refuses): EIP-3009 requires
+  # `block.timestamp > validAfter`, so an authorization whose `validAfter`
+  # equals the current block time still reverts on-chain — accepting it would
+  # only burn sponsor gas and advance the payer's revert backoff.
+  defp authorization_window(auth, state) do
+    now = chain_now(state)
+
+    cond do
+      auth.valid_before <= now + state.min_deadline_slack_s -> :expired
+      auth.valid_after >= now -> :not_yet_valid
+      true -> :ok
+    end
   end
 
   defp chain_now(%{rpc_mod: mod, rpc: rpc}) when not is_nil(mod) do

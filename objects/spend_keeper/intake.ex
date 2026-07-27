@@ -95,6 +95,16 @@ defmodule DelegatedSpend.Intake do
                 "bind" ->
                   Map.put(base, "current_wallet", wallet_view(ctx, user_ref))
 
+                "authorization" ->
+                  # Same withholding rule as "tx" above: nonce/to/domain are
+                  # exactly what is needed to sign and submit a valid
+                  # TransferWithAuthorization, so they are as executable as
+                  # the user_tx payload and must not be servable before the
+                  # current terms are accepted.
+                  if terms_required?,
+                    do: base,
+                    else: authorization_fields(base, view, ctx)
+
                 _ ->
                   base
               end
@@ -157,6 +167,74 @@ defmodule DelegatedSpend.Intake do
 
             {:failed, reason} ->
               {422, %{"status" => "failed", "reason" => to_string(reason)}}
+
+            # Simulation refused pre-broadcast: same wire status (the dapp's
+            # failure rendering already says "Nothing was charged", which is
+            # exactly true here) but the node's own reason instead of an atom.
+            {:refused, reason} ->
+              {422, %{"status" => "failed", "reason" => reason || "refused"}}
+
+            :unknown ->
+              {404, %{"error" => "not found"}}
+          end
+      end
+    else
+      {:error, status, body} -> {status, body}
+    end
+  end
+
+  @doc """
+  POST /authorization — EIP-3009 envelope wrapping a pending order. Same
+  authority chain as `handle_grant/3`: no work happens before authentication,
+  and the `user_ref` derives ONLY from verified `initData`.
+  """
+  def handle_authorization(params, ctx) when is_map(params) do
+    warn_missing_meta(ctx, "handle_authorization")
+    handle_authorization(params, %{}, ctx)
+  end
+
+  def handle_authorization(params, meta, ctx) when is_map(params) do
+    order_ref = to_string(params["order_ref"] || "")
+
+    with :ok <- geofence(meta, ctx),
+         {:ok, user_ref} <- authenticate(params, ctx, order_ref),
+         :ok <- allow(ctx, user_ref),
+         :ok <- require_terms(ctx, user_ref) do
+      case GrantValidation.validate_authorization(params["authorization"] || %{}, ctx.pinned) do
+        {:error, {:pinned_mismatch, :version}} ->
+          {409, %{"error" => "version mismatch"}}
+
+        {:error, {:pinned_mismatch, field}} ->
+          {422, %{"error" => "pinned mismatch", "field" => to_string(field)}}
+
+        {:error, {:invalid, field}} ->
+          {422, %{"error" => "invalid", "field" => to_string(field)}}
+
+        {:ok, auth} ->
+          case Keeper.execute_with_authorization(ctx.keeper, order_ref, user_ref, auth) do
+            :pending ->
+              record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
+              {200, %{"status" => "pending"}}
+
+            {:submitted, hash} ->
+              record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
+              {200, %{"status" => "submitted", "tx" => hash}}
+
+            {:mined, hash} ->
+              record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
+              {200, %{"status" => "mined", "tx" => hash}}
+
+            {:failed, :not_found} ->
+              {404, %{"error" => "not found"}}
+
+            {:failed, reason} ->
+              {422, %{"status" => "failed", "reason" => to_string(reason)}}
+
+            # Simulation refused pre-broadcast: same wire status (the dapp's
+            # failure rendering already says "Nothing was charged", which is
+            # exactly true here) but the node's own reason instead of an atom.
+            {:refused, reason} ->
+              {422, %{"status" => "failed", "reason" => reason || "refused"}}
 
             :unknown ->
               {404, %{"error" => "not found"}}
@@ -337,8 +415,21 @@ defmodule DelegatedSpend.Intake do
     case {params["token"], Map.get(ctx, :token_secret)} do
       {token, secret} when is_binary(token) and is_binary(secret) ->
         case Token.verify(secret, ref, token, now_s) do
-          {:ok, user_ref} -> {:ok, user_ref}
-          {:error, _reason} -> {:error, 401, %{"error" => "unauthorized"}}
+          {:ok, user_ref} ->
+            {:ok, user_ref}
+
+          # An expired token with a VALID mac is proof of possession — naming
+          # its expiry reveals nothing the holder didn't have, and the truth
+          # is actionable ("ask the chat for a fresh link"). The 2026-07-27
+          # live test read "could not verify your Telegram session" on a
+          # simply-stale link, whose advice (reopen the same page) loops the
+          # user back into the same dead link.
+          {:error, :expired} ->
+            {:error, 401, %{"error" => "link_expired"}}
+
+          # A token that fails the mac stays reason-blind: no probe help.
+          {:error, _reason} ->
+            {:error, 401, %{"error" => "unauthorized"}}
         end
 
       _ ->
@@ -405,6 +496,28 @@ defmodule DelegatedSpend.Intake do
   end
 
   defp invalid(field), do: {422, %{"error" => "invalid", "field" => to_string(field)}}
+
+  # Everything the dapp needs to compose the TransferWithAuthorization
+  # EIP-712 payload — `Keeper.authorization_view_fields/5` shares this merge
+  # with `DelegatedSpend.Keeper.Object`'s registration ack (review M7), both
+  # reading the SAME boot-verified domain (nothing is re-derived here).
+  # `:disabled` only if the keeper's authorization lane was somehow turned
+  # off after an "authorization"-kind order was already registered against
+  # it (config is fixed at boot, so this is a defensive no-op in practice,
+  # not a real runtime state) — degrades to serving the plain view rather
+  # than a 5xx.
+  defp authorization_fields(base, view, ctx) do
+    case Keeper.authorization_view_fields(
+           ctx.keeper,
+           view.order_ref,
+           view.amount,
+           view.expires_at,
+           base
+         ) do
+      {:ok, merged} -> merged
+      :disabled -> base
+    end
+  end
 
   defp wallet_view(ctx, user_ref) do
     case Map.get(ctx, :wallet_view_fn) do

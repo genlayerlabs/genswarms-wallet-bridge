@@ -1,0 +1,29 @@
+{
+  "module": "DelegatedSpend.Keeper.Object",
+  "files": [
+    "objects/spend_keeper/evm/keccak.ex",
+    "objects/spend_keeper/evm/secp256k1.ex",
+    "objects/spend_keeper/evm/address.ex",
+    "objects/spend_keeper/evm/abi.ex",
+    "objects/spend_keeper/evm/rpc.ex",
+    "objects/spend_keeper/evm/tx1559.ex",
+    "objects/spend_keeper/evm/artifacts.ex",
+    "objects/spend_keeper/store.ex",
+    "objects/spend_keeper/signer.ex",
+    "objects/spend_keeper/permit_lane.ex",
+    "objects/spend_keeper/keeper.ex",
+    "objects/spend_keeper/compliance/store.ex",
+    "objects/spend_keeper/compliance/geo.ex",
+    "objects/spend_keeper/compliance/terms.ex",
+    "objects/spend_keeper/compliance/meta.ex",
+    "objects/spend_keeper/compliance/compliance.ex",
+    "objects/spend_keeper/intake/token.ex",
+    "objects/spend_keeper/intake/telegram_auth.ex",
+    "objects/spend_keeper/intake/grant_validation.ex",
+    "objects/spend_keeper/intake.ex",
+    "objects/spend_keeper/intake/plug.ex",
+    "objects/spend_keeper/orders.ex",
+    "objects/spend_keeper/boot_check.ex",
+    "objects/spend_keeper/object.ex"
+  ]
+}

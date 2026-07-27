@@ -129,6 +129,36 @@ defmodule DelegatedSpend.SignerTest do
     _ = original_hash
   end
 
+  # The 2026-07-27 dry-relayer live test: the node answered
+  # `insufficient funds` — a PARSED, definitive "no" — and the fire-and-forget
+  # broadcast reported {:ok, hash} anyway. The user read "Payment submitted ✓"
+  # and would have waited forever; the local nonce advanced past the chain's
+  # and bricked the relayer until restart. A clean JSON-RPC error object IS
+  # the node answering; only transport-level failures are ambiguous.
+  test "a definitive node rejection frees the nonce and reports {:rejected, err}" do
+    {fake, signer} = start_signer()
+
+    FakeRpc.put(
+      fake,
+      :send_raw_fail,
+      {:rpc_error, "eth_sendRawTransaction",
+       %{"code" => -32003, "message" => "insufficient funds for gas * price + value"}}
+    )
+
+    assert {:error, {:rejected, %{"code" => -32003}}} = Signer.submit(signer, "k1", @tx)
+
+    # nothing broadcast, nothing pending — the sweep must not watch a ghost
+    assert FakeRpc.sent(fake) == []
+    assert Signer.status(signer, "k1") == :unknown
+
+    # the nonce was NOT consumed: after a refill the next action uses it,
+    # instead of queueing forever behind a gap the chain never saw
+    FakeRpc.put(fake, :send_raw_fail, nil)
+    assert {:ok, _} = Signer.submit(signer, "k2", @tx)
+    assert [raw] = FakeRpc.sent(fake)
+    assert nonce_of(raw) == 5
+  end
+
   test "broadcast error is ambiguous: hash stays pending and nonce remains reserved" do
     {fake, signer} = start_signer(%{send_raw_fail: :nonce_race})
     assert {:ok, hash} = Signer.submit(signer, "k1", @tx)
@@ -148,10 +178,10 @@ defmodule DelegatedSpend.SignerTest do
     {fake, signer} = start_signer()
 
     failures = [
-      fn _ -> :not_found end,
-      fn _ -> raise "store down" end,
-      fn _ -> exit(:store_down) end,
-      fn _ -> throw(:store_down) end
+      fn _hash, _cost -> :not_found end,
+      fn _hash, _cost -> raise "store down" end,
+      fn _hash, _cost -> exit(:store_down) end,
+      fn _hash, _cost -> throw(:store_down) end
     ]
 
     Enum.with_index(failures, fn persist_hash_fn, index ->
@@ -181,7 +211,7 @@ defmodule DelegatedSpend.SignerTest do
 
     {:ok, writes} = Agent.start_link(fn -> 0 end)
 
-    persist_hash_fn = fn _hash ->
+    persist_hash_fn = fn _hash, _cost ->
       Agent.get_and_update(writes, fn
         0 -> {:ok, 1}
         count -> {:not_found, count + 1}
@@ -225,6 +255,139 @@ defmodule DelegatedSpend.SignerTest do
 
     assert [_raw_create, raw_address] = FakeRpc.sent(fake)
     assert raw_create != raw_address
+  end
+
+  # ── Task 3b: gas-spend accounting + low-balance alarm ────────────────────
+
+  test "persist_hash_fn receives the FULL cost estimate on the initial broadcast, before send_raw" do
+    {fake, signer} = start_signer()
+    {:ok, costs} = Agent.start_link(fn -> [] end)
+
+    persist_hash_fn = fn hash, cost_wei ->
+      Agent.update(costs, &[{hash, cost_wei} | &1])
+      :ok
+    end
+
+    assert {:ok, hash} = Signer.submit(signer, "k1", @tx, persist_hash_fn)
+    # gas(100_000, headroomed 1.3x) * max_fee(base 10e9 *2 + prio 1e9) — the
+    # SAME numbers do_submit itself computes, handed to the caller directly
+    # rather than read back afterward.
+    assert [{^hash, cost}] = Agent.get(costs, & &1)
+    assert cost == div(100_000 * 13, 10) * 21_000_000_000
+    # the cost was reported BEFORE the broadcast, not after
+    assert FakeRpc.sent(fake) == [] or length(FakeRpc.sent(fake)) == 1
+  end
+
+  test "persist_hash_fn receives only the DELTA on a fee-bumped replacement, not the full re-estimate" do
+    {fake, signer} = start_signer()
+    :ok = GenServer.stop(signer)
+
+    {:ok, signer2} =
+      Signer.start_link(
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000,
+        bump_after_ms: 0
+      )
+
+    {:ok, costs} = Agent.start_link(fn -> [] end)
+    persist_hash_fn = fn hash, cost_wei -> Agent.update(costs, &[{hash, cost_wei} | &1]) end
+
+    {:ok, _hash} = Signer.submit(signer2, "k1", @tx, persist_hash_fn)
+    Process.sleep(5)
+    :ok = Signer.sweep_now(signer2)
+
+    assert [{original_hash, original_cost}, {bumped_hash, bump_cost}] =
+             Agent.get(costs, & &1) |> Enum.reverse()
+
+    refute bumped_hash == original_hash
+    assert original_cost == div(100_000 * 13, 10) * 21_000_000_000
+
+    bumped_max_fee = div(21_000_000_000 * 5, 4) + 1
+    full_bumped_estimate = div(100_000 * 13, 10) * bumped_max_fee
+    # only the delta is reported for the bump — NOT the full re-estimate,
+    # which would double-count what the initial broadcast already recorded.
+    assert bump_cost == full_bumped_estimate - original_cost
+    refute bump_cost == full_bumped_estimate
+  end
+
+  defp start_signer_with_balance(low_balance_wei, balance) do
+    fake = FakeRpc.start(%{chain_id: 84_532, nonce: 5, simulate: :ok, balance: balance})
+
+    {:ok, signer} =
+      Signer.start_link(
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000,
+        low_balance_wei: low_balance_wei
+      )
+
+    {fake, signer}
+  end
+
+  test "low_balance_wei: below threshold warns once per sweep with the metric name in the log" do
+    {_fake, signer} = start_signer_with_balance(1_000, 500)
+
+    log = ExUnit.CaptureLog.capture_log(fn -> Signer.sweep_now(signer) end)
+    assert log =~ "keeper_relayer_low_balance"
+    assert log =~ "500"
+    assert log =~ "1000"
+  end
+
+  test "low_balance_wei: at or above threshold stays quiet" do
+    {_fake, signer} = start_signer_with_balance(1_000, 1_000)
+    log = ExUnit.CaptureLog.capture_log(fn -> Signer.sweep_now(signer) end)
+    refute log =~ "keeper_relayer_low_balance"
+  end
+
+  test "low_balance_wei absent: no warning even on a near-empty wallet" do
+    {fake, signer} = start_signer()
+    FakeRpc.put(fake, :balance, 0)
+    log = ExUnit.CaptureLog.capture_log(fn -> Signer.sweep_now(signer) end)
+    refute log =~ "keeper_relayer_low_balance"
+  end
+
+  # Reviewer's flagged gap (Cannot-verify): a raising balance/2 during a
+  # sweep tick must not crash the sweep, and the stuck-tx rescue/bump logic
+  # (do_sweep's Enum.reduce over state.pending, run AFTER check_low_balance's
+  # return value is discarded) must still complete — same reasoning as the
+  # already-tested safe_receipt/2 rescue/catch shape.
+  test "low_balance_wei: a raising balance() during sweep does not crash the sweep, and stuck-tx rescue still runs" do
+    fake =
+      FakeRpc.start(%{chain_id: 84_532, nonce: 5, simulate: :ok, balance_raises: true})
+
+    {:ok, signer} =
+      Signer.start_link(
+        rpc_url: fake,
+        chain_id: 84_532,
+        priv: @anvil0,
+        rpc_mod: FakeRpc,
+        sweep_ms: 3_600_000,
+        bump_after_ms: 0,
+        low_balance_wei: 1_000
+      )
+
+    {:ok, _hash} = Signer.submit(signer, "k1", @tx)
+    Process.sleep(5)
+
+    log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = Signer.sweep_now(signer) end)
+    # the balance read raised → safe_balance/1 returns nil → check_low_balance
+    # treats that as :ok (no warning), NOT a crash.
+    refute log =~ "keeper_relayer_low_balance"
+    assert Process.alive?(signer)
+
+    # the stuck tx was still bumped despite the balance-read failure — the
+    # sweep's rescue/bump logic runs regardless of check_low_balance/1's
+    # outcome (its return value is discarded by do_sweep).
+    raws = FakeRpc.sent(fake)
+    assert length(raws) == 2
+    [original, bumped] = raws
+    assert nonce_of(original) == nonce_of(bumped)
+    assert max_fee_of(bumped) > max_fee_of(original)
   end
 
   test "unexpected info messages do not disturb signer state" do

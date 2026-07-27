@@ -6,7 +6,7 @@ defmodule GenswarmsDelegatedSpend.MixProject do
   def project do
     [
       app: :genswarms_delegated_spend,
-      version: "0.6.0",
+      version: "0.8.0",
       elixir: "~> 1.14",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -26,7 +26,11 @@ defmodule GenswarmsDelegatedSpend.MixProject do
     [
       {:ex_abi, "~> 0.8"},
       {:ex_rlp, "~> 0.6"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      # Optional: only needed by consumers that mount DelegatedSpend.Intake.Plug
+      # (the module compiles to nothing when plug is absent). Optional deps are
+      # still fetched for the package itself, so its own tests exercise it.
+      {:plug, "~> 1.15", optional: true}
     ]
   end
 end

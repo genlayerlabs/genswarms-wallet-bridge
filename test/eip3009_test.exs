@@ -1,0 +1,132 @@
+defmodule DelegatedSpend.Eip3009Test do
+  use ExUnit.Case, async: true
+
+  alias DelegatedSpend.Keeper.Eip3009
+
+  @domain <<1::256>>
+  @from "0x1111111111111111111111111111111111111111"
+  @to "0x2222222222222222222222222222222222222222"
+  @nonce <<3::256>>
+
+  test "el dígito es de 32 bytes y cambia con cada campo" do
+    base = Eip3009.authorization_digest(@domain, @from, @to, 1_000_000, 0, 99, @nonce)
+    assert byte_size(base) == 32
+
+    # Cada campo debe entrar en el dígito. Si alguno no entra, la firma del
+    # usuario cubriría menos de lo que cree estar firmando.
+    refute base == Eip3009.authorization_digest(<<9::256>>, @from, @to, 1_000_000, 0, 99, @nonce)
+    refute base == Eip3009.authorization_digest(@domain, @to, @to, 1_000_000, 0, 99, @nonce)
+    refute base == Eip3009.authorization_digest(@domain, @from, @from, 1_000_000, 0, 99, @nonce)
+    refute base == Eip3009.authorization_digest(@domain, @from, @to, 1_000_001, 0, 99, @nonce)
+    refute base == Eip3009.authorization_digest(@domain, @from, @to, 1_000_000, 1, 99, @nonce)
+    refute base == Eip3009.authorization_digest(@domain, @from, @to, 1_000_000, 0, 100, @nonce)
+    refute base == Eip3009.authorization_digest(@domain, @from, @to, 1_000_000, 0, 99, <<4::256>>)
+  end
+
+  test "la calldata usa la sobrecarga de firma en bytes y codifica los dinámicos" do
+    sig = :binary.copy(<<0xAB>>, 65)
+    data = Eip3009.transfer_with_authorization_calldata(@from, @to, 1_000_000, 0, 99, @nonce, sig)
+
+    assert String.starts_with?(data, "0xcf092995")
+
+    body = data |> String.replace_prefix("0x", "") |> Base.decode16!(case: :lower)
+    <<_selector::binary-4, rest::binary>> = body
+
+    # 6 palabras de cabecera, luego el desplazamiento (0xe0 = 7*32) y la longitud.
+    <<_from::binary-32, _to::binary-32, value::256, valid_after::256, valid_before::256,
+      nonce::binary-32, offset::256, len::256, tail::binary>> = rest
+
+    assert value == 1_000_000
+    assert valid_after == 0
+    assert valid_before == 99
+    assert nonce == @nonce
+    assert offset == 0xE0
+    assert len == 65
+    # 65 bytes se rellenan a 96 (3 palabras); el relleno debe ser ceros.
+    assert byte_size(tail) == 96
+    assert :binary.part(tail, 0, 65) == sig
+    assert :binary.part(tail, 65, 31) == <<0::248>>
+  end
+
+  test "rechaza una firma de longitud imposible" do
+    assert_raise ArgumentError, fn ->
+      Eip3009.transfer_with_authorization_calldata(@from, @to, 1, 0, 99, @nonce, <<>>)
+    end
+  end
+
+  describe "domain_separator/4" do
+    test "es de 32 bytes y cambia con cada campo del dominio" do
+      base = Eip3009.domain_separator("USDC", "2", 84_532, @to)
+      assert byte_size(base) == 32
+
+      refute base == Eip3009.domain_separator("USDT", "2", 84_532, @to)
+      refute base == Eip3009.domain_separator("USDC", "1", 84_532, @to)
+      refute base == Eip3009.domain_separator("USDC", "2", 8453, @to)
+      refute base == Eip3009.domain_separator("USDC", "2", 84_532, @from)
+    end
+
+    test "coincide con la formula EIP-712 de dominio (4 campos) usada por los vectores de permit" do
+      # Misma formula que el helper privado de test/permit_vectors_test.exs —
+      # ambas lanes comparten el mismo tipo de dominio EIP712Domain(name,
+      # version, chainId, verifyingContract), sólo cambia el typehash del
+      # mensaje (Permit vs TransferWithAuthorization).
+      alias DelegatedSpend.Keccak
+      alias DelegatedSpend.Evm.Address
+
+      name = "USDC"
+      version = "2"
+      chain_id = 84_532
+
+      expected =
+        Keccak.hash_256(
+          Keccak.hash_256(
+            "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+          ) <>
+            Keccak.hash_256(name) <>
+            Keccak.hash_256(version) <>
+            <<chain_id::256>> <>
+            <<0::96>> <> Address.to_bytes(@to)
+        )
+
+      assert Eip3009.domain_separator(name, version, chain_id, @to) == expected
+    end
+
+    test "matches the live Base Sepolia USDC contract's DOMAIN_SEPARATOR() — externally verified, not derived from this codebase (review I3)" do
+      # `test/support/fake_rpc.ex`'s default answer for DOMAIN_SEPARATOR() is
+      # COMPUTED by this same production function, and the other test above
+      # rebuilds its "expected" value with the same Keccak/Address building
+      # blocks the implementation uses — both are circular by construction: a
+      # wrong typehash, a swapped field order, or an unhashed name/version
+      # would pass every one of them. This assertion is anchored to a value
+      # the implementation cannot influence:
+      #
+      #   cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+      #     "DOMAIN_SEPARATOR()" --rpc-url <base-sepolia-rpc>
+      #
+      # on Base Sepolia's real USDC contract, where name() == "USDC" and
+      # version() == "2" (confirmed on the same live contract; Base
+      # MAINNET's USDC answers name() == "USD Coin", not "USDC" — see the
+      # fixture comment fix in fake_rpc.ex).
+      usdc_base_sepolia = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+
+      live_domain_separator =
+        Base.decode16!("71f17a3b2ff373b803d70a5a07c046c1a2bc8e89c09ef722fcb047abe94c9818",
+          case: :lower
+        )
+
+      assert Eip3009.domain_separator("USDC", "2", 84_532, usdc_base_sepolia) ==
+               live_domain_separator
+    end
+
+    test "typehash/0 matches the canonical EIP-3009 TransferWithAuthorization typehash — externally verified (review I3)" do
+      # `cast keccak "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"`
+      # agrees with this value.
+      canonical_typehash =
+        Base.decode16!("7c7c6cdb67a18743f49ec6fa9b35f50d52ed05cbed4cc592e13b44501c1a2267",
+          case: :lower
+        )
+
+      assert Eip3009.typehash() == canonical_typehash
+    end
+  end
+end

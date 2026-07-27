@@ -62,6 +62,36 @@ defmodule DelegatedSpend.StoreTest do
              MemoryStore.list_inflight(store)
   end
 
+  # The kind gate is a MONEY gate, not a detail: `begin_execution/4` consumes
+  # the order and opens its durable execution record, so whatever it accepts
+  # is what the keeper is allowed to broadcast. Both executable lanes must
+  # pass; every transport kind must be refused indistinguishably from
+  # not-found. Any host SQL adapter has to reproduce exactly this.
+  test "begin_execution accepts both executable lanes and refuses every other kind" do
+    for kind <- ["permit", "authorization"] do
+      store = MemoryStore.start()
+      :ok = MemoryStore.put_order(store, Map.put(@order, :kind, kind))
+
+      assert {:ok, %{order_id: "oid-1"}} =
+               MemoryStore.begin_execution(store, "oid-1", "u-a", "ak")
+
+      assert :pending = MemoryStore.get_execution_status(store, "oid-1")
+    end
+
+    # "user_tx" and "bind" are wallet-order transport — the USER's wallet
+    # broadcasts them, the keeper never does, and `user_tx` carries a
+    # CLIENT-SHAPED `tx` map. If someone widens the gate to `true ->`, this
+    # goes red.
+    for kind <- ["user_tx", "bind", "anything_else"] do
+      store = MemoryStore.start()
+      :ok = MemoryStore.put_order(store, Map.put(@order, :kind, kind))
+      assert :not_found = MemoryStore.begin_execution(store, "oid-1", "u-a", "ak")
+      # refused means untouched: nothing consumed, no durable execution row
+      assert :unknown = MemoryStore.get_execution_status(store, "oid-1")
+      assert {:ok, _} = MemoryStore.consume_order(store, "oid-1", "u-a")
+    end
+  end
+
   test "grant lifecycle: put, get, revoke; scoped by user_ref" do
     store = MemoryStore.start()
     assert :ok = MemoryStore.revoke_grant(store, "missing", "u-a")
@@ -80,6 +110,32 @@ defmodule DelegatedSpend.StoreTest do
     :ok = MemoryStore.record_spend(store, "u-b", 99, 200)
     assert MemoryStore.spent_since(store, "u-a", 150) == 20
     assert MemoryStore.spent_since(store, "u-a", 0) == 30
+  end
+
+  # Gas-policy accounting (Task 3b, spec §5): the RELAYER's own gas spend,
+  # tracked WITHOUT a user_ref — it protects the sponsor's balance/day as a
+  # whole, not any single payer's grant, unlike the product-spend mirror
+  # above.
+  test "gas spend accounting mirror: relayer-wide, no user_ref" do
+    store = MemoryStore.start()
+    :ok = MemoryStore.record_gas_spend(store, 10, 100, 0)
+    :ok = MemoryStore.record_gas_spend(store, 20, 200, 0)
+    assert MemoryStore.gas_spent_since(store, 150) == 20
+    assert MemoryStore.gas_spent_since(store, 0) == 30
+  end
+
+  # Fix wave (Minor #4): each write prunes entries older than ITS OWN
+  # `prune_before` cutoff — the caller (keeper.ex) always passes
+  # `at - @gas_budget_window_s`, so a long-running in-memory store never
+  # accumulates gas-spend history past the rolling window it is ever read
+  # against. Only exercised when the daily budget is configured (the only
+  # caller of this write path, per Minor #3).
+  test "gas spend accounting mirror: each write prunes entries older than its own cutoff" do
+    store = MemoryStore.start()
+    :ok = MemoryStore.record_gas_spend(store, 10, 100, 0)
+    # this write's cutoff (150) prunes the wei=10/at=100 entry recorded above
+    :ok = MemoryStore.record_gas_spend(store, 20, 200, 150)
+    assert MemoryStore.gas_spent_since(store, 0) == 20
   end
 
   test "execution status is durable and the first terminal result records mined spend once" do

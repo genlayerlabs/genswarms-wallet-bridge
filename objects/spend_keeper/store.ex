@@ -15,8 +15,10 @@ defmodule DelegatedSpend.Keeper.Store do
       spec §6.1). Internal reconciliation reads use server-minted `order_id`.
     * Grants are keyed by app-supplied opaque `user_ref` — never raw platform
       ids; implementations must never log grant bodies (spec §10).
-    * `begin_execution/4` atomically consumes a permit order and creates its
-      durable `:pending` execution record.
+    * `begin_execution/4` atomically consumes an executable order (permit or
+      authorization lane) and creates its durable `:pending` execution
+      record. "bind" and "user_tx" orders are never passed here — they never
+      broadcast.
     * The first terminal resolution wins, and a mined resolution records its
       spend in the same atomic write.
     * Terminal status is retained for as long as its order remains queryable.
@@ -31,6 +33,9 @@ defmodule DelegatedSpend.Keeper.Store do
           | {:submitted, String.t()}
           | {:mined, String.t()}
           | {:failed, term}
+          # simulation gate declined pre-broadcast: zero gas spent. The term
+          # is the node's decoded revert reason (or nil) — see Keeper moduledoc.
+          | {:refused, String.t() | nil}
   @type order :: %{
           required(:order_id) => String.t(),
           required(:order_ref) => String.t(),
@@ -51,6 +56,26 @@ defmodule DelegatedSpend.Keeper.Store do
   @callback record_spend(ref :: term, user_ref, amount :: non_neg_integer, at :: integer) :: :ok
   @callback spent_since(ref :: term, user_ref, since :: integer) :: non_neg_integer
 
+  # Gas-policy accounting (Task 3b, spec §5): the RELAYER's own gas spend, NOT
+  # scoped by user_ref — the daily gas budget protects the sponsor's balance
+  # as a whole, not any one payer's grant, so there is nothing to key it by.
+  #
+  # `prune_before` (fix wave, Minor #4): the caller (keeper.ex, the only
+  # writer of this callback, gated on :daily_gas_budget_wei being configured
+  # per Minor #3) always passes `at - @gas_budget_window_s` — every write
+  # prunes entries older than the caller's OWN rolling window, so a
+  # long-running in-memory store never accumulates history the budget check
+  # will never read again. The window's actual length is a keeper concern,
+  # not a store one; the store just drops whatever is older than the cutoff
+  # it's handed.
+  @callback record_gas_spend(
+              ref :: term,
+              wei :: non_neg_integer,
+              at :: integer,
+              prune_before :: integer
+            ) :: :ok
+  @callback gas_spent_since(ref :: term, since :: integer) :: non_neg_integer
+
   @callback put_order(ref :: term, order) :: :ok
   @callback get_order(ref :: term, order_id :: String.t()) :: order | nil
   @callback get_order_by_ref(ref :: term, order_ref :: String.t(), user_ref) :: order | nil
@@ -69,7 +94,7 @@ defmodule DelegatedSpend.Keeper.Store do
   @callback resolve_inflight(
               ref :: term,
               order_id :: String.t(),
-              result :: {:mined, String.t()} | {:failed, term},
+              result :: {:mined, String.t()} | {:failed, term} | {:refused, String.t() | nil},
               at :: integer
             ) :: :new | :existing
   @callback list_inflight(ref :: term) :: [
@@ -91,6 +116,7 @@ defmodule DelegatedSpend.Keeper.MemoryStore do
         %{
           grants: %{},
           spends: [],
+          gas_spends: [],
           orders: %{},
           by_ref: %{},
           consumed: %{},
@@ -145,6 +171,26 @@ defmodule DelegatedSpend.Keeper.MemoryStore do
   end
 
   @impl true
+  def record_gas_spend(pid, wei, at, prune_before) do
+    Agent.update(pid, fn s ->
+      gas_spends =
+        [{wei, at} | s.gas_spends]
+        |> Enum.filter(fn {_wei, ts} -> ts >= prune_before end)
+
+      %{s | gas_spends: gas_spends}
+    end)
+  end
+
+  @impl true
+  def gas_spent_since(pid, since) do
+    Agent.get(pid, fn s ->
+      s.gas_spends
+      |> Enum.filter(fn {_wei, at} -> at >= since end)
+      |> Enum.reduce(0, fn {wei, _at}, acc -> acc + wei end)
+    end)
+  end
+
+  @impl true
   def put_order(pid, order) do
     Agent.update(pid, fn s ->
       s
@@ -195,7 +241,10 @@ defmodule DelegatedSpend.Keeper.MemoryStore do
             s.consumed[order_id] ->
               {:already_consumed, s}
 
-            Map.get(order, :kind, "permit") != "permit" ->
+            # Both executable lanes may begin execution here; "bind" and
+            # "user_tx" orders never broadcast (the keeper never calls this
+            # for them), so they stay excluded on purpose.
+            Map.get(order, :kind, "permit") not in ["permit", "authorization"] ->
               {:not_found, s}
 
             true ->

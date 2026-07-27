@@ -131,4 +131,91 @@ defmodule DelegatedSpend.GrantValidationTest do
     assert {:ok, permit} = GrantValidation.validate_permit(env(%{"sig" => sig}), @pinned)
     assert permit.v == 28
   end
+
+  describe "validate_authorization/2" do
+    defp auth_env(overrides \\ %{}) do
+      Map.merge(
+        %{
+          "v" => "0.2.0",
+          "chain_id" => 84_532,
+          "token" => "0x0000000000000000000000000000000000000aaa",
+          "from" => "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+          "value" => 1_000_000,
+          "valid_after" => 0,
+          "valid_before" => 4_000_000_000,
+          "signature" => "0x" <> String.duplicate("11", 65)
+        },
+        overrides
+      )
+    end
+
+    test "valid envelope passes and maps to the execute_with_authorization/4 shape" do
+      assert {:ok, auth} = GrantValidation.validate_authorization(auth_env(), @pinned)
+      assert auth.from == "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+      assert auth.value == 1_000_000
+      assert auth.valid_after == 0
+      assert auth.valid_before == 4_000_000_000
+      assert byte_size(auth.signature) == 65
+    end
+
+    test "there is no :router pin — @pinned.router is never consulted" do
+      pinned_without_router = Map.delete(@pinned, :router)
+      assert {:ok, _} = GrantValidation.validate_authorization(auth_env(), pinned_without_router)
+    end
+
+    test "a client-sent \"to\" is ignored — not even read" do
+      assert {:ok, auth} =
+               GrantValidation.validate_authorization(auth_env(%{"to" => "0xdead"}), @pinned)
+
+      refute Map.has_key?(auth, :to)
+    end
+
+    test "pinned mismatches reject typed; version mismatch keeps its own atom" do
+      for {key, bad, field} <- [
+            {"v", "0.0.9", :version},
+            {"chain_id", 8_453, :chain_id},
+            {"token", "0x0000000000000000000000000000000000000ccc", :token}
+          ] do
+        assert {:error, {:pinned_mismatch, ^field}} =
+                 GrantValidation.validate_authorization(auth_env(%{key => bad}), @pinned)
+      end
+    end
+
+    test "invalid values reject: zero/negative value, malformed from, empty signature" do
+      assert {:error, {:invalid, :value}} =
+               GrantValidation.validate_authorization(auth_env(%{"value" => 0}), @pinned)
+
+      assert {:error, {:invalid, :value}} =
+               GrantValidation.validate_authorization(auth_env(%{"value" => "1"}), @pinned)
+
+      assert {:error, {:invalid, :from}} =
+               GrantValidation.validate_authorization(auth_env(%{"from" => "0xzz"}), @pinned)
+
+      assert {:error, {:invalid, :valid_after}} =
+               GrantValidation.validate_authorization(auth_env(%{"valid_after" => -1}), @pinned)
+
+      assert {:error, {:invalid, :valid_before}} =
+               GrantValidation.validate_authorization(auth_env(%{"valid_before" => 0}), @pinned)
+
+      for bad_sig <- ["", nil, "0x", "deadbeef"] do
+        assert {:error, {:invalid, :signature}} =
+                 GrantValidation.validate_authorization(
+                   auth_env(%{"signature" => bad_sig}),
+                   @pinned
+                 )
+      end
+    end
+
+    test "valid_after accepts zero (unlike value/valid_before, which must be positive)" do
+      assert {:ok, auth} =
+               GrantValidation.validate_authorization(auth_env(%{"valid_after" => 0}), @pinned)
+
+      assert auth.valid_after == 0
+    end
+
+    test "non-map envelope rejects" do
+      assert {:error, {:invalid, :envelope}} =
+               GrantValidation.validate_authorization(nil, @pinned)
+    end
+  end
 end

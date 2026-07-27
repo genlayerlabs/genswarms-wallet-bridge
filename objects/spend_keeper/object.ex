@@ -52,13 +52,33 @@ defmodule DelegatedSpend.Keeper.Object do
        "order": {"order_ref": "<64 lowercase hex>",
                  "user_ref": "...", "amount": 25000000,
                  "action_args": ["0x<hex>", 25000000, "0x<hex>"],
-                 "expected_owner": "0x..."}}          // optional
+                 "expected_owner": "0x...",            // optional
+                 "kind": "authorization"}}              // optional, default "permit"
 
       {"action": "order_status", "order_id": "0x..."}
       {"action": "reset_backoff", "user_ref": "..."}
 
   `action_args` carry EVM values over JSON: integers stay integers, `0x`-hex
   strings are decoded to raw binaries (matching the action's `arg_types`).
+
+  ## `kind: "authorization"` (EIP-3009) — an enriched ack
+
+  A `register_order` for the authorization lane returns everything the
+  wallet dapp needs to compose the `TransferWithAuthorization` EIP-712
+  payload — `order_ref`, `nonce` (0x-hex, derived deterministically from the
+  order ref — see `DelegatedSpend.Orders.authorization_nonce/1`), `to` (the
+  keeper's treasury), `value`, `valid_after`/`valid_before`, `token`,
+  `chain_id`, and the `domain` object (`name`/`version`/`chainId`/
+  `verifyingContract`) — the SAME fields the keeper cross-checked against
+  the on-chain `DOMAIN_SEPARATOR` at boot (`DelegatedSpend.Keeper
+  .authorization_domain/1`), never re-derived here. The destination and
+  nonce are picked by the SERVER; the dapp shows them but does not choose
+  them. Refused (`ok: false, error: "authorization_lane_disabled"`) if the
+  keeper wasn't configured for this lane — refused BEFORE the order is
+  persisted (`DelegatedSpend.Keeper`'s `register_order` gates on
+  `authorization_enabled?` ahead of the store write), so a refused
+  registration never strands the caller-minted `order_ref`: the identical
+  payload can be retried once the lane is enabled (review I2).
   """
 
   alias DelegatedSpend.Keeper
@@ -148,9 +168,15 @@ defmodule DelegatedSpend.Keeper.Object do
       # The core re-checks `source` against ITS allowlist — registration
       # authority stays in one place even if the door's list drifts wider.
       case Keeper.register_order(state.keeper, source, req) do
-        {:ok, ack} -> Map.merge(%{"ok" => true, "action" => "register_order"}, jsonable(ack))
-        {:error, {:unknown_source, s}} -> err("unknown_source", s)
-        {:error, reason} -> err(to_string(reason), "register_order refused")
+        {:ok, ack} ->
+          base = Map.merge(%{"ok" => true, "action" => "register_order"}, jsonable(ack))
+          authorization_ack(req, ack, state, base)
+
+        {:error, {:unknown_source, s}} ->
+          err("unknown_source", s)
+
+        {:error, reason} ->
+          err(to_string(reason), "register_order refused")
       end
     else
       {:error, detail} -> err("bad_request", detail)
@@ -165,6 +191,9 @@ defmodule DelegatedSpend.Keeper.Object do
       {:submitted, hash} -> %{"ok" => true, "status" => "submitted", "tx" => hash}
       {:mined, hash} -> %{"ok" => true, "status" => "mined", "tx" => hash}
       {:failed, reason} -> %{"ok" => true, "status" => "failed", "reason" => to_string(reason)}
+      # pre-broadcast simulation refusal — zero gas spent, distinct from
+      # "failed" so a consumer can tell the user nothing was sent
+      {:refused, reason} -> %{"ok" => true, "status" => "refused", "reason" => reason}
     end
   end
 
@@ -175,6 +204,38 @@ defmodule DelegatedSpend.Keeper.Object do
   end
 
   defp dispatch(action, _msg, _source, _state), do: err("bad_request", "unknown action #{action}")
+
+  # A "authorization"-kind order needs more than the generic ack: the dapp
+  # can't compose a TransferWithAuthorization signature without the nonce,
+  # the destination (the keeper's OWN treasury — never client-chosen) and
+  # the EIP-712 domain. `Keeper.authorization_view_fields/5` shares this
+  # merge with `DelegatedSpend.Intake.handle_order/3`'s order view (review
+  # M7) — it reads ONLY the boot-verified fields (cross-checked against the
+  # on-chain DOMAIN_SEPARATOR at init — see `DelegatedSpend.Keeper`), so
+  # nothing here re-derives or guesses `name`/`version`.
+  #
+  # The `:disabled` arm is defensive-only and should be unreachable in
+  # practice (review I2): `Keeper.register_order/3` now refuses a
+  # kind:"authorization" order for a disabled lane BEFORE it is persisted
+  # (see `order_kind/2` in keeper.ex), so `ack` only ever reaches here for an
+  # order that was already accepted as "authorization" — which means the
+  # lane was enabled at registration time, and `authorization_enabled?` is a
+  # boot-fixed constant. Kept as a fail-closed belt-and-suspenders, not a
+  # live code path.
+  defp authorization_ack(%{kind: "authorization"}, ack, state, base) do
+    case Keeper.authorization_view_fields(
+           state.keeper,
+           ack.order_ref,
+           ack.amount,
+           ack.expires_at,
+           base
+         ) do
+      {:ok, merged} -> merged
+      :disabled -> err("authorization_lane_disabled", "register_order")
+    end
+  end
+
+  defp authorization_ack(_req, _ack, _state, base), do: base
 
   # ── order decoding (JSON → core request) ────────────────────────────────
 

@@ -14,13 +14,29 @@ defmodule DelegatedSpend.Keeper.Signer do
     * `action_key` idempotency: a retry of the same action can never
       double-broadcast — it returns the recorded hash/terminal state;
     * sweep: stuck transactions are rebroadcast at the SAME nonce with
-      bumped fees.
+      bumped fees;
+    * low-balance alarm (Task 3b, spec §5 — the most likely failure mode):
+      the SAME periodic sweep reads the relayer's native balance and, below
+      the optional `:low_balance_wei`, logs a `warning` naming the
+      `keeper_relayer_low_balance` metric — there is no metrics framework in
+      this package, so a host that wants to alert on it scrapes the log line;
+    * gas-spend accounting handoff (Task 3b fix wave): `persist_hash_fn` is
+      called as `fun.(hash, cost_wei)` — `cost_wei` is the wei cost (gas *
+      max_fee) of THIS broadcast, computed here and handed to the caller at
+      the SAME durable pre-broadcast moment as the hash itself. On the
+      initial broadcast `cost_wei` is the FULL estimate; on a fee-bumped
+      replacement it is only the DELTA versus the previous broadcast's
+      estimate for the same `action_key` (bumps only raise fees, so the
+      delta is never negative). The keeper is the one that decides whether
+      and where to record it — this module only ever reports what a given
+      broadcast is about to cost, never persists anything itself.
 
   The Keeper Store, not this process, owns durable execution status across
   restarts. Keeper supplies the request-critical hash writer used before each
   initial or replacement broadcast.
   """
   use GenServer
+  require Logger
 
   alias DelegatedSpend.Evm.{Address, Rpc, Tx1559}
 
@@ -41,7 +57,7 @@ defmodule DelegatedSpend.Keeper.Signer do
   end
 
   def submit(server, action_key, tx),
-    do: submit(server, action_key, tx, fn _hash -> :ok end)
+    do: submit(server, action_key, tx, fn _hash, _cost_wei -> :ok end)
 
   def submit(server, action_key, tx, persist_hash_fn),
     do: GenServer.call(server, {:submit, action_key, tx, persist_hash_fn}, 60_000)
@@ -72,7 +88,12 @@ defmodule DelegatedSpend.Keeper.Signer do
           pending: %{},
           done: %{},
           sweep_ms: Map.get(opts, :sweep_ms, 15_000),
-          bump_after_ms: Map.get(opts, :bump_after_ms, 30_000)
+          bump_after_ms: Map.get(opts, :bump_after_ms, 30_000),
+          # Task 3b: optional — absent means no alarm, consistent with
+          # GasPolicy's own "no limit configured" rule. Nil also means the
+          # sweep never pays for the extra `eth_getBalance` read at all (see
+          # `check_low_balance/1`).
+          low_balance_wei: Map.get(opts, :low_balance_wei)
         }
 
         Process.send_after(self(), :sweep, state.sweep_ms)
@@ -154,28 +175,53 @@ defmodule DelegatedSpend.Keeper.Signer do
 
           {raw, hash} = Tx1559.sign(params, state.priv)
 
-          case persist_hash(persist_hash_fn, hash) do
+          # Task 3b fix wave: the full cost estimate for THIS (the initial)
+          # broadcast, handed to the caller at the exact same durable
+          # pre-broadcast moment as the hash — see moduledoc.
+          cost_wei = params.gas * params.max_fee
+
+          case persist_hash(persist_hash_fn, hash, cost_wei) do
             :ok ->
-              _ = rpc_mod.send_raw(rpc, raw)
+              case rpc_mod.send_raw(rpc, raw) do
+                # A PARSED JSON-RPC error object is the node ANSWERING no —
+                # insufficient relayer funds, invalid tx — not an unknowable
+                # transport failure. The 2026-07-27 dry-relayer live test:
+                # fire-and-forget here reported {:ok, hash} over the node's
+                # `insufficient funds`, the user read "submitted ✓" and would
+                # have waited forever, and the advanced local nonce bricked
+                # the relayer until restart. Nothing entered the pool: free
+                # the nonce, watch nothing, tell the caller the truth. (The
+                # pre-broadcast gas-spend record stays — over-counting the
+                # rolling budget errs in the safe direction.)
+                {:error, {:rpc_error, _method, err}} ->
+                  {:reply, {:error, {:rejected, err}}, state}
 
-              # `hashes` keeps every same-nonce variant ever broadcast for this
-              # action: after a fee bump BOTH transactions are valid at the
-              # nonce and EITHER may mine — the sweep must watch them all.
-              entry = %{
-                hash: hash,
-                hashes: [hash],
-                params: params,
-                persist_hash_fn: persist_hash_fn,
-                sent_at: now_ms(),
-                bumps: 0
-              }
+                # Anything else — accepted, or a transport-level failure
+                # (curl death, garbled response) — keeps the deliberate
+                # optimistic stance: node acceptance is unknowable, the hash
+                # stays pending and the nonce stays reserved so a same-nonce
+                # double payment can't happen if the tx DID reach the node.
+                _accepted_or_ambiguous ->
+                  # `hashes` keeps every same-nonce variant ever broadcast for
+                  # this action: after a fee bump BOTH transactions are valid
+                  # at the nonce and EITHER may mine — the sweep must watch
+                  # them all.
+                  entry = %{
+                    hash: hash,
+                    hashes: [hash],
+                    params: params,
+                    persist_hash_fn: persist_hash_fn,
+                    sent_at: now_ms(),
+                    bumps: 0
+                  }
 
-              {:reply, {:ok, hash},
-               %{
-                 state
-                 | next_nonce: state.next_nonce + 1,
-                   pending: Map.put(state.pending, key, entry)
-               }}
+                  {:reply, {:ok, hash},
+                   %{
+                     state
+                     | next_nonce: state.next_nonce + 1,
+                       pending: Map.put(state.pending, key, entry)
+                   }}
+              end
 
             {:error, reason} ->
               {:reply, {:error, reason}, state}
@@ -217,6 +263,8 @@ defmodule DelegatedSpend.Keeper.Signer do
   # ── sweep: receipts + same-nonce fee-bumped rebroadcast ──────────────────
 
   defp do_sweep(state) do
+    check_low_balance(state)
+
     Enum.reduce(state.pending, state, fn {key, entry}, acc ->
       # Check EVERY same-nonce variant — after a bump, the original tx can
       # still be the one that mines.
@@ -237,6 +285,42 @@ defmodule DelegatedSpend.Keeper.Signer do
           if now_ms() - entry.sent_at > acc.bump_after_ms, do: bump(acc, key, entry), else: acc
       end
     end)
+  end
+
+  # Task 3b, spec §5: the single most likely way this whole system fails is
+  # the relayer's own wallet running dry mid-day — it has to warn BEFORE
+  # zero, not after. `nil` (unset) skips the check entirely: no RPC call, no
+  # cost, for a deployment that hasn't picked a threshold yet.
+  defp check_low_balance(%{low_balance_wei: nil}), do: :ok
+
+  defp check_low_balance(state) do
+    case safe_balance(state) do
+      nil ->
+        :ok
+
+      balance when balance < state.low_balance_wei ->
+        # No metrics/telemetry framework exists in this package — the metric
+        # NAME is embedded in the log line itself (first token, key=value
+        # after it) so a host that scrapes logs can alert on
+        # `keeper_relayer_low_balance` without us inventing a framework here.
+        Logger.warning(
+          "keeper_relayer_low_balance addr=#{state.addr} balance_wei=#{balance} " <>
+            "threshold_wei=#{state.low_balance_wei}"
+        )
+
+      _balance ->
+        :ok
+    end
+  end
+
+  # A transient RPC error reading the balance must not crash the sweep, same
+  # reasoning as `safe_receipt/2` below.
+  defp safe_balance(state) do
+    state.rpc_mod.balance(state.rpc, state.addr)
+  rescue
+    _ -> nil
+  catch
+    _kind, _reason -> nil
   end
 
   # A transient RPC error while polling a receipt (the real Rpc.receipt uses
@@ -268,7 +352,18 @@ defmodule DelegatedSpend.Keeper.Signer do
 
     {raw, hash} = Tx1559.sign(params, state.priv)
 
-    case persist_hash(entry.persist_hash_fn, hash) do
+    # Task 3b fix wave (Important #1+#2): only the DELTA between this bump's
+    # estimate and the previous broadcast's estimate for the SAME action_key
+    # — never the full re-estimate, which would double-count what the prior
+    # broadcast's persist_hash_fn call already recorded. `gas` never changes
+    # across a bump (only the fee fields do), so this is exactly the extra
+    # wei this replacement adds over what was already accounted for. Bumps
+    # only raise fees, so the delta is never negative.
+    previous_cost_wei = entry.params.gas * entry.params.max_fee
+    cost_wei = params.gas * params.max_fee
+    delta_wei = cost_wei - previous_cost_wei
+
+    case persist_hash(entry.persist_hash_fn, hash, delta_wei) do
       :ok ->
         _ = state.rpc_mod.send_raw(state.rpc, raw)
 
@@ -288,8 +383,8 @@ defmodule DelegatedSpend.Keeper.Signer do
     end
   end
 
-  defp persist_hash(fun, hash) do
-    case fun.(hash) do
+  defp persist_hash(fun, hash, cost_wei) do
+    case fun.(hash, cost_wei) do
       :ok -> :ok
       other -> {:error, {:persist_hash, other}}
     end

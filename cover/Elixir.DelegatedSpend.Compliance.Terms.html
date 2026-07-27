@@ -140,7 +140,7 @@ td.source {
 </head>
 <body>
 <h1><code>cover/Elixir.DelegatedSpend.Compliance.Terms.html</code></h1>
-<footer><p>File generated from <code>/Users/albert/conductor/workspaces/genswarms-wallet-bridge/ndjamena/objects/spend_keeper/compliance/terms.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-21 at 10:43:12</p></footer>
+<footer><p>File generated from <code>/Users/albert/dev/genswarms-wallet-bridge/objects/spend_keeper/compliance/terms.ex</code> by <a href="http://erlang.org/doc/man/cover.html">cover</a> at 2026-07-26 at 10:53:21</p></footer>
 <table>
 <tbody>
 <tr>
@@ -430,12 +430,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L58"><a href="#L58">58</a></td>
-<td class="hits">67</td>
+<td class="hits">72</td>
 <td class="source"><code>    ensure_uint256!(chain_id, :chain_id)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L59"><a href="#L59">59</a></td>
-<td class="hits">62</td>
+<td class="hits">67</td>
 <td class="source"><code>    Keccak.hash_256(@domain_typehash &lt;&gt; @name_hash &lt;&gt; @version_hash &lt;&gt; &lt;&lt;chain_id::256&gt;&gt;)</code></td>
 </tr>
 <tr>
@@ -460,17 +460,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L64"><a href="#L64">64</a></td>
-<td class="hits">77</td>
+<td class="hits">82</td>
 <td class="source"><code>    terms_hash = decode_hex32!(terms_hash, :terms_hash)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L65"><a href="#L65">65</a></td>
-<td class="hits">71</td>
+<td class="hits">76</td>
 <td class="source"><code>    account = decode_address!(account)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L66"><a href="#L66">66</a></td>
-<td class="hits">65</td>
+<td class="hits">70</td>
 <td class="source"><code>    ensure_uint256!(issued_at, :issued_at)</code></td>
 </tr>
 <tr>
@@ -480,7 +480,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L68"><a href="#L68">68</a></td>
-<td class="hits">61</td>
+<td class="hits">66</td>
 <td class="source"><code>    struct_hash =</code></td>
 </tr>
 <tr>
@@ -505,7 +505,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L73"><a href="#L73">73</a></td>
-<td class="hits">61</td>
+<td class="hits">66</td>
 <td class="source"><code>    Keccak.hash_256(&lt;&lt;0x19, 0x01&gt;&gt; &lt;&gt; domain_separator(chain_id) &lt;&gt; struct_hash)</code></td>
 </tr>
 <tr>
@@ -560,17 +560,17 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L84"><a href="#L84">84</a></td>
-<td class="hits">34</td>
+<td class="hits">36</td>
 <td class="source"><code>    if valid_scalar?(r) and valid_scalar?(s) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L85"><a href="#L85">85</a></td>
-<td class="hits">25</td>
+<td class="hits">27</td>
 <td class="source"><code>      try do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L86"><a href="#L86">86</a></td>
-<td class="hits">25</td>
+<td class="hits">27</td>
 <td class="source"><code>        case Secp256k1.recover(digest, r, s, v - 27) do</code></td>
 </tr>
 <tr>
@@ -580,7 +580,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L88"><a href="#L88">88</a></td>
-<td class="hits">24</td>
+<td class="hits">26</td>
 <td class="source"><code>            address = public_key |&gt; Keccak.hash_256() |&gt; binary_part(12, 20) |&gt; Address.checksum()</code></td>
 </tr>
 <tr>
@@ -710,52 +710,52 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L114"><a href="#L114">114</a></td>
-<td class="hits">60</td>
+<td class="hits">62</td>
 <td class="source"><code>    with :ok &lt;- validate_version(envelope["v"], version),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L115"><a href="#L115">115</a></td>
-<td class="hits">55</td>
+<td class="hits">57</td>
 <td class="source"><code>         :ok &lt;- validate_chain_id(envelope["chain_id"], chain_id),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L116"><a href="#L116">116</a></td>
-<td class="hits">49</td>
+<td class="hits">51</td>
 <td class="source"><code>         {:ok, _hash_bytes, v_hash} &lt;- decode_hex32(envelope["v_hash"], :v_hash),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L117"><a href="#L117">117</a></td>
-<td class="hits">47</td>
+<td class="hits">49</td>
 <td class="source"><code>         :ok &lt;- validate_current_hash(v_hash, current_hash),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L118"><a href="#L118">118</a></td>
-<td class="hits">43</td>
+<td class="hits">45</td>
 <td class="source"><code>         {:ok, account_bytes, account} &lt;- decode_address(envelope["account"], :account),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L119"><a href="#L119">119</a></td>
-<td class="hits">41</td>
+<td class="hits">43</td>
 <td class="source"><code>         :ok &lt;- reject_zero_address(account_bytes),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L120"><a href="#L120">120</a></td>
-<td class="hits">40</td>
+<td class="hits">42</td>
 <td class="source"><code>         {:ok, issued_at} &lt;- validate_issued_at(envelope["issued_at"], now_s),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L121"><a href="#L121">121</a></td>
-<td class="hits">34</td>
+<td class="hits">36</td>
 <td class="source"><code>         {:ok, sig} &lt;- decode_signature(envelope["sig"]),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L122"><a href="#L122">122</a></td>
-<td class="hits">25</td>
+<td class="hits">27</td>
 <td class="source"><code>         digest = digest(chain_id, v_hash, account, issued_at),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L123"><a href="#L123">123</a></td>
-<td class="hits">25</td>
+<td class="hits">27</td>
 <td class="source"><code>         :ok &lt;- validate_signer(digest, sig, account) do</code></td>
 </tr>
 <tr>
@@ -785,7 +785,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L129"><a href="#L129">129</a></td>
-<td class="hits">16</td>
+<td class="hits">18</td>
 <td class="source"><code>         sig: %{v: sig.v, r: sig.r_hex, s: sig.s_hex}</code></td>
 </tr>
 <tr>
@@ -825,7 +825,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L137"><a href="#L137">137</a></td>
-<td class="hits">58</td>
+<td class="hits">60</td>
 <td class="source"><code>    if got == expected, do: :ok, else: {:error, {:pinned_mismatch, :version}}</code></td>
 </tr>
 <tr>
@@ -855,7 +855,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L143"><a href="#L143">143</a></td>
-<td class="hits">55</td>
+<td class="hits">57</td>
 <td class="source"><code>    cond do</code></td>
 </tr>
 <tr class="hit">
@@ -865,12 +865,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L145"><a href="#L145">145</a></td>
-<td class="hits">52</td>
+<td class="hits">54</td>
 <td class="source"><code>      got != expected -&gt; {:error, {:pinned_mismatch, :chain_id}}</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L146"><a href="#L146">146</a></td>
-<td class="hits">49</td>
+<td class="hits">51</td>
 <td class="source"><code>      true -&gt; :ok</code></td>
 </tr>
 <tr>
@@ -895,12 +895,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L151"><a href="#L151">151</a></td>
-<td class="hits">47</td>
+<td class="hits">49</td>
 <td class="source"><code>    case decode_hex32(current_hash, :v_hash) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L152"><a href="#L152">152</a></td>
-<td class="hits">43</td>
+<td class="hits">45</td>
 <td class="source"><code>      {:ok, _, ^v_hash} -&gt; :ok</code></td>
 </tr>
 <tr class="hit">
@@ -935,7 +935,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L159"><a href="#L159">159</a></td>
-<td class="hits">40</td>
+<td class="hits">42</td>
 <td class="source"><code>  defp reject_zero_address(_), do: :ok</code></td>
 </tr>
 <tr>
@@ -950,7 +950,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L162"><a href="#L162">162</a></td>
-<td class="hits">40</td>
+<td class="hits">42</td>
 <td class="source"><code>    if uint256?(value) and value &gt;= now_s - 900 and value &lt;= now_s + 300,</code></td>
 </tr>
 <tr>
@@ -980,12 +980,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L168"><a href="#L168">168</a></td>
-<td class="hits">29</td>
+<td class="hits">31</td>
 <td class="source"><code>    with {:ok, r, r_hex} &lt;- decode_hex32(r, :sig),</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L169"><a href="#L169">169</a></td>
-<td class="hits">26</td>
+<td class="hits">28</td>
 <td class="source"><code>         {:ok, s, s_hex} &lt;- decode_hex32(s, :sig) do</code></td>
 </tr>
 <tr>
@@ -1025,7 +1025,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L177"><a href="#L177">177</a></td>
-<td class="hits">25</td>
+<td class="hits">27</td>
 <td class="source"><code>    case recover_signer(digest, sig.v, sig.r, sig.s) do</code></td>
 </tr>
 <tr>
@@ -1035,7 +1035,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L179"><a href="#L179">179</a></td>
-<td class="hits">20</td>
+<td class="hits">22</td>
 <td class="source"><code>        if Address.eq?(recovered, account), do: :ok, else: {:error, {:invalid, :sig}}</code></td>
 </tr>
 <tr>
@@ -1075,12 +1075,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L187"><a href="#L187">187</a></td>
-<td class="hits">219</td>
+<td class="hits">232</td>
 <td class="source"><code>    case Base.decode16(hex, case: :mixed) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L188"><a href="#L188">188</a></td>
-<td class="hits">216</td>
+<td class="hits">229</td>
 <td class="source"><code>      {:ok, bytes} -&gt; {:ok, bytes, encode_hex(bytes)}</code></td>
 </tr>
 <tr class="hit">
@@ -1120,12 +1120,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L196"><a href="#L196">196</a></td>
-<td class="hits">107</td>
+<td class="hits">114</td>
 <td class="source"><code>    case Base.decode16(hex, case: :mixed) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L197"><a href="#L197">197</a></td>
-<td class="hits">106</td>
+<td class="hits">113</td>
 <td class="source"><code>      {:ok, bytes} -&gt; {:ok, bytes, Address.checksum(bytes)}</code></td>
 </tr>
 <tr class="hit">
@@ -1165,12 +1165,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L205"><a href="#L205">205</a></td>
-<td class="hits">77</td>
+<td class="hits">82</td>
 <td class="source"><code>    case decode_hex32(value, field) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L206"><a href="#L206">206</a></td>
-<td class="hits">71</td>
+<td class="hits">76</td>
 <td class="source"><code>      {:ok, bytes, _} -&gt; bytes</code></td>
 </tr>
 <tr class="hit">
@@ -1200,12 +1200,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L212"><a href="#L212">212</a></td>
-<td class="hits">71</td>
+<td class="hits">76</td>
 <td class="source"><code>    case decode_address(value, :account) do</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L213"><a href="#L213">213</a></td>
-<td class="hits">65</td>
+<td class="hits">70</td>
 <td class="source"><code>      {:ok, bytes, _} -&gt; bytes</code></td>
 </tr>
 <tr class="hit">
@@ -1235,7 +1235,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L219"><a href="#L219">219</a></td>
-<td class="hits">132</td>
+<td class="hits">142</td>
 <td class="source"><code>    unless uint256?(value), do: raise(ArgumentError, "invalid #{field}")</code></td>
 </tr>
 <tr>
@@ -1250,7 +1250,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L222"><a href="#L222">222</a></td>
-<td class="hits">227</td>
+<td class="hits">241</td>
 <td class="source"><code>  defp uint256?(value), do: is_integer(value) and value &gt;= 0 and value &lt;= @max_uint256</code></td>
 </tr>
 <tr>
@@ -1265,12 +1265,12 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L225"><a href="#L225">225</a></td>
-<td class="hits">62</td>
+<td class="hits">66</td>
 <td class="source"><code>    scalar = :binary.decode_unsigned(bytes)</code></td>
 </tr>
 <tr class="hit">
 <td class="line" id="L226"><a href="#L226">226</a></td>
-<td class="hits">62</td>
+<td class="hits">66</td>
 <td class="source"><code>    scalar &gt; 0 and scalar &lt; @secp256k1_order</code></td>
 </tr>
 <tr>
@@ -1285,7 +1285,7 @@ td.source {
 </tr>
 <tr class="hit">
 <td class="line" id="L229"><a href="#L229">229</a></td>
-<td class="hits">221</td>
+<td class="hits">234</td>
 <td class="source"><code>  defp encode_hex(bytes), do: "0x" &lt;&gt; Base.encode16(bytes, case: :lower)</code></td>
 </tr>
 <tr>

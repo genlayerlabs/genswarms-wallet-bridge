@@ -106,6 +106,42 @@ can even touch, `handle_wallet/2` for bind orders, and `handle_submitted/2`
 for best-effort user-tx reports. `initData`, access tokens, and raw platform
 ids are never logged.
 
+## Consumer helpers (Elixir)
+
+Three pieces of glue every adopting host used to reinvent now ship in the
+package, so a consumer shrinks to product-specific code only:
+
+- **`DelegatedSpend.Orders`** — order-building helpers for the `user_tx`
+  lane. `erc20_transfer_order/3` builds the exact `%{to:, data:, value: 0}`
+  tx shape `register_order` kind `"user_tx"` validates (raising on any
+  malformed address — calldata to a garbled destination is never built);
+  `parse_token_amount/3` replaces hand-rolled decimal parsing with
+  integer-only math, a decimals-bounded fraction, and a caller-stated
+  `:max_units` cap (no business default baked in); `format_units/2` renders
+  units back to a human string; `mint_order_ref/0` mints the 64-lowercase-hex
+  caller-minted ref the keeper's async object door requires. **`user_ref/2`
+  REQUIRES a non-empty salt**: an unsalted hash over an enumerable
+  platform-id space (Telegram uids are small integers) is offline-reversible
+  — anyone holding a ref can hash the whole id space and recover the id —
+  so the weak derivation is deliberately not constructible.
+- **`DelegatedSpend.Intake.Plug`** — a mountable HTTP surface over the pure
+  intake handlers (plug is an optional dependency; the module compiles to
+  nothing without it). It serves the packaged `webapp/` statics
+  (traversal-guarded), `GET /config.json` from the host's config map
+  (case-insensitively matched, so no spelling reaches the packaged stale-pin
+  file), and `POST <intakeUrl>/orders` + `/orders/submitted` with capped raw
+  bodies (413/400/401 — never a crash):
+
+      Bandit.start_link(
+        plug: {DelegatedSpend.Intake.Plug,
+               DelegatedSpend.Intake.Plug.init(ctx: intake_ctx, config: config_map)},
+        port: 4340
+      )
+
+- **`swarm-object.json`** — the engine loader entry (module +
+  dependency-ordered file list) for `DelegatedSpend.Keeper.Object`, so
+  consumers no longer hand-roll the attested file list.
+
 ## Adopting (contracts layer)
 
 1. Extend `SpendRouter` with ONE typed action + its `...WithPermit` variant

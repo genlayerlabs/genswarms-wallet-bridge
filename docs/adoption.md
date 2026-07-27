@@ -34,6 +34,21 @@ Version 0.3 adds two transport order kinds beside the permit lane:
   broadcasts these kinds; `execute_with_permit/4` refuses them with
   `{:failed, :wrong_kind}` without consuming the order.
 
+There is a second **executable** kind beside `permit`:
+
+- `authorization` is the EIP-3009 lane: the payer signs a
+  `transferWithAuthorization` and the keeper broadcasts it, via
+  `execute_with_authorization/4`. The destination is the keeper's own
+  `:treasury_address` — never anything the client sends. It needs all three of
+  `:signer`, `:token_address` and `:treasury_address`; configure some but not
+  all and the keeper refuses to boot (a half-configured money lane must fail at
+  deploy time, not at the first paying user). With none of them, execution
+  returns `{:failed, :authorization_lane_disabled}`.
+
+So `begin_execution/4` — the callback that consumes an order and opens its
+durable execution record — accepts exactly the two executable kinds, `permit`
+and `authorization`, and refuses everything else.
+
 If you only need wallet-order transport, start the keeper registry-only:
 
 ```elixir
@@ -81,6 +96,90 @@ Hard rule for adopters: `user_ref` is one-way. If your app must act on a bind
 or order result, key your own state by `bind_ref` or `order_ref` at mint time.
 The callbacks return those refs; they will never get a platform id back out of
 `user_ref`.
+
+Since 0.7.0 the package ships the consumer glue this section used to make
+every host write by hand — reach for these before writing your own:
+
+- `DelegatedSpend.Orders` builds the pieces above: `erc20_transfer_order/3`
+  (the `user_tx` tx map), `parse_token_amount/3` / `format_units/2`
+  (integer-only amount handling with a caller-stated cap),
+  `mint_order_ref/0` (the caller-minted ref for the object door), and
+  `user_ref/2` — which REQUIRES a non-empty salt, because an unsalted hash
+  of an enumerable platform-id space is offline-reversible.
+- `DelegatedSpend.Intake.Plug` (optional `plug` dep) is the mountable HTTP
+  surface: packaged dapp statics, host-overridden `config.json`, and the
+  `POST <intakeUrl>/orders` / `/orders/submitted` routes over these pure
+  handlers, with body caps and fail-closed auth shape checks.
+- `swarm-object.json` at the repo root is the engine loader entry for
+  `DelegatedSpend.Keeper.Object` — point your swarm config at it instead of
+  hand-rolling the file list.
+
+## 0.4 authorization lane (EIP-3009): host config, gas policy, sign→submit
+
+The `authorization` kind introduced in §0.3 above is a full lane, not just a
+registrable kind — this section is its adoption checklist, at the level of
+the numbered sections below.
+
+**Host config.** Beside the three keys that turn the lane on
+(`:signer`, `:token_address`, `:treasury_address` — §0.3), three MORE keys
+gate its broadcast, all independently optional (an absent key never limits;
+`GasPolicy`'s own rule):
+
+```elixir
+%{
+  # ... :signer, :token_address, :treasury_address, plus:
+  max_gas_wei: 50_000_000_000,          # per-tx gas price ceiling
+  daily_gas_budget_wei: 2_000_000_000_000_000,  # rolling 24h gas spend cap
+  min_order_units: 1_000_000            # minimum order size (token's smallest unit)
+}
+```
+
+A rejected brake is a typed failure (`gas_too_expensive`, `budget_exhausted`,
+`below_minimum`) that consumes nothing — the order stays registered and can
+be retried once the price drops or the window rolls over. Real numbers are a
+measurement decision for your deployment, not something this package
+prescribes.
+
+**What you implement.** Two store callbacks track the gas budget —
+`record_gas_spend/4` and `gas_spent_since/2` (§4 below has the full table).
+They are the ONLY new callbacks; every other store callback the authorization
+lane needs (`begin_execution/4`, `update_inflight_hash/3`, `resolve_inflight/4`,
+…) is the same one the permit lane already uses. `MemoryStore` is the
+reference implementation — read it before writing a production store.
+
+**Boot-time domain verification.** At boot, when the lane is configured, the
+keeper reads `DOMAIN_SEPARATOR()` from the token AND its `name()`/`version()`,
+then recomposes the EIP-712 domain hash from what it just read and asserts it
+equals the separator — refusing to boot on any mismatch. This is why
+`DelegatedSpend.Keeper.authorization_domain/1` (used by both
+`Keeper.Object`'s `register_order` ack and `Intake.handle_order/3`'s served
+view) can be trusted as the dapp's signing domain: nothing here is a
+hardcoded guess, even though the real deployments this package targets are
+publicly known to report `"USDC"` / `"2"`.
+
+**Sign→submit flow and its states.** The wallet dapp:
+
+1. Learns `order_ref`, `nonce`, `to`, `value`, `valid_after`/`valid_before`,
+   `token`, `chain_id` and the EIP-712 `domain` — either from whatever backend
+   registered the order (the object door's enriched `register_order` ack) or,
+   more commonly, by fetching the order itself (`Intake.handle_order/3`,
+   withheld until terms are accepted, exactly like the `user_tx` lane's `tx`
+   field).
+2. Signs a `TransferWithAuthorization` typed-data payload with
+   `eth_signTypedData_v4` — `webapp/lib/authorization.mjs`'s
+   `buildAuthorizationTypedData/1`, wired through `runAuthorizationFlow/3` in
+   `webapp/lib/flow.mjs`. `to` and `value` are never recomputed client-side.
+3. `POST {intakeUrl}/authorization` with `{order_ref, authorization: {v,
+   chain_id, token, from, value, valid_after, valid_before, signature}}` — no
+   `"to"` field; the destination is server-picked.
+
+The response is the same typed-state shape `handle_grant/3` already returns:
+`{"status": "pending" | "submitted" | "mined", "tx"?: hash}` on success, or a
+typed failure (`404 not found`, `409` stale build, `422` invalid/failed with
+a `reason`) — never a raw crash. `not_yet_valid`/`expired` come from the
+authorization's OWN `valid_after`/`valid_before` window (checked against
+chain time, independent of the order's own TTL); `authorization_lane_disabled`
+means the keeper wasn't configured for this lane at all.
 
 ---
 
@@ -218,8 +317,20 @@ Keeper.order_status(keeper, order_id)   # durable source of technical truth
 Keeper.reconcile_boot(keeper)           # persist receipts found after restart
 ```
 
-`result_fn` receives `{order_id, result}` after each newly persisted terminal
-transition. It is a best-effort technical-status notification: raises, exits,
+`result_fn` receives a map after each newly persisted terminal transition:
+
+```elixir
+%{order_id: "0x…",       # ours, random — nothing you stored is keyed by it
+  order_ref: "…",        # YOURS: the ref you minted, the one to join back on
+  user_ref: "…",
+  kind: "permit" | "user_tx" | "authorization" | nil,
+  result: {:mined, tx} | {:failed, reason}}
+```
+
+Resolve on `order_ref`. `order_id` identifies the order inside the keeper and
+cannot be looked up on your side. The three caller-side fields are `nil` when
+the order row is gone (pruned, or a store that forgot) — the result is still
+delivered, and a consumer that cannot resolve it should simply do nothing. It is a best-effort technical-status notification: raises, exits,
 and throws are logged, never retried, and never crash the Keeper. It can be
 lost, so poll `order_status/2` for recovery. **`{:mined, tx}` means one
 successful receipt, nothing more** — never use it as product-credit authority;
@@ -269,7 +380,8 @@ If your credit machinery scans addresses derived from a wallet-on-file, set
 `expected_owner` on every order AND start the keeper with
 `require_owner_binding: true` — then a permit signed by any other wallet
 typed-fails, and an order that *loses* its binding (e.g. a storage bug) fails
-CLOSED instead of executing. Set both; the external audit's one critical
+CLOSED instead of executing. The same control applies to the `authorization`
+lane, comparing `expected_owner` against the authorization's `from`. Set both; the external audit's one critical
 finding (F1) was exactly a SQL adapter dropping this field. The dapp enforces
 the same binding in the browser: an owner-bound order view carries
 `expected_owner`, and a mismatched connected wallet is refused (typed
@@ -293,10 +405,11 @@ Implement the `DelegatedSpend.Keeper.Store` behaviour
 | `record_spend/4`, `spent_since/3` | per-`user_ref` spend accounting |
 | `put_order/2`, `get_order/2`, `get_order_by_ref/3` | server-authoritative orders |
 | `consume_order/3` | atomic single consumption for non-execution flows such as wallet binding |
-| `begin_execution/4` | atomically consume one permit order and create durable `:pending` status |
+| `begin_execution/4` | atomically consume one **executable** order — kind `"permit"` or `"authorization"` — and create durable `:pending` status. Every other kind (`"user_tx"`, `"bind"`, anything unknown) MUST be refused with `:not_found`, consuming nothing |
 | `get_execution_status/2` | return `:unknown`, `:pending`, `{:submitted, tx}`, `{:mined, tx}`, or `{:failed, reason}` |
 | `update_inflight_hash/3`, `list_inflight/1` | append each same-nonce candidate hash before broadcast and enumerate only unresolved executions |
 | `resolve_inflight/4` | atomically persist the first terminal result, remove in-flight state, and record mined spend once; return `:new` or `:existing` |
+| `record_gas_spend/4`, `gas_spent_since/2` | authorization-lane-only gas-budget accounting (§0.4): record a broadcast's wei cost with a prune-before timestamp, and sum spend since a given time. Only called when `:daily_gas_budget_wei` is configured — a deployment that never sets it performs zero extra writes or reads here |
 
 Semantics every implementation MUST reproduce
 (`DelegatedSpend.Keeper.MemoryStore` in the same file is the reference; the
@@ -372,11 +485,12 @@ Money-lane bookkeeping should not be in-memory-only in production —
   `config.json` disagrees — moving `RPC_URL` to another chain without
   redeploying the dapp is a fund-loss class misdeploy, not a UX nit.
 
-- **Intake mounted.** The package ships five PURE handlers —
+- **Intake mounted.** The package ships six PURE handlers —
   `DelegatedSpend.Intake.handle_order/2`, `handle_grant/2`,
-  `handle_wallet/2`, `handle_submitted/2`, and `handle_terms/2`, each
-  `params → {status, body_map}` — and YOU supply the HTTP serving and the
-  fail-closed bind (loopback unless explicitly published). The ctx:
+  `handle_authorization/2` (§0.4), `handle_wallet/2`, `handle_submitted/2`,
+  and `handle_terms/2`, each `params → {status, body_map}` — and YOU supply
+  the HTTP serving and the fail-closed bind (loopback unless explicitly
+  published). The ctx:
 
   ```elixir
   %{bot_token: bot_token,          # Telegram initData HMAC key
@@ -392,11 +506,15 @@ Money-lane bookkeeping should not be in-memory-only in production —
   ```
 
   The wallet dapp POSTs `{intakeUrl}/orders`, `{intakeUrl}/grants`,
-  `{intakeUrl}/wallet`, `{intakeUrl}/orders/submitted`, and, when compliance
-  is enabled, `{intakeUrl}/terms`, with either `token` or `init_data` plus `v`
-  in the body. A ~60-line Plug over Bandit is all the serving glue takes:
-  route first, cap the body (64 kB → 413), decode-error → 400 — auth still
-  happens inside the handlers.
+  `{intakeUrl}/authorization`, `{intakeUrl}/wallet`,
+  `{intakeUrl}/orders/submitted`, and, when compliance is enabled,
+  `{intakeUrl}/terms`, with either `token` or `init_data` plus `v` in the
+  body. A ~60-line Plug over Bandit is all the serving glue takes: route
+  first, cap the body (64 kB → 413), decode-error → 400 — auth still happens
+  inside the handlers. `DelegatedSpend.Intake.Plug` (§0.3) routes
+  `/orders`, `/orders/submitted`, `/terms` and `/authorization` itself; the
+  permit grant lane's `/grants` and `/wallet` need a keeper with a router and
+  action ABI plus a host `wallet_fn`, so they stay a host-mounted route.
 
 - **Keeper key provisioned.** The keeper signs with its OWN key
   (`SPEND_KEEPER_PRIVATE_KEY` in the template) — **never** the app's
