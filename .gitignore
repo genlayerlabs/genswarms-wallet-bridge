@@ -4,3 +4,7 @@ contracts/cache/
 _build/
 deps/
 *.beam
+
+# Generated coverage reports — never commit (7.9k lines of them shipped
+# inside the 0.8.0 tag before this line existed)
+/cover/
