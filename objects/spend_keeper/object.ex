@@ -76,7 +76,7 @@ defmodule DelegatedSpend.Keeper.Object do
   them. Refused (`ok: false, error: "authorization_lane_disabled"`) if the
   keeper wasn't configured for this lane — refused BEFORE the order is
   persisted (`DelegatedSpend.Keeper`'s `register_order` gates on
-  `authorization_enabled?` ahead of the store write), so a refused
+  `authorization_sponsored?` ahead of the store write), so a refused
   registration never strands the caller-minted `order_ref`: the identical
   payload can be retried once the lane is enabled (review I2).
   """
@@ -219,7 +219,7 @@ defmodule DelegatedSpend.Keeper.Object do
   # kind:"authorization" order for a disabled lane BEFORE it is persisted
   # (see `order_kind/2` in keeper.ex), so `ack` only ever reaches here for an
   # order that was already accepted as "authorization" — which means the
-  # lane was enabled at registration time, and `authorization_enabled?` is a
+  # lane was enabled at registration time, and `authorization_sponsored?` is a
   # boot-fixed constant. Kept as a fail-closed belt-and-suspenders, not a
   # live code path.
   defp authorization_ack(%{kind: "authorization"}, ack, state, base) do

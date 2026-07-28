@@ -407,6 +407,172 @@ export async function runAuthorizationFlow(deps, orderRef, fetched = null) {
   });
 }
 
+export function hasAccountCode(code) {
+  if (typeof code !== "string" || !/^0x[0-9a-fA-F]*$/.test(code)) return null;
+  return !/^0x0*$/i.test(code);
+}
+
+async function checkAccountCode({ provider }, account) {
+  try {
+    const present = hasAccountCode(
+      await provider.request({ method: "eth_getCode", params: [account, "latest"] }),
+    );
+    if (present == null) return { ok: false, reason: "code_check_failed" };
+    return present ? { ok: false, reason: "wallet_has_code" } : { ok: true };
+  } catch (_) {
+    return { ok: false, reason: "code_check_failed" };
+  }
+}
+
+async function signSelfAuthorization(deps, { orderRef, order, account }) {
+  const { provider, fetchFn, config } = deps;
+  const typedData = buildAuthorizationTypedData({
+    domain: order.domain,
+    from: account,
+    to: order.to,
+    value: order.value,
+    validAfter: order.valid_after,
+    validBefore: order.valid_before,
+    nonce: order.nonce,
+  });
+
+  let signature;
+  try {
+    signature = await provider.request({
+      method: "eth_signTypedData_v4",
+      params: [account, JSON.stringify(typedData)],
+    });
+  } catch (e) {
+    if (e && e.code === 4001) return { ok: false, reason: "user_rejected" };
+    return { ok: false, reason: "sign_failed" };
+  }
+
+  const envelope = buildAuthorizationEnvelope({
+    version: config.version,
+    chainId: config.chainId,
+    token: order.token,
+    from: account,
+    value: order.value,
+    validAfter: order.valid_after,
+    validBefore: order.valid_before,
+    signature,
+  });
+
+  let res;
+  try {
+    res = await fetchFn(`${config.intakeUrl}/authorization/self`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: authBody(deps, { order_ref: orderRef, authorization: envelope }),
+    });
+  } catch (_) {
+    return { ok: false, reason: "request_failed" };
+  }
+
+  if (res.status === 409) return { ok: false, reason: "version_mismatch" };
+  if (res.status === 401) return { ok: false, reason: "unauthorized" };
+  if (res.status === 451) return { ok: false, reason: "geo_blocked" };
+
+  let body = {};
+  try {
+    body = (await res.json()) || {};
+  } catch (_) {}
+
+  if (res.status === 428)
+    return { ok: false, reason: "terms_required", terms: body.terms, account };
+  if (res.status !== 200)
+    return { ok: false, reason: body.reason || body.error || `http_${res.status}` };
+
+  const validTx =
+    typeof body.to === "string" &&
+    /^0x[0-9a-fA-F]{40}$/.test(body.to) &&
+    typeof body.data === "string" &&
+    /^0x[0-9a-fA-F]+$/.test(body.data) &&
+    Number.isSafeInteger(body.chain_id) &&
+    Number.isSafeInteger(body.valid_before) &&
+    body.chain_id === config.chainId &&
+    body.valid_before === order.valid_before &&
+    typeof order.token === "string" &&
+    body.to.toLowerCase() === order.token.toLowerCase();
+
+  return validTx ? { ok: true, transaction: body } : { ok: false, reason: "invalid_response" };
+}
+
+/**
+ * Self-submit EIP-3009: fetch → connect → reject code-bearing accounts →
+ * sign → ask the keeper for verified calldata → send from the payer wallet →
+ * report the transaction hash as a watcher hint. A reporting failure happens
+ * after the wallet broadcast and therefore returns a warning, never a payment
+ * failure that could invite a duplicate send.
+ */
+export async function runSelfAuthorizationFlow(deps, orderRef, fetched = null) {
+  fetched ??= await fetchOrder(deps, orderRef);
+  if (!fetched.ok) return fetched;
+  if (configDrift(fetched.order, deps.config)) return { ok: false, reason: "config_drift" };
+  if (fetched.order.kind !== "authorization_self") return { ok: false, reason: "wrong_kind" };
+
+  let conn = await connectWallet(deps);
+  if (!conn.ok) return conn;
+  conn = await ensureChain(deps, conn);
+  if (!conn.ok) return conn;
+  if (ownerMismatch(fetched.order, conn.account))
+    return { ok: false, reason: "wrong_wallet", expected: fetched.order.expected_owner };
+
+  const code = await checkAccountCode(deps, conn.account);
+  if (!code.ok) return code;
+  if (termsRequired(fetched.order))
+    return { ok: false, reason: "terms_required", terms: fetched.order.terms, account: conn.account };
+
+  const built = await signSelfAuthorization(deps, {
+    orderRef,
+    order: fetched.order,
+    account: conn.account,
+  });
+  if (!built.ok) return built;
+
+  let tx;
+  try {
+    tx = await deps.provider.request({
+      method: "eth_sendTransaction",
+      params: [
+        {
+          from: conn.account,
+          to: built.transaction.to,
+          data: built.transaction.data,
+          chainId: hexQuantity(built.transaction.chain_id),
+        },
+      ],
+    });
+  } catch (e) {
+    if (e && e.code === 4001) return { ok: false, reason: "user_rejected" };
+    return { ok: false, reason: "send_failed" };
+  }
+
+  let reportFailed = false;
+  try {
+    const res = await deps.fetchFn(`${deps.config.intakeUrl}/orders/submitted`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: authBody(deps, { order_ref: orderRef, tx_hash: tx }),
+    });
+
+    let body = {};
+    try {
+      body = (await res.json()) || {};
+    } catch (_) {}
+
+    if (res.status < 200 || res.status >= 300 || body.status !== "noted")
+      reportFailed = true;
+  } catch (_) {
+    reportFailed = true;
+  }
+
+  if (reportFailed)
+    return { ok: true, warning: "submitted_report_failed", tx, order: fetched.order };
+
+  return { ok: true, tx, order: fetched.order };
+}
+
 export async function runUserTxFlow(deps, orderRef, fetched = null) {
   // Fetch-before-connect, same as runPermitFlow: config drift must block
   // before the wallet is ever touched.

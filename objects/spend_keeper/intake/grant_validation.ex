@@ -109,10 +109,10 @@ defmodule DelegatedSpend.Intake.GrantValidation do
   defp nonneg_int(n, _field) when is_integer(n) and n >= 0, do: {:ok, n}
   defp nonneg_int(_, field), do: {:error, {:invalid, field}}
 
-  # Arbitrary-length, non-empty: a wallet-contract (EIP-1271) signature is
-  # not fixed at 65 bytes (mirrors Eip3009.transfer_with_authorization_calldata's
-  # own only-reject-empty rule) — shape-checking a fixed length here would
-  # reject a legitimate smart-wallet signer.
+  # Arbitrary-length, non-empty at the shared envelope boundary: sponsored
+  # execution may pass an EIP-1271 signature through to a token that supports
+  # it. The self-submit build deliberately adds a stricter 65-byte EOA
+  # recovery check, and its dapp rejects code-bearing accounts before signing.
   defp signature_bytes("0x" <> hex) when byte_size(hex) > 0 do
     case Base.decode16(hex, case: :mixed) do
       {:ok, bytes} when byte_size(bytes) > 0 -> {:ok, bytes}

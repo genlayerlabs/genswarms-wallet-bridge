@@ -24,8 +24,9 @@ defmodule DelegatedSpend.Keeper do
   Typed failure reasons: `no_grant | expired | reverted | rpc_timeout |
   not_found | suspended | wrong_kind | permit_lane_disabled`, plus
   `authorization_lane_disabled | not_yet_valid` on the EIP-3009 lane, plus
-  `gas_too_expensive | budget_exhausted | below_minimum` (Task 3b's economic
-  brakes, `GasPolicy.admit/2`, EIP-3009 lane only — see `gas_policy_admit/2`).
+  `below_minimum` on both authorization lanes. Sponsored authorization also
+  applies the sponsor-only `gas_too_expensive | budget_exhausted` brakes
+  through `GasPolicy.admit/2` — see `gas_policy_admit/2`.
   `suspended` is the §5.2.1 revert backoff — a grant that produced
   `max_consecutive_reverts` reverts is frozen until `reset_backoff/2` (the
   wallet dapp re-enable).
@@ -43,8 +44,9 @@ defmodule DelegatedSpend.Keeper do
   use GenServer
   require Logger
 
-  alias DelegatedSpend.Evm.Address
-  alias DelegatedSpend.Keeper.{GasPolicy, PermitLane, Signer}
+  alias DelegatedSpend.Evm.{Address, Secp256k1}
+  alias DelegatedSpend.Keeper.{Eip3009, GasPolicy, PermitLane, Signer}
+  alias DelegatedSpend.Keccak
 
   # Task 3b: the daily gas budget is a ROLLING 24h window, not a calendar-day
   # boundary — simpler (no timezone/midnight edge cases) and matches the
@@ -59,6 +61,8 @@ defmodule DelegatedSpend.Keeper do
   @enforce_opts [:store, :source_allowlist, :order_ttl_s, :chain_id]
   @max_json_safe_integer 9_007_199_254_740_991
   @uint256_max Integer.pow(2, 256) - 1
+  @secp256k1_order 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+  @secp256k1_half_order div(@secp256k1_order, 2)
 
   # Optional :name registers the server (supervision-friendly: a restarted
   # keeper is reachable at the same name, so app ctx never holds a stale pid).
@@ -96,6 +100,15 @@ defmodule DelegatedSpend.Keeper do
   def execute_with_authorization(keeper, order_ref, user_ref, auth),
     do: GenServer.call(keeper, {:execute_authorization, order_ref, user_ref, auth}, 60_000)
 
+  @doc """
+  Validate a self-submit EIP-3009 authorization and return the token
+  transaction without consuming the order. The destination and nonce remain
+  server-derived, and the signature is recovered locally before calldata is
+  exposed to the payer.
+  """
+  def build_self_authorization(keeper, order_ref, user_ref, auth),
+    do: GenServer.call(keeper, {:build_self_authorization, order_ref, user_ref, auth})
+
   def order_status(keeper, order_id), do: GenServer.call(keeper, {:order_status, order_id})
 
   @doc """
@@ -109,9 +122,10 @@ defmodule DelegatedSpend.Keeper do
   def authorization_domain(keeper), do: GenServer.call(keeper, :authorization_domain)
 
   @doc """
-  Shared enrichment for every view of an `"authorization"`-kind order — the
-  registration ack (`DelegatedSpend.Keeper.Object`) and the wallet dapp's
-  order view (`DelegatedSpend.Intake.handle_order/3`) both need the SAME
+  Shared enrichment for every `"authorization"` or
+  `"authorization_self"` order view — the registration ack
+  (`DelegatedSpend.Keeper.Object`) and the wallet dapp's order view
+  (`DelegatedSpend.Intake.handle_order/3`) both need the SAME
   nonce/destination/domain fields, computed from the SAME boot-verified
   `authorization_domain/1`; this is the one place that does it (review M7 —
   the two call sites merge into a differently-shaped `base` map and disagree
@@ -123,9 +137,7 @@ defmodule DelegatedSpend.Keeper do
       {:ok, domain} ->
         {:ok,
          Map.merge(base, %{
-           "nonce" =>
-             "0x" <>
-               Base.encode16(DelegatedSpend.Orders.authorization_nonce(order_ref), case: :lower),
+           "nonce" => DelegatedSpend.Orders.authorization_nonce_hex(order_ref),
            "to" => domain.treasury_address,
            "value" => amount,
            "valid_after" => 0,
@@ -158,15 +170,14 @@ defmodule DelegatedSpend.Keeper do
 
   @impl true
   def init(opts) do
-    # Authorization lane config (EIP-3009). Normalized ONCE, here: the lane is
-    # enabled iff `:signer`, `:token_address` and `:treasury_address` are ALL
-    # configured; a partial configuration refuses boot (see
-    # `authorization_enabled?/1`). Everything downstream reads the single
-    # boolean, so no execution path can ever discover a missing key halfway
-    # through and crash with an order already consumed.
+    # Authorization lane config (EIP-3009), normalized ONCE here. Domain-ready
+    # needs the token + treasury + the boot proof below and serves self-submit.
+    # Sponsored additionally needs a signer. A one-address partial domain
+    # still refuses boot, while signer-only remains a legal permit deployment.
     token_address = Map.get(opts, :token_address)
     treasury_address = Map.get(opts, :treasury_address)
-    authorization_enabled? = authorization_enabled?(opts)
+    authorization_domain_ready? = authorization_domain_ready?(opts)
+    authorization_sponsored? = authorization_sponsored?(opts, authorization_domain_ready?)
 
     # DOMAIN_SEPARATOR() = 0x3644e515. READ, never recomposed: a wrongly
     # composed domain produces signatures the chain rejects without saying
@@ -198,7 +209,8 @@ defmodule DelegatedSpend.Keeper do
       # of the real token deployments.
       token_name: token_name,
       token_version: token_version,
-      authorization_enabled?: authorization_enabled?,
+      authorization_domain_ready?: authorization_domain_ready?,
+      authorization_sponsored?: authorization_sponsored?,
       # The RUNTIME chain id (the app derives it from its RPC at boot). Not a
       # per-order field: order views stamp it at FETCH time, so orders
       # persisted before an upgrade still report the chain the keeper serves.
@@ -230,7 +242,8 @@ defmodule DelegatedSpend.Keeper do
       sweep_ms: Map.get(opts, :sweep_ms, 5_000),
       # Task 3b economic brakes (spec §5), EIP-3009 lane only. ALL optional —
       # an absent key does not limit (GasPolicy's own deliberate rule; see its
-      # moduledoc). Deliberately NOT in `authorization_enabled?/1`'s
+      # moduledoc). Deliberately NOT in either authorization capability
+      # predicate's
       # half-config check below: a deployment with none of these configured
       # is a legal, just UNBRAKED, deployment — real numbers are fixed by
       # measurement (Task 7), not required at boot.
@@ -255,6 +268,7 @@ defmodule DelegatedSpend.Keeper do
   def handle_call({:register_order, source, req}, _from, state) do
     with true <- MapSet.member?(state.allowlist, source) || {:error, {:unknown_source, source}},
          %{user_ref: user_ref, amount: amount, action_args: args} = req,
+         true <- valid_order_amount?(amount) || {:error, :bad_amount},
          {:ok, kind} <- order_kind(req, state),
          {:ok, order_ref} <- order_ref(state, req, user_ref) do
       order = %{
@@ -365,12 +379,14 @@ defmodule DelegatedSpend.Keeper do
           :unknown ->
             cond do
               Map.get(order, :kind, "permit") != "authorization" ->
+                # Defense in depth: self-submit orders must never reach the
+                # sponsor's consume/simulate/broadcast path, even on a keeper
+                # that has a signer configured.
                 {:reply, {:failed, :wrong_kind}, state}
 
-              # ONE normalized predicate, computed at boot (see
-              # `authorization_enabled?/1`): by the time we're here the lane is
-              # either fully configured or the keeper never booted.
-              not state.authorization_enabled? ->
+              # Sponsored execution needs the boot-proved domain AND a signer.
+              # Half-configured address pairs never boot.
+              not state.authorization_sponsored? ->
                 {:reply, {:failed, :authorization_lane_disabled}, state}
 
               # Same anti-griefing backoff as the permit lane (spec §5.2.1) —
@@ -389,7 +405,7 @@ defmodule DelegatedSpend.Keeper do
               not valid_authorization_fields?(auth) ->
                 {:reply, {:failed, :no_grant}, state}
 
-              auth.value != order.amount ->
+              auth.value !== order.amount ->
                 {:reply, {:failed, :no_grant}, state}
 
               # The SAME fail-closed owner binding the permit lane enforces
@@ -426,9 +442,59 @@ defmodule DelegatedSpend.Keeper do
     end
   end
 
+  def handle_call({:build_self_authorization, order_ref, user_ref, auth}, _from, state) do
+    reply =
+      case store(state).get_order_by_ref(store_ref(state), order_ref, user_ref) do
+        nil ->
+          {:error, :not_found}
+
+        order ->
+          cond do
+            Map.get(order, :kind, "permit") != "authorization_self" ->
+              {:error, :wrong_kind}
+
+            not state.authorization_domain_ready? ->
+              {:error, :authorization_lane_disabled}
+
+            now_s() > order.expires_at ->
+              {:error, :expired}
+
+            not valid_authorization_fields?(auth) ->
+              {:error, :no_grant}
+
+            auth.value !== order.amount ->
+              {:error, :no_grant}
+
+            not owner_binding_ok?(order, auth.from, state) ->
+              {:error, :no_grant}
+
+            true ->
+              with :ok <- error_result(authorization_window(auth, state)),
+                   :ok <- error_result(GasPolicy.minimum(auth.value, state.gas_policy)),
+                   {:ok, normalized_signature} <-
+                     verify_authorization_signature(order, auth, state) do
+                normalized_auth = Map.put(auth, :signature, normalized_signature)
+
+                {:ok,
+                 %{
+                   to: state.token_address,
+                   data: authorization_calldata_hex(order, normalized_auth, state),
+                   chain_id: state.chain_id,
+                   valid_before: auth.valid_before
+                 }}
+              else
+                :error -> {:error, :invalid_signature}
+                {:error, reason} -> {:error, reason}
+              end
+          end
+      end
+
+    {:reply, reply, state}
+  end
+
   def handle_call(:authorization_domain, _from, state) do
     reply =
-      if state.authorization_enabled? do
+      if state.authorization_domain_ready? do
         {:ok,
          %{
            treasury_address: state.treasury_address,
@@ -507,40 +573,27 @@ defmodule DelegatedSpend.Keeper do
 
   defp receipt(_state, _hash), do: nil
 
-  # The authorization lane needs THREE things to move money: a signer to
-  # broadcast, a token to call, and a treasury to credit. Half of them is not a
-  # runtime condition, it is a broken DEPLOY — and one that is expensive to
-  # discover late: a keeper that reports the lane enabled and then raises
-  # mid-execution can leave an order durably `:pending` with no tx hash, which
-  # adoption.md forbids ever resubmitting. So it fails at boot, exactly like the
-  # DOMAIN_SEPARATOR read below.
-  #
-  # `:signer` ALONE is not a request for this lane — that's the permit-only
-  # deployment every M1 keeper runs — so the lane is only "asked for" once one
-  # of its own two address keys appears. Neither key = lane cleanly disabled,
-  # no new boot cost, no new failure mode.
-  defp authorization_enabled?(opts) do
+  # The domain needs BOTH addresses. One without the other is still a broken
+  # deployment and refuses boot: neither self-submit nor sponsorship can build
+  # safe calldata from it. Both absent is a clean permit-only deployment.
+  defp authorization_domain_ready?(opts) do
     configured = [
-      signer: Map.get(opts, :signer),
       token_address: Map.get(opts, :token_address),
       treasury_address: Map.get(opts, :treasury_address)
     ]
 
-    requested? =
-      not (is_nil(configured[:token_address]) and is_nil(configured[:treasury_address]))
-
+    present = Enum.reject(configured, fn {_key, value} -> is_nil(value) end)
     missing = for {key, nil} <- configured, do: key
 
     cond do
-      not requested? ->
+      present == [] ->
         false
 
       missing != [] ->
         raise ArgumentError,
-              "keeper: authorization lane is half-configured — missing " <>
+              "keeper: authorization domain is half-configured — missing " <>
                 Enum.map_join(missing, ", ", &inspect/1) <>
-                ". Configure all of :signer, :token_address and :treasury_address, " <>
-                "or none of :token_address/:treasury_address for a permit-only deployment."
+                ". Configure both :token_address and :treasury_address, or neither."
 
       true ->
         validate_authorization_address!(:treasury_address, configured[:treasury_address])
@@ -548,6 +601,12 @@ defmodule DelegatedSpend.Keeper do
         true
     end
   end
+
+  # A signer alone is the existing permit-only deployment and does not request
+  # EIP-3009 sponsorship. A domain-ready keeper without one intentionally
+  # serves self-submit only; adding the signer enables the sponsored lane too.
+  defp authorization_sponsored?(opts, domain_ready?),
+    do: domain_ready? and not is_nil(Map.get(opts, :signer))
 
   # R1 (re-review): presence is not shape. `Address.to_bytes/1` has a raw
   # `<<_::binary-size(20)>>` pass-through clause, so a config value that is
@@ -661,18 +720,7 @@ defmodule DelegatedSpend.Keeper do
   # calldata being built solely from server-held config/state, never from
   # client-supplied routing.
   defp execute_authorization_consumed(order, auth, state) do
-    nonce = DelegatedSpend.Orders.authorization_nonce(order.order_ref)
-
-    calldata_hex =
-      DelegatedSpend.Keeper.Eip3009.transfer_with_authorization_calldata(
-        auth.from,
-        state.treasury_address,
-        auth.value,
-        auth.valid_after,
-        auth.valid_before,
-        nonce,
-        auth.signature
-      )
+    calldata_hex = authorization_calldata_hex(order, auth, state)
 
     # Eip3009 returns calldata as "0x…" text (shaped for an external
     # consumer, e.g. an HTTP response), but the Signer — like
@@ -691,12 +739,22 @@ defmodule DelegatedSpend.Keeper do
     submit_consumed(order, %{to: state.token_address, data: data, value: 0}, state)
   end
 
-  # Task 3b: consult the three economic brakes as ONE pure decision
-  # (`GasPolicy.admit/2`), fetching the two dynamic readings it needs ONLY
-  # when at least one brake is actually configured — a keeper with none of
-  # `:max_gas_wei` / `:daily_gas_budget_wei` / `:min_order_units` set pays no
-  # extra RPC call or store read for a policy that would always answer `:ok`
-  # anyway (mirrors `deadline_slack_ok?/2`'s "0 disables the check" shape).
+  defp authorization_calldata_hex(order, auth, state) do
+    Eip3009.transfer_with_authorization_calldata(
+      auth.from,
+      state.treasury_address,
+      auth.value,
+      auth.valid_after,
+      auth.valid_before,
+      DelegatedSpend.Orders.authorization_nonce(order.order_ref),
+      auth.signature
+    )
+  end
+
+  # Sponsored execution preserves the original all-or-nothing dynamic-read
+  # behavior: configuring ANY economic brake (including only the minimum)
+  # fetches the gas price and accounting readings before GasPolicy.admit/2.
+  # Self-submit calls GasPolicy.minimum/2 directly and never reaches here.
   defp gas_policy_admit(order_units, state) do
     config = state.gas_policy
 
@@ -744,8 +802,20 @@ defmodule DelegatedSpend.Keeper do
     _kind, _reason -> {:error, :rpc_timeout}
   end
 
-  defp gas_spent_today(state),
-    do: store(state).gas_spent_since(store_ref(state), now_s() - @gas_budget_window_s)
+  defp gas_spent_today(state) do
+    store = store(state)
+
+    if function_exported?(store, :gas_spent_since, 2) do
+      store.gas_spent_since(store_ref(state), now_s() - @gas_budget_window_s)
+    else
+      Logger.warning(
+        "keeper gas budget configured but #{inspect(store)} does not implement " <>
+          "optional gas_spent_since/2; treating prior sponsored gas spend as 0"
+      )
+
+      0
+    end
+  end
 
   # Fix wave (Important #1+#2, structural fix): gas-spend is recorded at the
   # SAME durable pre-broadcast moment the Signer already persists the
@@ -1016,8 +1086,8 @@ defmodule DelegatedSpend.Keeper do
   # BEFORE the caller ever reaches `order_ref/3`/`put_order/2` (review I2): a
   # disabled lane must not persist a phantom order or burn the caller-minted
   # `order_ref` — a rejected registration must be retriable, byte-identical,
-  # with no trace left behind. `authorization_enabled?` is the same
-  # boot-computed predicate `execute_authorization` already trusts.
+  # with no trace left behind. Each authorization kind uses its own
+  # boot-computed capability predicate.
   defp order_kind(req, state) do
     case Map.get(req, :kind, "permit") do
       "permit" ->
@@ -1027,8 +1097,15 @@ defmodule DelegatedSpend.Keeper do
       # no routing payload of its own — the destination is the keeper's own
       # treasury — so there is nothing extra to validate here.
       "authorization" ->
-        if state.authorization_enabled?,
+        if state.authorization_sponsored?,
           do: {:ok, "authorization"},
+          else: {:error, :authorization_lane_disabled}
+
+      # Self-submit shares the boot-proved token/domain/destination but never
+      # enters the sponsored execution door.
+      "authorization_self" ->
+        if state.authorization_domain_ready?,
+          do: {:ok, "authorization_self"},
           else: {:error, :authorization_lane_disabled}
 
       "bind" ->
@@ -1132,6 +1209,63 @@ defmodule DelegatedSpend.Keeper do
   end
 
   defp valid_authorization_fields?(_auth), do: false
+
+  defp verify_authorization_signature(order, auth, state) do
+    with {:ok, r, s, recid, normalized_signature} <-
+           normalize_authorization_signature(auth.signature),
+         true <- valid_signature_scalar?(r),
+         true <- valid_signature_scalar?(s),
+         true <- low_signature_scalar?(s),
+         digest <-
+           Eip3009.authorization_digest(
+             state.domain_separator,
+             auth.from,
+             state.treasury_address,
+             auth.value,
+             auth.valid_after,
+             auth.valid_before,
+             DelegatedSpend.Orders.authorization_nonce(order.order_ref)
+           ),
+         <<4, public_key::binary-size(64)>> <- Secp256k1.recover(digest, r, s, recid),
+         recovered <-
+           public_key
+           |> Keccak.hash_256()
+           |> binary_part(12, 20)
+           |> Address.checksum() do
+      if Address.eq?(recovered, auth.from), do: {:ok, normalized_signature}, else: :error
+    else
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  defp normalize_authorization_signature(<<r::binary-size(32), s::binary-size(32), v>>)
+       when v in [0, 1],
+       do: {:ok, r, s, v, r <> s <> <<v + 27>>}
+
+  defp normalize_authorization_signature(<<r::binary-size(32), s::binary-size(32), v>>)
+       when v in [27, 28],
+       do: {:ok, r, s, v - 27, r <> s <> <<v>>}
+
+  defp normalize_authorization_signature(_signature), do: :error
+
+  defp valid_signature_scalar?(bytes) do
+    scalar = :binary.decode_unsigned(bytes)
+    scalar > 0 and scalar < @secp256k1_order
+  end
+
+  defp low_signature_scalar?(bytes),
+    do: :binary.decode_unsigned(bytes) <= @secp256k1_half_order
+
+  defp valid_order_amount?(amount),
+    do: is_integer(amount) and amount >= 0 and amount <= @uint256_max
+
+  defp error_result(:ok), do: :ok
+  defp error_result({:reject, reason}), do: {:error, reason}
+  defp error_result(reason) when is_atom(reason), do: {:error, reason}
 
   # Defensive address validation at the trust boundary, in the same shape
   # `DelegatedSpend.Orders.validate_address!/2` uses for the order-building

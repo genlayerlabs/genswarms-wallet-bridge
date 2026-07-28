@@ -20,8 +20,9 @@ defmodule DelegatedSpend.Evm.Secp256k1 do
     * `s` is low-s normalized (EIP-2 / anti-malleability).
   Verified identical to `ex_secp256k1.sign/2` (also RFC-6979) across random inputs.
 
-  `recover/4` (used only to *check* signatures in tests, never on the money path) is
-  pure-Elixir point recovery — the one place we do field/point arithmetic.
+  `recover/4` checks client signatures (including self-submit authorization
+  preflight) and is pure-Elixir point recovery — the one place we do
+  field/point arithmetic.
   """
   import Bitwise
 

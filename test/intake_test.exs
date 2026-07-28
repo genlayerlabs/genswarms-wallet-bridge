@@ -4,11 +4,12 @@ defmodule DelegatedSpend.IntakeTest do
   @moduletag :capture_log
 
   alias DelegatedSpend.Compliance.MemoryStore, as: ComplianceStore
+  alias DelegatedSpend.Evm.{Address, Secp256k1}
   alias DelegatedSpend.FakeRpc
   alias DelegatedSpend.Intake
   alias DelegatedSpend.Intake.Rate
   alias DelegatedSpend.Keeper
-  alias DelegatedSpend.Keeper.{MemoryStore, Signer}
+  alias DelegatedSpend.Keeper.{Eip3009, MemoryStore, Signer}
 
   @anvil0 Base.decode16!("AC0974BEC39A17E36BA4A6B4D238FF944BACB478CBED5EFCAE784D7BF4F2FF80")
   @bot_token "1234567:TEST-fake-bot-token-for-vectors"
@@ -20,6 +21,25 @@ defmodule DelegatedSpend.IntakeTest do
     def record_event(:raise, _event), do: raise("event store down")
     def record_event(:exit, _event), do: exit(:event_store_down)
     def record_event(:throw, _event), do: throw(:event_store_down)
+  end
+
+  defmodule KeeperTouchSpy do
+    use GenServer
+
+    def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
+    def init(owner), do: {:ok, owner}
+
+    def handle_call(message, _from, owner) do
+      send(owner, {:keeper_touched, message})
+      {:reply, :unknown, owner}
+    end
+  end
+
+  defmodule TermsTouchSpy do
+    def get_acceptance({owner, tag}, user_ref, hash) do
+      send(owner, {:terms_touched, tag, user_ref, hash})
+      nil
+    end
   end
 
   defp init_data(user_id \\ @user_id, token \\ @bot_token) do
@@ -128,6 +148,13 @@ defmodule DelegatedSpend.IntakeTest do
     store = ComplianceStore.start()
 
     {Map.put(ctx, :compliance, %{geo_block: ["CU"], store: {ComplianceStore, store}}), store}
+  end
+
+  defp assert_authorization_parity(params, meta, ctx) do
+    sponsored = Intake.handle_authorization(params, meta, ctx)
+    self_submit = Intake.handle_self_authorization(params, meta, ctx)
+    assert self_submit == sponsored
+    sponsored
   end
 
   describe "compliance geofencing" do
@@ -1385,6 +1412,18 @@ defmodule DelegatedSpend.IntakeTest do
     ref
   end
 
+  defp register_self_authorization_order(keeper, user_id, amount \\ 1_000_000) do
+    {:ok, %{order_ref: ref}} =
+      Keeper.register_order(keeper, "market_phase", %{
+        user_ref: "ref-" <> Integer.to_string(user_id),
+        amount: amount,
+        action_args: [],
+        kind: "authorization_self"
+      })
+
+    ref
+  end
+
   defp auth_env(overrides \\ %{}) do
     Map.merge(
       %{
@@ -1401,35 +1440,75 @@ defmodule DelegatedSpend.IntakeTest do
     )
   end
 
+  defp signed_auth_env(order_ref, overrides \\ %{}) do
+    from = Address.from_private_key(@anvil0)
+
+    fields =
+      Map.merge(
+        %{from: from, value: 1_000_000, valid_after: 0, valid_before: 4_000_000_000},
+        overrides
+      )
+
+    domain = Eip3009.domain_separator("USDC", "2", 84_532, @token)
+
+    digest =
+      Eip3009.authorization_digest(
+        domain,
+        fields.from,
+        @treasury,
+        fields.value,
+        fields.valid_after,
+        fields.valid_before,
+        DelegatedSpend.Orders.authorization_nonce(order_ref)
+      )
+
+    {r, s, recid} = Secp256k1.sign(digest, @anvil0)
+
+    auth_env(%{
+      "from" => fields.from,
+      "value" => fields.value,
+      "valid_after" => fields.valid_after,
+      "valid_before" => fields.valid_before,
+      "signature" => "0x" <> Base.encode16(r <> s <> <<recid + 27>>, case: :lower)
+    })
+  end
+
   describe "handle_order/3 for an authorization-kind order" do
-    test "serves nonce/to/domain — everything the dapp needs to compose the EIP-712 payload" do
+    test "serves nonce/to/domain for both authorization kinds, but never calldata" do
       %{ctx: ctx, keeper: keeper} = start_authorization_stack()
-      ref = register_authorization_order(keeper, @user_id, 2_000_000)
 
-      assert {200, body} =
-               Intake.handle_order(
-                 order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}),
-                 ctx
-               )
+      for {kind, register} <- [
+            {"authorization", &register_authorization_order/3},
+            {"authorization_self", &register_self_authorization_order/3}
+          ] do
+        ref = register.(keeper, @user_id, 2_000_000)
 
-      assert body["kind"] == "authorization"
-      assert body["value"] == 2_000_000
-      assert body["to"] == @treasury
-      assert body["token"] == @token
-      assert body["valid_after"] == 0
-      assert body["valid_before"] == body["expires_at"]
+        assert {200, body} =
+                 Intake.handle_order(
+                   order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}),
+                   ctx
+                 )
 
-      expected_nonce =
-        "0x" <> Base.encode16(DelegatedSpend.Orders.authorization_nonce(ref), case: :lower)
+        assert body["kind"] == kind
+        assert body["value"] == 2_000_000
+        assert body["to"] == @treasury
+        assert body["token"] == @token
+        assert body["valid_after"] == 0
+        assert body["valid_before"] == body["expires_at"]
+        refute Map.has_key?(body, "data")
 
-      assert body["nonce"] == expected_nonce
+        expected_nonce =
+          "0x" <> Base.encode16(DelegatedSpend.Orders.authorization_nonce(ref), case: :lower)
 
-      assert body["domain"] == %{
-               "name" => "USDC",
-               "version" => "2",
-               "chainId" => 84_532,
-               "verifyingContract" => @token
-             }
+        assert body["nonce"] == expected_nonce
+
+        assert body["domain"] == %{
+                 "name" => "USDC",
+                 "version" => "2",
+                 "chainId" => 84_532,
+                 "verifyingContract" => @token
+               }
+      end
     end
 
     test "withholds nonce/to/domain until current terms are accepted, exactly like user_tx's tx" do
@@ -1455,6 +1534,286 @@ defmodule DelegatedSpend.IntakeTest do
       refute Map.has_key?(body, "nonce")
       refute Map.has_key?(body, "to")
       refute Map.has_key?(body, "domain")
+    end
+
+    test "WB8: an expired self-submit order is neither buildable nor served" do
+      %{ctx: ctx, keeper: keeper, store: store} = start_authorization_stack()
+      ref = String.duplicate("e8", 32)
+
+      :ok =
+        MemoryStore.put_order(store, %{
+          order_id: "0x" <> String.duplicate("18", 32),
+          order_ref: ref,
+          user_ref: "ref-#{@user_id}",
+          amount: 1_000_000,
+          action_args: [],
+          kind: "authorization_self",
+          tx: nil,
+          display: %{},
+          expected_owner: nil,
+          expires_at: System.os_time(:second) - 1
+        })
+
+      envelope = signed_auth_env(ref)
+
+      auth = %{
+        from: envelope["from"],
+        value: envelope["value"],
+        valid_after: envelope["valid_after"],
+        valid_before: envelope["valid_before"],
+        signature:
+          envelope["signature"]
+          |> String.replace_prefix("0x", "")
+          |> Base.decode16!(case: :mixed)
+      }
+
+      assert {:error, :expired} =
+               Keeper.build_self_authorization(keeper, ref, "ref-#{@user_id}", auth)
+
+      assert {410, %{"error" => "expired"}} =
+               Intake.handle_order(
+                 order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}),
+                 ctx
+               )
+    end
+  end
+
+  describe "handle_self_authorization/3" do
+    test "returns only the keeper-built transaction after signature verification" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack()
+      ref = register_self_authorization_order(keeper, @user_id)
+
+      params = %{
+        "v" => ctx.pinned.version,
+        "init_data" => init_data(),
+        "order_ref" => ref,
+        "authorization" => signed_auth_env(ref)
+      }
+
+      assert {200,
+              %{
+                "to" => @token,
+                "data" => "0x" <> _,
+                "chain_id" => 84_532,
+                "valid_before" => 4_000_000_000
+              }} = Intake.handle_self_authorization(params, %{}, ctx)
+    end
+
+    test "WB11: every gate and validation failure is a response diff against the sponsored sibling" do
+      for gate <- [:geofence, :version, :authenticate, :allow, :require_terms, :validate] do
+        {:ok, keeper_spy} = KeeperTouchSpy.start_link(self())
+        limiter = Rate.start(60)
+
+        base_ctx = %{
+          bot_token: @bot_token,
+          max_age_s: 900,
+          user_ref_fn: fn user_id -> "ref-" <> Integer.to_string(user_id) end,
+          keeper: keeper_spy,
+          pinned: %{chain_id: 84_532, token: @token, router: @router, version: "0.2.0"},
+          rate: {limiter, 100}
+        }
+
+        params = %{
+          "v" => base_ctx.pinned.version,
+          "init_data" => init_data(),
+          "order_ref" => "wb11-#{gate}",
+          "authorization" => auth_env()
+        }
+
+        {params, meta, ctx} =
+          case gate do
+            :geofence ->
+              {params, %{country: "XX"}, Map.put(base_ctx, :compliance, %{geo_block: ["XX"]})}
+
+            :version ->
+              stale =
+                params
+                |> Map.put("v", "0.0.9")
+                |> put_in(["authorization", "v"], "0.0.9")
+
+              {stale, %{}, base_ctx}
+
+            :authenticate ->
+              {Map.put(params, "init_data", "bad"), %{}, base_ctx}
+
+            :allow ->
+              {params, %{}, Map.put(base_ctx, :rate, {limiter, 0})}
+
+            :require_terms ->
+              compliance_store = ComplianceStore.start()
+
+              ctx =
+                Map.put(base_ctx, :compliance, %{
+                  geo_block: ["CU"],
+                  terms: %{
+                    hash: "0x" <> String.duplicate("11", 32),
+                    url: "https://example.test/terms"
+                  },
+                  store: {ComplianceStore, compliance_store}
+                })
+
+              {params, %{country: "US"}, ctx}
+
+            :validate ->
+              {put_in(params, ["authorization", "signature"], ""), %{}, base_ctx}
+          end
+
+        assert_authorization_parity(params, meta, ctx)
+        refute_received {:keeper_touched, _}
+      end
+    end
+
+    test "WB11 collisions preserve sponsored precedence and stop every later gate" do
+      {:ok, keeper_spy} = KeeperTouchSpy.start_link(self())
+      user_ref = "ref-#{@user_id}"
+      terms = %{hash: "0x" <> String.duplicate("11", 32), url: "https://example.test/terms"}
+
+      base_ctx = %{
+        bot_token: @bot_token,
+        max_age_s: 900,
+        user_ref_fn: fn user_id -> "ref-" <> Integer.to_string(user_id) end,
+        keeper: keeper_spy,
+        pinned: %{chain_id: 84_532, token: @token, router: @router, version: "0.2.0"}
+      }
+
+      base_params = %{
+        "v" => base_ctx.pinned.version,
+        "init_data" => init_data(),
+        "order_ref" => "wb11-collision",
+        "authorization" => auth_env()
+      }
+
+      stale_invalid =
+        base_params
+        |> Map.put("v", "0.0.9")
+        |> put_in(["authorization", "v"], "0.0.9")
+        |> Map.put("init_data", "bad")
+
+      invalid_auth = Map.put(base_params, "init_data", "bad")
+      stale_limiter = Rate.start(60)
+      auth_control_limiter = Rate.start(60)
+
+      stale_ctx =
+        base_ctx
+        |> Map.put(:rate, {stale_limiter, 1})
+        |> Map.put(:compliance, %{
+          geo_block: ["CU"],
+          terms: terms,
+          store: {TermsTouchSpy, {self(), :stale_invalid}}
+        })
+
+      auth_control_ctx =
+        base_ctx
+        |> Map.put(:rate, {auth_control_limiter, 1})
+        |> Map.put(:compliance, %{
+          geo_block: ["CU"],
+          terms: terms,
+          store: {TermsTouchSpy, {self(), :auth_control}}
+        })
+
+      stale_response =
+        assert_authorization_parity(stale_invalid, %{country: "US"}, stale_ctx)
+
+      auth_response =
+        assert_authorization_parity(invalid_auth, %{country: "US"}, auth_control_ctx)
+
+      assert stale_response == auth_response
+      assert :sys.get_state(stale_limiter).buckets == %{}
+      assert :sys.get_state(auth_control_limiter).buckets == %{}
+      refute_received {:terms_touched, :stale_invalid, _, _}
+      refute_received {:terms_touched, :auth_control, _, _}
+      refute_received {:keeper_touched, _}
+
+      stale =
+        base_params
+        |> Map.put("v", "0.0.9")
+        |> put_in(["authorization", "v"], "0.0.9")
+
+      geo_limiter = Rate.start(60)
+      geo_control_limiter = Rate.start(60)
+
+      geo_ctx = %{
+        compliance: %{geo_block: ["XX"]},
+        keeper: keeper_spy,
+        pinned: base_ctx.pinned,
+        rate: {geo_limiter, 100}
+      }
+
+      geo_control_ctx = %{geo_ctx | rate: {geo_control_limiter, 100}}
+
+      geo_stale_response =
+        assert_authorization_parity(stale, %{country: "XX"}, geo_ctx)
+
+      geo_response =
+        assert_authorization_parity(base_params, %{country: "XX"}, geo_control_ctx)
+
+      assert geo_stale_response == geo_response
+      refute Map.has_key?(:sys.get_state(geo_limiter).buckets, user_ref)
+      refute Map.has_key?(:sys.get_state(geo_control_limiter).buckets, user_ref)
+      refute_received {:keeper_touched, _}
+
+      exhausted_limiter = Rate.start(60)
+      rate_control_limiter = Rate.start(60)
+
+      exhausted_ctx =
+        base_ctx
+        |> Map.put(:rate, {exhausted_limiter, 0})
+        |> Map.put(:compliance, %{
+          geo_block: ["CU"],
+          terms: terms,
+          store: {TermsTouchSpy, {self(), :rate_exhausted}}
+        })
+
+      rate_control_ctx = Map.put(base_ctx, :rate, {rate_control_limiter, 0})
+
+      exhausted_response =
+        assert_authorization_parity(base_params, %{country: "US"}, exhausted_ctx)
+
+      rate_response =
+        assert_authorization_parity(base_params, %{country: "US"}, rate_control_ctx)
+
+      assert exhausted_response == rate_response
+      refute_received {:terms_touched, :rate_exhausted, _, _}
+      refute_received {:keeper_touched, _}
+    end
+
+    test "WB7: submitted accepts both user-sent kinds and records tx_submitted" do
+      %{ctx: base_ctx, keeper: keeper} = start_authorization_stack()
+      {ctx, event_store} = with_compliance(base_ctx)
+      tx_hash = "0x" <> String.duplicate("ef", 32)
+
+      for kind <- ["user_tx", "authorization_self"] do
+        {:ok, %{order_ref: ref}} =
+          Keeper.register_order(keeper, "market_phase", %{
+            user_ref: "ref-#{@user_id}",
+            amount: if(kind == "user_tx", do: 0, else: 1_000_000),
+            action_args: [],
+            kind: kind,
+            tx:
+              if(kind == "user_tx",
+                do: %{to: "0x" <> String.duplicate("11", 20), data: "0x", value: 0}
+              )
+          })
+
+        assert {200, %{"status" => "noted"}} =
+                 Intake.handle_submitted(
+                   %{
+                     "v" => ctx.pinned.version,
+                     "init_data" => init_data(),
+                     "order_ref" => ref,
+                     "tx_hash" => tx_hash
+                   },
+                   audit_meta(),
+                   ctx
+                 )
+      end
+
+      assert [
+               %{kind: "tx_submitted", order_ref: first},
+               %{kind: "tx_submitted", order_ref: second}
+             ] = ComplianceStore.events_for(event_store, "ref-#{@user_id}")
+
+      refute first == second
     end
   end
 

@@ -49,6 +49,12 @@ So `begin_execution/4` — the callback that consumes an order and opens its
 durable execution record — accepts exactly the two executable kinds, `permit`
 and `authorization`, and refuses everything else.
 
+`authorization_self` deliberately is not a third keeper-executed kind. It
+shares the boot-verified EIP-3009 domain and fixed treasury destination, but
+`build_self_authorization/4` returns verified token calldata for the payer's
+own wallet to broadcast. It never enters `begin_execution/4`, sponsor gas
+accounting, or the keeper signer.
+
 If you only need wallet-order transport, start the keeper registry-only:
 
 ```elixir
@@ -81,7 +87,8 @@ New or changed intake endpoints:
 |---|---|---|
 | `handle_order/2` | `{v, token \| init_data, order_ref}` | Fetch kind-aware order views; `user_tx` includes `tx`, `bind` includes `current_wallet`; owner-bound orders include `expected_owner`; EVERY view carries the keeper's runtime `chain_id` (the dapp fails closed on config drift). |
 | `handle_wallet/2` | `{v, token \| init_data, bind_ref, address}` | Consume one bind order and call `ctx.wallet_fn.(user_ref, address, bind_ref)`. |
-| `handle_submitted/2` | `{v, token \| init_data, order_ref, tx_hash}` | Best-effort user-tx report through `ctx.submitted_fn.(order_id, tx_hash)`. It has zero crediting authority. |
+| `handle_self_authorization/2` | `{v, token \| init_data, order_ref, authorization}` | Verify a signed `authorization_self` envelope and return `{to, data, chain_id, valid_before}` for the payer wallet. |
+| `handle_submitted/2` | `{v, token \| init_data, order_ref, tx_hash}` | Best-effort `user_tx` or `authorization_self` report through `ctx.submitted_fn.(order_id, tx_hash)`. It has zero crediting authority. |
 
 Optional ctx keys:
 
@@ -180,6 +187,26 @@ a `reason`) — never a raw crash. `not_yet_valid`/`expired` come from the
 authorization's OWN `valid_after`/`valid_before` window (checked against
 chain time, independent of the order's own TTL); `authorization_lane_disabled`
 means the keeper wasn't configured for this lane at all.
+
+**Self-submit sibling.** Register `kind: "authorization_self"` when the payer
+must fund the network fee. The order view serves the same nonce, fixed
+destination, amount, window, token, chain and verified domain as the sponsored
+kind. The dapp then:
+
+1. checks `eth_getCode` for the payer and refuses code-bearing/delegated
+   accounts before requesting the EOA-style authorization signature;
+2. signs the same `TransferWithAuthorization` typed data;
+3. `POST`s the envelope to `{intakeUrl}/authorization/self`;
+4. sends the returned `{to, data, chain_id}` with `eth_sendTransaction`; and
+5. best-effort reports the hash to `{intakeUrl}/orders/submitted`.
+
+The build endpoint does not consume the order and never returns calldata
+after the keeper-order TTL. The order view also answers expired after that
+TTL. Cross-package settlement must not use that TTL as payment truth,
+however: a transaction broadcast or mined after the keeper order expires but
+before the signed EIP-3009 `validBefore` remains valid on-chain. The payments
+hub must credit it from the registered nonce and confirmed chain event; the
+submitted callback and keeper order are only hints, never credit authority.
 
 ---
 
@@ -485,12 +512,12 @@ Money-lane bookkeeping should not be in-memory-only in production —
   `config.json` disagrees — moving `RPC_URL` to another chain without
   redeploying the dapp is a fund-loss class misdeploy, not a UX nit.
 
-- **Intake mounted.** The package ships six PURE handlers —
+- **Intake mounted.** The package ships seven PURE handlers —
   `DelegatedSpend.Intake.handle_order/2`, `handle_grant/2`,
-  `handle_authorization/2` (§0.4), `handle_wallet/2`, `handle_submitted/2`,
-  and `handle_terms/2`, each `params → {status, body_map}` — and YOU supply
-  the HTTP serving and the fail-closed bind (loopback unless explicitly
-  published). The ctx:
+  `handle_authorization/2`, `handle_self_authorization/2` (§0.4),
+  `handle_wallet/2`, `handle_submitted/2`, and `handle_terms/2`, each
+  `params → {status, body_map}` — and YOU supply the HTTP serving and the
+  fail-closed bind (loopback unless explicitly published). The ctx:
 
   ```elixir
   %{bot_token: bot_token,          # Telegram initData HMAC key
@@ -506,15 +533,17 @@ Money-lane bookkeeping should not be in-memory-only in production —
   ```
 
   The wallet dapp POSTs `{intakeUrl}/orders`, `{intakeUrl}/grants`,
-  `{intakeUrl}/authorization`, `{intakeUrl}/wallet`,
+  `{intakeUrl}/authorization`, `{intakeUrl}/authorization/self`,
+  `{intakeUrl}/wallet`,
   `{intakeUrl}/orders/submitted`, and, when compliance is enabled,
   `{intakeUrl}/terms`, with either `token` or `init_data` plus `v` in the
   body. A ~60-line Plug over Bandit is all the serving glue takes: route
   first, cap the body (64 kB → 413), decode-error → 400 — auth still happens
   inside the handlers. `DelegatedSpend.Intake.Plug` (§0.3) routes
-  `/orders`, `/orders/submitted`, `/terms` and `/authorization` itself; the
-  permit grant lane's `/grants` and `/wallet` need a keeper with a router and
-  action ABI plus a host `wallet_fn`, so they stay a host-mounted route.
+  `/orders`, `/orders/submitted`, `/terms`, `/authorization` and
+  `/authorization/self` itself; the permit grant lane's `/grants` and
+  `/wallet` need a keeper with a router and action ABI plus a host
+  `wallet_fn`, so they stay a host-mounted route.
 
 - **Keeper key provisioned.** The keeper signs with its OWN key
   (`SPEND_KEEPER_PRIVATE_KEY` in the template) — **never** the app's
@@ -547,6 +576,8 @@ def call(conn, ctx) do
   {status, body} = case {conn.method, conn.path_info} do
     {"POST", ["spend", "orders"]} -> Intake.handle_order(conn.params, meta, ctx)
     {"POST", ["spend", "grants"]} -> Intake.handle_grant(conn.params, meta, ctx)
+    {"POST", ["spend", "authorization"]} -> Intake.handle_authorization(conn.params, meta, ctx)
+    {"POST", ["spend", "authorization", "self"]} -> Intake.handle_self_authorization(conn.params, meta, ctx)
     {"POST", ["spend", "wallet"]} -> Intake.handle_wallet(conn.params, meta, ctx)
     {"POST", ["spend", "orders", "submitted"]} -> Intake.handle_submitted(conn.params, meta, ctx)
     {"POST", ["spend", "terms"]} -> Intake.handle_terms(conn.params, meta, ctx)

@@ -7,7 +7,7 @@
  * The shipped default is intentionally contract-only — variables, no
  * element rules — so the package alone keeps the stock light, system-font
  * look (each page's inline base styles) pixel-for-pixel. app.mjs stamps
- * data-state="error" | "success" on #status (and on #summary when the
+ * data-state="error" | "warning" | "success" on #status (and on #summary when the
  * order fails to load); themes may color those states, the default leaves
  * them unstyled.
  *

@@ -1,10 +1,15 @@
 defmodule DelegatedSpend.KeeperTest do
   use ExUnit.Case
   alias DelegatedSpend.FakeRpc
+  alias DelegatedSpend.Evm.{Address, Secp256k1}
   alias DelegatedSpend.Keeper
-  alias DelegatedSpend.Keeper.{MemoryStore, Signer}
+  alias DelegatedSpend.Keeper.{Eip3009, MemoryStore, Signer}
 
   @anvil0 Base.decode16!("AC0974BEC39A17E36BA4A6B4D238FF944BACB478CBED5EFCAE784D7BF4F2FF80")
+  @anvil1 Base.decode16!("59C6995E998F97A5A0044966F0945389DC9E86DAE88C7A8412F4603B6B78690D")
+  @secp256k1_order 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+  @secp256k1_half_order div(@secp256k1_order, 2)
+  @uint256_max Integer.pow(2, 256) - 1
   @router "0x00000000000000000000000000000000000000e1"
   @action %{
     with_permit_name: "payWithPermit",
@@ -16,6 +21,23 @@ defmodule DelegatedSpend.KeeperTest do
   # the TOKEN directly (`transferWithAuthorization`), never the router.
   @token "0x" <> String.duplicate("11", 20)
   @treasury "0x" <> String.duplicate("99", 20)
+  @golden_order_ref String.duplicate("ab", 32)
+  @golden_signature Base.decode16!(
+                      "fc34e4400f892e892fd64241dbee86cc4176bc638d347ea397c9bedd221f6e6a" <>
+                        "5710b62f7006a38bebb549e25f03337be8ff23776a67994762bdb6ea8dc2ee2e1b",
+                      case: :lower
+                    )
+  @golden_calldata "0xcf092995000000000000000000000000f39fd6e51aad88f6f4ce6a" <>
+                     "b8827279cfffb922660000000000000000000000009999999999999999999999999999" <>
+                     "99999999999900000000000000000000000000000000000000000000000000000000" <>
+                     "000f4240000000000000000000000000000000000000000000000000000000000000" <>
+                     "000000000000000000000000000000000000000000000000000000000000ee6b2800" <>
+                     "8817131248d609f6b5fbd43abf3b986ecd7c4d646cd2cb5d2a189f53ebcb8ae00000" <>
+                     "0000000000000000000000000000000000000000000000000000000000e000000000" <>
+                     "00000000000000000000000000000000000000000000000000000041fc34e4400f89" <>
+                     "2e892fd64241dbee86cc4176bc638d347ea397c9bedd221f6e6a5710b62f7006a38b" <>
+                     "ebb549e25f03337be8ff23776a67994762bdb6ea8dc2ee2e1b000000000000000000" <>
+                     "00000000000000000000000000000000000000000000"
 
   # Fix wave re-review regression double (Important): every callback
   # delegates straight to MemoryStore EXCEPT record_gas_spend/4, which
@@ -51,6 +73,34 @@ defmodule DelegatedSpend.KeeperTest do
     def record_gas_spend(_ref, _wei, _at, _prune_before) do
       raise "accounting store unavailable"
     end
+  end
+
+  # A pre-0.9 consumer store: it implements the execution contract but neither
+  # optional gas-accounting callback. The keeper must warn and continue.
+  defmodule LegacyStore do
+    alias DelegatedSpend.Keeper.MemoryStore
+
+    def put_order(ref, order), do: MemoryStore.put_order(ref, order)
+    def get_order(ref, order_id), do: MemoryStore.get_order(ref, order_id)
+
+    def get_order_by_ref(ref, order_ref, user_ref),
+      do: MemoryStore.get_order_by_ref(ref, order_ref, user_ref)
+
+    def consume_order(ref, order_id, user_ref),
+      do: MemoryStore.consume_order(ref, order_id, user_ref)
+
+    def begin_execution(ref, order_id, user_ref, action_key),
+      do: MemoryStore.begin_execution(ref, order_id, user_ref, action_key)
+
+    def get_execution_status(ref, order_id), do: MemoryStore.get_execution_status(ref, order_id)
+
+    def update_inflight_hash(ref, order_id, tx_hash),
+      do: MemoryStore.update_inflight_hash(ref, order_id, tx_hash)
+
+    def resolve_inflight(ref, order_id, result, at),
+      do: MemoryStore.resolve_inflight(ref, order_id, result, at)
+
+    def list_inflight(ref), do: MemoryStore.list_inflight(ref)
   end
 
   defp permit(value) do
@@ -192,6 +242,29 @@ defmodule DelegatedSpend.KeeperTest do
     }
   end
 
+  defp signed_self_auth(order_ref, overrides \\ %{}, private_key \\ @anvil0) do
+    auth =
+      valid_auth()
+      |> Map.put(:from, Address.from_private_key(@anvil0))
+      |> Map.merge(Map.new(overrides))
+
+    domain = Eip3009.domain_separator("USDC", "2", 84_532, @token)
+
+    digest =
+      Eip3009.authorization_digest(
+        domain,
+        auth.from,
+        @treasury,
+        auth.value,
+        auth.valid_after,
+        auth.valid_before,
+        DelegatedSpend.Orders.authorization_nonce(order_ref)
+      )
+
+    {r, s, recid} = Secp256k1.sign(digest, private_key)
+    %{auth | signature: r <> s <> <<recid + 27>>}
+  end
+
   # The last `{to, data}` pair the keeper handed the Signer for simulation —
   # this IS the transaction the keeper built, before any signing, so it's the
   # cheapest place to assert on the calldata's fixed destination.
@@ -211,6 +284,13 @@ defmodule DelegatedSpend.KeeperTest do
 
   defp padded_address(addr),
     do: String.duplicate("0", 24) <> String.replace_prefix(String.downcase(addr), "0x", "")
+
+  defp calldata_signature("0x" <> hex) do
+    <<_selector::binary-size(4), args::binary>> = Base.decode16!(hex, case: :mixed)
+    <<_head::binary-size(6 * 32), offset::256, _::binary>> = args
+    <<_::binary-size(offset), length::256, tail::binary>> = args
+    binary_part(tail, 0, length)
+  end
 
   # Boot a keeper with an ARBITRARY authorization-config subset (the caller
   # passes only the keys under test; `signer: :real` wires the real Signer).
@@ -260,6 +340,24 @@ defmodule DelegatedSpend.KeeperTest do
     assert {:error, {:unknown_source, "evil"}} = Keeper.register_order(keeper, "evil", req)
     assert {:ok, %{order_ref: ref}} = Keeper.register_order(keeper, "market_phase", order_req())
     assert is_binary(ref) and byte_size(ref) == 64
+  end
+
+  test "register: amount must be an integer uint256 before the order is persisted" do
+    %{keeper: keeper} = start_stack()
+    minted = String.duplicate("bc", 32)
+    base = Map.put(order_req(), :order_ref, minted)
+
+    for bad <- [1.0, -1, @uint256_max + 1] do
+      assert {:error, :bad_amount} =
+               Keeper.register_order(
+                 keeper,
+                 "market_phase",
+                 Map.put(base, :amount, bad)
+               )
+    end
+
+    assert {:ok, %{order_ref: ^minted, amount: 0}} =
+             Keeper.register_order(keeper, "market_phase", Map.put(base, :amount, 0))
   end
 
   test "register: caller-minted order_ref — accepted verbatim, format-checked, never shadows" do
@@ -1338,12 +1436,21 @@ defmodule DelegatedSpend.KeeperTest do
   end
 
   describe "execute_with_authorization/4" do
-    test "rejects an order of a different kind" do
+    test "WB5: rejects authorization_self even with a signer configured" do
       {keeper, store, _fake} = start_keeper_with_authorization_config()
-      put_order(store, %{order_ref: "r1", user_ref: "u1", kind: "permit", amount: 1_000_000})
+
+      order =
+        put_order(store, %{
+          order_ref: "r1",
+          user_ref: "u1",
+          kind: "authorization_self",
+          amount: 1_000_000
+        })
 
       assert {:failed, :wrong_kind} =
                Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert MemoryStore.get_execution_status(store, order.order_id) == :unknown
     end
 
     test "rejects an amount that doesn't match the order" do
@@ -1514,6 +1621,24 @@ defmodule DelegatedSpend.KeeperTest do
     end
 
     # ── field validation: typed failures, never a crash ─────────────────────
+
+    test "authorization amount comparison is strict even for a malformed stored float" do
+      {keeper, store, fake} = start_keeper_with_authorization_config()
+
+      order =
+        put_order(store, %{
+          order_ref: "r1",
+          user_ref: "u1",
+          kind: "authorization",
+          amount: 1.0
+        })
+
+      assert {:failed, :no_grant} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", %{valid_auth() | value: 1})
+
+      assert submitted_tx_count(fake) == 0
+      assert MemoryStore.get_execution_status(store, order.order_id) == :unknown
+    end
 
     test "a non-integer valid_before is a typed failure, not a submitted tx" do
       {keeper, store, fake} = start_keeper_with_authorization_config()
@@ -1730,11 +1855,303 @@ defmodule DelegatedSpend.KeeperTest do
     end
   end
 
+  describe "build_self_authorization/4" do
+    test "WB1: returns the frozen transferWithAuthorization calldata vector" do
+      {keeper, store, _fake} = start_keeper_with_authorization_config()
+
+      put_order(store, %{
+        order_ref: @golden_order_ref,
+        user_ref: "u1",
+        kind: "authorization_self",
+        amount: 1_000_000
+      })
+
+      auth = %{
+        from: Address.from_private_key(@anvil0),
+        value: 1_000_000,
+        valid_after: 0,
+        valid_before: 4_000_000_000,
+        signature: @golden_signature
+      }
+
+      assert {:ok,
+              %{
+                to: @token,
+                data: @golden_calldata,
+                chain_id: 84_532,
+                valid_before: 4_000_000_000
+              }} = Keeper.build_self_authorization(keeper, @golden_order_ref, "u1", auth)
+    end
+
+    test "accepts both wallet v encodings, 27/28 and 0/1" do
+      {keeper, store, _fake} = start_keeper_with_authorization_config()
+      ref = String.duplicate("cd", 32)
+
+      put_order(store, %{
+        order_ref: ref,
+        user_ref: "u1",
+        kind: "authorization_self",
+        amount: 1_000_000
+      })
+
+      auth_legacy = signed_self_auth(ref)
+      <<rs::binary-size(64), v>> = auth_legacy.signature
+      auth_parity = %{auth_legacy | signature: rs <> <<v - 27>>}
+
+      assert {:ok, %{data: legacy_data}} =
+               Keeper.build_self_authorization(keeper, ref, "u1", auth_legacy)
+
+      assert {:ok, %{data: parity_data}} =
+               Keeper.build_self_authorization(keeper, ref, "u1", auth_parity)
+
+      assert parity_data == legacy_data
+
+      for data <- [legacy_data, parity_data] do
+        <<_r::binary-size(32), s::binary-size(32), emitted_v>> = calldata_signature(data)
+        assert :binary.decode_unsigned(s) <= @secp256k1_half_order
+        assert emitted_v in [27, 28]
+      end
+    end
+
+    test "refuses a malleated high-s signature instead of returning doomed calldata" do
+      {keeper, store, _fake} = start_keeper_with_authorization_config()
+      ref = String.duplicate("ce", 32)
+
+      put_order(store, %{
+        order_ref: ref,
+        user_ref: "u1",
+        kind: "authorization_self",
+        amount: 1_000_000
+      })
+
+      auth = signed_self_auth(ref)
+      <<r::binary-size(32), low_s::binary-size(32), v>> = auth.signature
+      high_s_int = @secp256k1_order - :binary.decode_unsigned(low_s)
+      encoded_high_s = :binary.encode_unsigned(high_s_int)
+      high_s = :binary.copy(<<0>>, 32 - byte_size(encoded_high_s)) <> encoded_high_s
+      flipped_v = if v == 27, do: 28, else: 27
+
+      assert high_s_int > @secp256k1_half_order
+
+      assert {:error, :invalid_signature} =
+               Keeper.build_self_authorization(
+                 keeper,
+                 ref,
+                 "u1",
+                 %{auth | signature: r <> high_s <> <<flipped_v>>}
+               )
+    end
+
+    test "WB2: refuses a structurally valid signature from the wrong key without calldata" do
+      {keeper, store, _fake} = start_keeper_with_authorization_config()
+      ref = String.duplicate("de", 32)
+
+      order =
+        put_order(store, %{
+          order_ref: ref,
+          user_ref: "u1",
+          kind: "authorization_self",
+          amount: 1_000_000
+        })
+
+      wrong_signer = signed_self_auth(ref, %{}, @anvil1)
+      <<r::binary-size(32), s::binary-size(32), v>> = wrong_signer.signature
+      assert :binary.decode_unsigned(r) in 1..(@secp256k1_order - 1)
+      assert :binary.decode_unsigned(s) in 1..@secp256k1_half_order
+      assert v in [27, 28]
+
+      result = Keeper.build_self_authorization(keeper, ref, "u1", wrong_signer)
+      assert result == {:error, :invalid_signature}
+      refute match?({:ok, %{data: _}}, result)
+
+      assert MemoryStore.get_execution_status(store, order.order_id) == :unknown
+    end
+
+    test "WB3: ignores envelope to and refuses a value different from the order" do
+      {keeper, store, _fake} = start_keeper_with_authorization_config()
+      ref = String.duplicate("ef", 32)
+
+      put_order(store, %{
+        order_ref: ref,
+        user_ref: "u1",
+        kind: "authorization_self",
+        amount: 1_000_000
+      })
+
+      attacker = "0x" <> String.duplicate("aa", 20)
+      auth = signed_self_auth(ref) |> Map.put(:to, attacker)
+
+      assert {:ok, %{to: @token, data: data}} =
+               Keeper.build_self_authorization(keeper, ref, "u1", auth)
+
+      assert abi_word(data, 1) == padded_address(@treasury)
+      refute abi_word(data, 1) == padded_address(attacker)
+
+      assert {:error, :no_grant} =
+               Keeper.build_self_authorization(
+                 keeper,
+                 ref,
+                 "u1",
+                 signed_self_auth(ref, %{value: 999_999})
+               )
+    end
+
+    test "self-submit amount comparison is strict for a malformed stored float" do
+      {keeper, store, _fake} = start_keeper_with_authorization_config()
+      ref = String.duplicate("f0", 32)
+
+      put_order(store, %{
+        order_ref: ref,
+        user_ref: "u1",
+        kind: "authorization_self",
+        amount: 1.0
+      })
+
+      assert {:error, :no_grant} =
+               Keeper.build_self_authorization(
+                 keeper,
+                 ref,
+                 "u1",
+                 signed_self_auth(ref, %{value: 1})
+               )
+    end
+
+    test "WB4: refuses value above uint256 instead of wrapping or raising" do
+      {keeper, store, _fake} = start_keeper_with_authorization_config()
+      ref = String.duplicate("12", 32)
+
+      put_order(store, %{
+        order_ref: ref,
+        user_ref: "u1",
+        kind: "authorization_self",
+        amount: Integer.pow(2, 256)
+      })
+
+      auth = %{
+        from: Address.from_private_key(@anvil0),
+        value: Integer.pow(2, 256),
+        valid_after: 0,
+        valid_before: 4_000_000_000,
+        signature: @golden_signature
+      }
+
+      assert {:error, :no_grant} =
+               Keeper.build_self_authorization(keeper, ref, "u1", auth)
+
+      assert Process.alive?(keeper)
+    end
+
+    test "keeps min_order_units but ignores sponsor gas-price and budget brakes" do
+      {keeper, store, _fake} =
+        start_keeper_with_authorization_config(%{
+          min_order_units: 1_000_000,
+          max_gas_wei: 1,
+          daily_gas_budget_wei: 0,
+          gas_price: 999_999_999
+        })
+
+      ref = String.duplicate("34", 32)
+
+      put_order(store, %{
+        order_ref: ref,
+        user_ref: "u1",
+        kind: "authorization_self",
+        amount: 1_000_000
+      })
+
+      assert {:ok, _tx} =
+               Keeper.build_self_authorization(keeper, ref, "u1", signed_self_auth(ref))
+
+      below_ref = String.duplicate("56", 32)
+
+      put_order(store, %{
+        order_ref: below_ref,
+        user_ref: "u1",
+        kind: "authorization_self",
+        amount: 999_999
+      })
+
+      assert {:error, :below_minimum} =
+               Keeper.build_self_authorization(
+                 keeper,
+                 below_ref,
+                 "u1",
+                 signed_self_auth(below_ref, %{value: 999_999})
+               )
+    end
+
+    test "does not inherit the sponsor's anti-grief backoff" do
+      {keeper, store, _fake} =
+        start_keeper_with_authorization_config(%{
+          max_consecutive_reverts: 1,
+          simulate: {:revert, %{"message" => "no"}}
+        })
+
+      sponsored_ref = String.duplicate("78", 32)
+
+      put_order(store, %{
+        order_ref: sponsored_ref,
+        user_ref: "u1",
+        kind: "authorization",
+        amount: 1_000_000
+      })
+
+      assert {:refused, "no"} =
+               Keeper.execute_with_authorization(
+                 keeper,
+                 sponsored_ref,
+                 "u1",
+                 valid_auth()
+               )
+
+      assert Keeper.backoff_count(keeper, "u1") == 1
+
+      self_ref = String.duplicate("9a", 32)
+
+      put_order(store, %{
+        order_ref: self_ref,
+        user_ref: "u1",
+        kind: "authorization_self",
+        amount: 1_000_000
+      })
+
+      assert {:ok, _tx} =
+               Keeper.build_self_authorization(
+                 keeper,
+                 self_ref,
+                 "u1",
+                 signed_self_auth(self_ref)
+               )
+    end
+  end
+
   # Task 3b (spec §5): the three economic brakes, consulted BEFORE the
   # Signer, on the authorization lane only. Each rejection is a typed
   # `{:failed, _}` that consumes nothing (money never left, nothing was
   # broadcast) — mirrors every other typed-failure test above.
   describe "execute_with_authorization/4: economic brakes (Task 3b)" do
+    test "min-only sponsored config preserves the original gas RPC failure" do
+      {keeper, store, fake} =
+        start_keeper_with_authorization_config(%{
+          min_order_units: 1,
+          gas_price: {:error, :rpc_timeout}
+        })
+
+      order =
+        put_order(store, %{
+          order_ref: "r1",
+          user_ref: "u1",
+          kind: "authorization",
+          amount: 1_000_000
+        })
+
+      assert {:failed, :rpc_timeout} =
+               Keeper.execute_with_authorization(keeper, "r1", "u1", valid_auth())
+
+      assert submitted_tx_count(fake) == 0
+      assert MemoryStore.get_execution_status(store, order.order_id) == :unknown
+    end
+
     test "gas price ceiling: above :max_gas_wei is refused, nothing consumed or broadcast" do
       {keeper, store, fake} =
         start_keeper_with_authorization_config(%{max_gas_wei: 10, gas_price: 50})
@@ -2021,6 +2438,53 @@ defmodule DelegatedSpend.KeeperTest do
       assert MemoryStore.gas_spent_since(store, 0) > 0
     end
 
+    test "a legacy store without optional gas callbacks warns and still submits" do
+      fake = FakeRpc.start(%{chain_id: 84_532, nonce: 0, simulate: :ok})
+
+      {:ok, signer} =
+        Signer.start_link(
+          rpc_url: fake,
+          chain_id: 84_532,
+          priv: @anvil0,
+          rpc_mod: FakeRpc,
+          sweep_ms: 3_600_000
+        )
+
+      store = MemoryStore.start()
+
+      {:ok, keeper} =
+        Keeper.start_link(
+          signer: signer,
+          chain_id: 84_532,
+          store: {LegacyStore, store},
+          source_allowlist: ["market_phase"],
+          order_ttl_s: 600,
+          treasury_address: @treasury,
+          token_address: @token,
+          rpc_mod: FakeRpc,
+          rpc: fake,
+          sweep_ms: 3_600_000,
+          daily_gas_budget_wei: 999_999_999_999_999
+        )
+
+      {:ok, %{order_ref: ref}} =
+        Keeper.register_order(keeper, "market_phase", %{
+          user_ref: "u-a",
+          amount: 1_000_000,
+          action_args: [],
+          kind: "authorization"
+        })
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:submitted, _hash} =
+                   Keeper.execute_with_authorization(keeper, ref, "u-a", valid_auth())
+        end)
+
+      assert submitted_tx_count(fake) == 1
+      assert log =~ "does not implement optional gas_spent_since/2"
+    end
+
     # Fix wave re-review (Important): the accounting write and the hash write
     # share one closure (`persist_hash_fn`) — a raise in cost-recording must
     # never be mistaken for a hash-persistence failure. Before the fix, an
@@ -2216,7 +2680,7 @@ defmodule DelegatedSpend.KeeperTest do
   # then crashes mid-execution can strand a consumed order in durable
   # `:pending` with no tx hash, which adoption.md forbids ever resubmitting.
   describe "authorization lane boot: configuration coherence" do
-    test "a token address without a treasury address refuses to boot, naming the missing key" do
+    test "WB6 cell 3a: signer + token without treasury still refuses boot" do
       assert {:error, {%ArgumentError{message: message}, _}} =
                start_keeper_with(%{signer: :real, token_address: @token})
 
@@ -2231,19 +2695,48 @@ defmodule DelegatedSpend.KeeperTest do
       assert message =~ ":token_address"
     end
 
-    test "the addresses without a signer refuse to boot, naming :signer" do
-      assert {:error, {%ArgumentError{message: message}, _}} =
+    test "WB6 cell 1: token + treasury without signer boots self-submit only" do
+      assert {:ok, keeper} =
                start_keeper_with(%{token_address: @token, treasury_address: @treasury})
 
-      assert message =~ ":signer"
+      assert {:ok, %{order_ref: ref}} =
+               Keeper.register_order(
+                 keeper,
+                 "market_phase",
+                 Map.put(order_req(), :kind, "authorization_self")
+               )
+
+      assert {:ok, _tx} =
+               Keeper.build_self_authorization(
+                 keeper,
+                 ref,
+                 "u-a",
+                 signed_self_auth(ref, %{value: 25_000_000})
+               )
+
+      assert {:error, :authorization_lane_disabled} =
+               Keeper.register_order(
+                 keeper,
+                 "market_phase",
+                 Map.put(order_req(), :kind, "authorization")
+               )
+
+      assert {:ok, _domain} = Keeper.authorization_domain(keeper)
     end
 
-    test "a permit-only deployment (neither address) boots, paying no new cost" do
+    test "WB6 cell 4: no token or treasury boots permit-only and refuses self kind" do
       assert {:ok, keeper} = start_keeper_with(%{signer: :real})
       assert Process.alive?(keeper)
+
+      assert {:error, :authorization_lane_disabled} =
+               Keeper.register_order(
+                 keeper,
+                 "market_phase",
+                 Map.put(order_req(), :kind, "authorization_self")
+               )
     end
 
-    test "the fully configured lane boots" do
+    test "WB6 cell 2: token + treasury + signer serves both authorization kinds" do
       assert {:ok, keeper} =
                start_keeper_with(%{
                  signer: :real,
@@ -2252,6 +2745,15 @@ defmodule DelegatedSpend.KeeperTest do
                })
 
       assert Process.alive?(keeper)
+
+      for kind <- ["authorization_self", "authorization"] do
+        assert {:ok, _} =
+                 Keeper.register_order(
+                   keeper,
+                   "market_phase",
+                   Map.put(order_req(), :kind, kind)
+                 )
+      end
     end
 
     # R1 (re-review): presence alone is not enough. A truncated paste like

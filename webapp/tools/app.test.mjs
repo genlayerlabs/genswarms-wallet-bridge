@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { MESSAGES, RETURN_DELAY_S, askWhichWallet, entryRef, paintStatus, renderAuthorizationScreen, renderBrief, scheduleReturn, setupAuthorization, showTermsPrompt } from "../app.mjs";
+import { MESSAGES, RETURN_DELAY_S, askWhichWallet, entryRef, paintStatus, renderAuthorizationScreen, renderBrief, scheduleReturn, setupAuthorization, setupSelfAuthorization, showTermsPrompt } from "../app.mjs";
 
 const ACCOUNT = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 const TREASURY = "0x000000000000000000000000000000000000cccc";
@@ -668,4 +668,147 @@ describe("setupAuthorization (review N2)", () => {
     assert.equal(elements.pay.onclick, null, "no signing call must be reachable — onclick was never wired");
     assert.equal(signAttempts, 0);
   });
+});
+
+test("WB12: the self-submit screen shows the delegation error and never signs", async () => {
+  const { elements, get } = fakeDom();
+  const order = {
+    kind: "authorization_self",
+    amount: 1_000_000,
+    to: TREASURY,
+    value: 1_000_000,
+    token: "0x000000000000000000000000000000000000aaaa",
+    domain: {
+      name: "USDC",
+      version: "2",
+      chainId: 84_532,
+      verifyingContract: "0x000000000000000000000000000000000000aaaa",
+    },
+    nonce: "0x" + "ab".repeat(32),
+    valid_after: 0,
+    valid_before: 1_900_000_000,
+    chain_id: 84_532,
+  };
+  let signatures = 0;
+  const deps = {
+    provider: mockAuthProvider({
+      eth_getCode: () => "0xef0100" + "12".repeat(20),
+      eth_signTypedData_v4: () => {
+        signatures += 1;
+        return "0x" + "11".repeat(65);
+      },
+    }),
+    config: {
+      intakeUrl: "/spend",
+      version: "0.5.0",
+      chainId: 84_532,
+      actionLabel: "Top up",
+    },
+    fetchFn: async () => ({ status: 200, json: async () => order }),
+  };
+
+  await setupSelfAuthorization(deps, order, "oref-self", null, get);
+  await elements.pay.onclick();
+
+  assert.equal(elements.status.textContent, MESSAGES.wallet_has_code);
+  assert.equal(
+    elements.status.textContent,
+    "Your wallet has an active delegation/contract code; EOA-style signing will be rejected by USDC — use the deposit option or remove the delegation.",
+  );
+  assert.equal(elements.status.dataset.state, "error");
+  assert.equal(signatures, 0);
+});
+
+for (const [failure, submittedResponse] of [
+  ["non-2xx", { status: 503, json: async () => ({ error: "unavailable" }) }],
+  ["thrown fetch", null],
+]) {
+  test(`self-submit ${failure} report renders a sent-not-failed warning with the tx hash`, async () => {
+    const { elements, get } = fakeDom();
+    const txHash = "0x" + "ef".repeat(32);
+    const order = {
+      kind: "authorization_self",
+      amount: 1_000_000,
+      to: TREASURY,
+      value: 1_000_000,
+      token: "0x000000000000000000000000000000000000aaaa",
+      domain: {
+        name: "USDC",
+        version: "2",
+        chainId: 84_532,
+        verifyingContract: "0x000000000000000000000000000000000000aaaa",
+      },
+      nonce: "0x" + "ab".repeat(32),
+      valid_after: 0,
+      valid_before: 1_900_000_000,
+      chain_id: 84_532,
+    };
+    let closes = 0;
+    let sends = 0;
+    const deps = {
+      provider: mockAuthProvider({
+        eth_getCode: () => "0x",
+        eth_signTypedData_v4: () => "0x" + "11".repeat(65),
+        eth_sendTransaction: () => {
+          sends += 1;
+          return txHash;
+        },
+      }),
+      config: {
+        intakeUrl: "/spend",
+        version: "0.5.0",
+        chainId: 84_532,
+        actionLabel: "Top up",
+      },
+      initData: "id-blob",
+      fetchFn: async (url) => {
+        if (url.endsWith("/orders/submitted")) {
+          if (submittedResponse) return submittedResponse;
+          throw new Error("report endpoint offline");
+        }
+        if (url.endsWith("/authorization/self")) {
+          return {
+            status: 200,
+            json: async () => ({
+              to: order.token,
+              data: "0xcf092995" + "00".repeat(224),
+              chain_id: order.chain_id,
+              valid_before: order.valid_before,
+            }),
+          };
+        }
+        if (url.endsWith("/orders")) {
+          return { status: 200, json: async () => order };
+        }
+        throw new Error(`unmocked fetch ${url}`);
+      },
+    };
+
+    await setupSelfAuthorization(
+      deps,
+      order,
+      "oref-self-report",
+      { close: () => (closes += 1) },
+      get,
+    );
+    await elements.pay.onclick();
+
+    assert.equal(elements.status.dataset.state, "warning");
+    assert.match(elements.status.textContent, /^Transaction sent, but reporting failed\./);
+    assert.match(elements.status.textContent, new RegExp(txHash));
+    assert.match(elements.status.textContent, /Do not send it again\./);
+    assert.doesNotMatch(elements.status.textContent, /Payment failed|Transaction failed|try again|retry/i);
+    assert.equal(elements.pay.disabled, true, "the sent transaction cannot be resubmitted");
+    assert.equal(sends, 1);
+    assert.equal(closes, 0, "the warning stays visible instead of auto-closing");
+  });
+}
+
+test("authorization_self orders dispatch to the self-submit page flow", async () => {
+  const src = await readFile(new URL("../app.mjs", import.meta.url), "utf8");
+
+  assert.match(
+    src,
+    /kind === "authorization_self"\) return setupSelfAuthorization\(deps, fetched\.order, orderRef, tg\)/,
+  );
 });

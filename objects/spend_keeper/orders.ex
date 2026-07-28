@@ -212,6 +212,12 @@ defmodule DelegatedSpend.Orders do
     Keccak.hash_256(@authorization_domain <> order_ref)
   end
 
+  @doc "Nonce EIP-3009 host-derived, encoded as lowercase `0x` hex."
+  @spec authorization_nonce_hex(String.t()) :: String.t()
+  def authorization_nonce_hex(order_ref) when is_binary(order_ref) do
+    "0x" <> Base.encode16(authorization_nonce(order_ref), case: :lower)
+  end
+
   @doc """
   `nonce` EIP-3009 de una recogida de dirección de depósito (plan 3).
 

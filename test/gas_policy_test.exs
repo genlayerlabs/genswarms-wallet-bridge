@@ -48,4 +48,15 @@ defmodule DelegatedSpend.GasPolicyTest do
                %{}
              )
   end
+
+  test "el mínimo queda separado de los dos frenos exclusivos del sponsor" do
+    assert {:reject, :below_minimum} = GasPolicy.minimum(999_999, @config)
+    assert :ok = GasPolicy.minimum(1_000_000, @config)
+
+    assert {:reject, :gas_too_expensive} =
+             GasPolicy.sponsor_admit(
+               %{gas_price_wei: 101, spent_today_wei: 0},
+               @config
+             )
+  end
 end

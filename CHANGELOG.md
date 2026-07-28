@@ -9,6 +9,42 @@ The package version is stamped in `VERSION`, `vectors/VERSION`, `mix.exs`, and
 package releases can ship zero contract bytecode changes. `scripts/check-version.sh`
 (run in CI) fails on divergence.
 
+## [0.9.0] - 2026-07-28
+
+### Added
+
+- **Self-submit EIP-3009 lane (`authorization_self`)**: the payer signs the
+  same `TransferWithAuthorization` typed data and submits the transaction
+  from their own wallet, paying their own gas — no relayer involved. New
+  order kind, `Keeper.build_self_authorization/4` (same validation ladder as
+  sponsored execution minus the sponsor-only brakes; local ECRECOVER over
+  the boot-proved domain before any calldata is exposed; high-s signatures
+  refused — Circle's ECRecover enforces low-s, so accepting them would only
+  burn the payer's gas on a guaranteed revert), `POST /authorization/self`
+  intake endpoint behind the identical five-gate authority ladder, and the
+  full webapp flow (sign → send from your wallet → submitted report).
+- The enable predicate is split: `token_address` + `treasury_address` alone
+  (domain-ready) serve self-submit; adding `:signer` enables the sponsored
+  lane too. A half-configured domain still refuses boot. Signer-only remains
+  the permit-only deployment.
+- The dapp refuses to request a signature from an account WITH code (EIP-7702
+  delegation / smart wallet) — USDC validates code-bearing accounts via
+  EIP-1271, so an EOA-style signature would revert on-chain with a cryptic
+  error. Clear refusal instead; an `eth_getCode` failure also refuses.
+- `Orders.authorization_nonce_hex/1`; `gas_spent_since`/`record_gas_spend`
+  store callbacks are now optional (warning-degradation for legacy stores).
+
+### Changed
+
+- Order registration validates `amount` as an integer in `0..2^256-1`.
+- A failed `/orders/submitted` report after the wallet broadcast is a visible
+  "transaction sent, but reporting failed" warning carrying the tx hash —
+  never a fake success (the report is a watcher hint; the chain is truth).
+- `handle_submitted` accepts both `user_tx` and `authorization_self` orders
+  (an `authorization_self` tx-hash report previously died as a silent 422).
+- The self-submit signing brief tells the truth: three steps, the payer pays
+  the network fee (the "operator pays" line is sponsored-lane only).
+
 ## [0.8.0] - 2026-07-27
 
 ### Changed
