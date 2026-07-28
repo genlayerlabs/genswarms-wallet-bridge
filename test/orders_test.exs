@@ -315,6 +315,10 @@ defmodule DelegatedSpend.OrdersTest do
 
       assert DelegatedSpend.Orders.authorization_nonce(ref) ==
                DelegatedSpend.Orders.authorization_nonce(ref)
+
+      assert DelegatedSpend.Orders.authorization_nonce_hex(ref) ==
+               "0x" <>
+                 Base.encode16(DelegatedSpend.Orders.authorization_nonce(ref), case: :lower)
     end
 
     test "referencias distintas dan nonces distintos" do
