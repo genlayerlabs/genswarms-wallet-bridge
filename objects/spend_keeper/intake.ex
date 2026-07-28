@@ -196,49 +196,35 @@ defmodule DelegatedSpend.Intake do
   def handle_authorization(params, meta, ctx) when is_map(params) do
     order_ref = to_string(params["order_ref"] || "")
 
-    with :ok <- geofence(meta, ctx),
-         {:ok, user_ref} <- authenticate(params, ctx, order_ref),
-         :ok <- allow(ctx, user_ref),
-         :ok <- require_terms(ctx, user_ref) do
-      case GrantValidation.validate_authorization(params["authorization"] || %{}, ctx.pinned) do
-        {:error, {:pinned_mismatch, :version}} ->
-          {409, %{"error" => "version mismatch"}}
+    with {:ok, user_ref} <- authorization_gates(params, meta, ctx, order_ref),
+         {:ok, auth} <- validate_authorization(params, ctx) do
+      case Keeper.execute_with_authorization(ctx.keeper, order_ref, user_ref, auth) do
+        :pending ->
+          record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
+          {200, %{"status" => "pending"}}
 
-        {:error, {:pinned_mismatch, field}} ->
-          {422, %{"error" => "pinned mismatch", "field" => to_string(field)}}
+        {:submitted, hash} ->
+          record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
+          {200, %{"status" => "submitted", "tx" => hash}}
 
-        {:error, {:invalid, field}} ->
-          {422, %{"error" => "invalid", "field" => to_string(field)}}
+        {:mined, hash} ->
+          record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
+          {200, %{"status" => "mined", "tx" => hash}}
 
-        {:ok, auth} ->
-          case Keeper.execute_with_authorization(ctx.keeper, order_ref, user_ref, auth) do
-            :pending ->
-              record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
-              {200, %{"status" => "pending"}}
+        {:failed, :not_found} ->
+          {404, %{"error" => "not found"}}
 
-            {:submitted, hash} ->
-              record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
-              {200, %{"status" => "submitted", "tx" => hash}}
+        {:failed, reason} ->
+          {422, %{"status" => "failed", "reason" => to_string(reason)}}
 
-            {:mined, hash} ->
-              record_event(ctx, user_ref, "authorization_submitted", auth.from, order_ref, meta)
-              {200, %{"status" => "mined", "tx" => hash}}
+        # Simulation refused pre-broadcast: same wire status (the dapp's
+        # failure rendering already says "Nothing was charged", which is
+        # exactly true here) but the node's own reason instead of an atom.
+        {:refused, reason} ->
+          {422, %{"status" => "failed", "reason" => reason || "refused"}}
 
-            {:failed, :not_found} ->
-              {404, %{"error" => "not found"}}
-
-            {:failed, reason} ->
-              {422, %{"status" => "failed", "reason" => to_string(reason)}}
-
-            # Simulation refused pre-broadcast: same wire status (the dapp's
-            # failure rendering already says "Nothing was charged", which is
-            # exactly true here) but the node's own reason instead of an atom.
-            {:refused, reason} ->
-              {422, %{"status" => "failed", "reason" => reason || "refused"}}
-
-            :unknown ->
-              {404, %{"error" => "not found"}}
-          end
+        :unknown ->
+          {404, %{"error" => "not found"}}
       end
     else
       {:error, status, body} -> {status, body}
@@ -261,32 +247,17 @@ defmodule DelegatedSpend.Intake do
   def handle_self_authorization(params, meta, ctx) when is_map(params) do
     order_ref = to_string(params["order_ref"] || "")
 
-    with :ok <- geofence(meta, ctx),
-         :ok <- pin_version(params, ctx),
-         {:ok, user_ref} <- authenticate(params, ctx, order_ref),
-         :ok <- allow(ctx, user_ref),
-         :ok <- require_terms(ctx, user_ref) do
-      case GrantValidation.validate_authorization(params["authorization"] || %{}, ctx.pinned) do
-        {:error, {:pinned_mismatch, :version}} ->
-          {409, %{"error" => "version mismatch"}}
+    with {:ok, user_ref} <- authorization_gates(params, meta, ctx, order_ref),
+         {:ok, auth} <- validate_authorization(params, ctx) do
+      case Keeper.build_self_authorization(ctx.keeper, order_ref, user_ref, auth) do
+        {:ok, tx} ->
+          {200, stringify(tx)}
 
-        {:error, {:pinned_mismatch, field}} ->
-          {422, %{"error" => "pinned mismatch", "field" => to_string(field)}}
+        {:error, :not_found} ->
+          {404, %{"error" => "not found"}}
 
-        {:error, {:invalid, field}} ->
-          {422, %{"error" => "invalid", "field" => to_string(field)}}
-
-        {:ok, auth} ->
-          case Keeper.build_self_authorization(ctx.keeper, order_ref, user_ref, auth) do
-            {:ok, tx} ->
-              {200, stringify(tx)}
-
-            {:error, :not_found} ->
-              {404, %{"error" => "not found"}}
-
-            {:error, reason} ->
-              {422, %{"status" => "failed", "reason" => to_string(reason)}}
-          end
+        {:error, reason} ->
+          {422, %{"status" => "failed", "reason" => to_string(reason)}}
       end
     else
       {:error, status, body} -> {status, body}
@@ -503,6 +474,31 @@ defmodule DelegatedSpend.Intake do
   end
 
   defp pin_version(_params, _ctx), do: :ok
+
+  defp authorization_gates(params, meta, ctx, order_ref) do
+    with :ok <- geofence(meta, ctx),
+         {:ok, user_ref} <- authenticate(params, ctx, order_ref),
+         :ok <- allow(ctx, user_ref),
+         :ok <- require_terms(ctx, user_ref) do
+      {:ok, user_ref}
+    end
+  end
+
+  defp validate_authorization(params, ctx) do
+    case GrantValidation.validate_authorization(params["authorization"] || %{}, ctx.pinned) do
+      {:error, {:pinned_mismatch, :version}} ->
+        {:error, 409, %{"error" => "version mismatch"}}
+
+      {:error, {:pinned_mismatch, field}} ->
+        {:error, 422, %{"error" => "pinned mismatch", "field" => to_string(field)}}
+
+      {:error, {:invalid, field}} ->
+        {:error, 422, %{"error" => "invalid", "field" => to_string(field)}}
+
+      {:ok, auth} ->
+        {:ok, auth}
+    end
+  end
 
   defp terms_ref(ref) when is_binary(ref) and byte_size(ref) > 0, do: {:ok, ref}
   defp terms_ref(_ref), do: {:error, 422, %{"error" => "invalid", "field" => "ref"}}

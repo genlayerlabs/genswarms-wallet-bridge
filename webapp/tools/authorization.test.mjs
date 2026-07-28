@@ -341,6 +341,41 @@ test("self-submit: sign → verified calldata → wallet send → submitted repo
   assert.ok(methods.indexOf("eth_signTypedData_v4") < methods.indexOf("eth_sendTransaction"));
 });
 
+for (const [failure, submitted] of [
+  ["non-2xx", () => ({ status: 503, json: { error: "unavailable" } })],
+  ["thrown fetch", () => {
+    throw new Error("report endpoint offline");
+  }],
+]) {
+  test(`self-submit: ${failure} submitted report warns after preserving the tx hash`, async () => {
+    let sends = 0;
+    const provider = mockProvider({
+      eth_sendTransaction: () => {
+        sends += 1;
+        return TX_HASH;
+      },
+    });
+    const fetchFn = mockFetch({
+      orders: () => ({ status: 200, json: SELF_ORDER }),
+      selfAuthorization: () => ({ status: 200, json: SELF_TX }),
+      submitted,
+    });
+
+    const result = await runSelfAuthorizationFlow(
+      { provider, fetchFn, config: CONFIG, initData: "id-blob" },
+      SELF_ORDER.order_ref,
+    );
+
+    assert.deepEqual(result, {
+      ok: true,
+      warning: "submitted_report_failed",
+      tx: TX_HASH,
+      order: SELF_ORDER,
+    });
+    assert.equal(sends, 1, "the warning is after one successful wallet broadcast");
+  });
+}
+
 test("WB12: code-bearing payer is rejected before any signature or transaction", async () => {
   const provider = mockProvider({
     eth_getCode: () => "0xef0100" + "12".repeat(20),

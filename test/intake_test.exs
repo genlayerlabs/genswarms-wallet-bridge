@@ -23,6 +23,25 @@ defmodule DelegatedSpend.IntakeTest do
     def record_event(:throw, _event), do: throw(:event_store_down)
   end
 
+  defmodule KeeperTouchSpy do
+    use GenServer
+
+    def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
+    def init(owner), do: {:ok, owner}
+
+    def handle_call(message, _from, owner) do
+      send(owner, {:keeper_touched, message})
+      {:reply, :unknown, owner}
+    end
+  end
+
+  defmodule TermsTouchSpy do
+    def get_acceptance({owner, tag}, user_ref, hash) do
+      send(owner, {:terms_touched, tag, user_ref, hash})
+      nil
+    end
+  end
+
   defp init_data(user_id \\ @user_id, token \\ @bot_token) do
     fields = %{
       "auth_date" => Integer.to_string(System.os_time(:second)),
@@ -129,6 +148,13 @@ defmodule DelegatedSpend.IntakeTest do
     store = ComplianceStore.start()
 
     {Map.put(ctx, :compliance, %{geo_block: ["CU"], store: {ComplianceStore, store}}), store}
+  end
+
+  defp assert_authorization_parity(params, meta, ctx) do
+    sponsored = Intake.handle_authorization(params, meta, ctx)
+    self_submit = Intake.handle_self_authorization(params, meta, ctx)
+    assert self_submit == sponsored
+    sponsored
   end
 
   describe "compliance geofencing" do
@@ -1573,30 +1599,25 @@ defmodule DelegatedSpend.IntakeTest do
               }} = Intake.handle_self_authorization(params, %{}, ctx)
     end
 
-    test "WB11: every gate and validation response stays in parity with the sponsored sibling" do
-      cases = [
-        {:geofence, {451, "geo_blocked"}},
-        {:pin_version, {409, "version mismatch"}},
-        {:authenticate, {401, "unauthorized"}},
-        {:allow, {429, "rate limited"}},
-        {:require_terms, {428, "terms_required"}},
-        {:validate, {422, "invalid"}}
-      ]
+    test "WB11: every gate and validation failure is a response diff against the sponsored sibling" do
+      for gate <- [:geofence, :version, :authenticate, :allow, :require_terms, :validate] do
+        {:ok, keeper_spy} = KeeperTouchSpy.start_link(self())
+        limiter = Rate.start(60)
 
-      for {gate, {expected_status, expected_error}} <- cases,
-          handler <- [:handle_authorization, :handle_self_authorization] do
-        %{ctx: base_ctx, keeper: keeper} = start_authorization_stack()
-
-        ref =
-          if handler == :handle_authorization,
-            do: register_authorization_order(keeper, @user_id),
-            else: register_self_authorization_order(keeper, @user_id)
+        base_ctx = %{
+          bot_token: @bot_token,
+          max_age_s: 900,
+          user_ref_fn: fn user_id -> "ref-" <> Integer.to_string(user_id) end,
+          keeper: keeper_spy,
+          pinned: %{chain_id: 84_532, token: @token, router: @router, version: "0.2.0"},
+          rate: {limiter, 100}
+        }
 
         params = %{
           "v" => base_ctx.pinned.version,
           "init_data" => init_data(),
-          "order_ref" => ref,
-          "authorization" => signed_auth_env(ref)
+          "order_ref" => "wb11-#{gate}",
+          "authorization" => auth_env()
         }
 
         {params, meta, ctx} =
@@ -1604,7 +1625,7 @@ defmodule DelegatedSpend.IntakeTest do
             :geofence ->
               {params, %{country: "XX"}, Map.put(base_ctx, :compliance, %{geo_block: ["XX"]})}
 
-            :pin_version ->
+            :version ->
               stale =
                 params
                 |> Map.put("v", "0.0.9")
@@ -1616,7 +1637,7 @@ defmodule DelegatedSpend.IntakeTest do
               {Map.put(params, "init_data", "bad"), %{}, base_ctx}
 
             :allow ->
-              {params, %{}, Map.put(base_ctx, :rate, {Rate.start(60), 0})}
+              {params, %{}, Map.put(base_ctx, :rate, {limiter, 0})}
 
             :require_terms ->
               compliance_store = ComplianceStore.start()
@@ -1637,12 +1658,123 @@ defmodule DelegatedSpend.IntakeTest do
               {put_in(params, ["authorization", "signature"], ""), %{}, base_ctx}
           end
 
-        assert {status, body} = apply(Intake, handler, [params, meta, ctx])
-        assert status == expected_status, "#{handler} diverged at #{gate}: #{inspect(body)}"
-
-        assert body["error"] == expected_error,
-               "#{handler} diverged at #{gate}: #{inspect(body)}"
+        assert_authorization_parity(params, meta, ctx)
+        refute_received {:keeper_touched, _}
       end
+    end
+
+    test "WB11 collisions preserve sponsored precedence and stop every later gate" do
+      {:ok, keeper_spy} = KeeperTouchSpy.start_link(self())
+      user_ref = "ref-#{@user_id}"
+      terms = %{hash: "0x" <> String.duplicate("11", 32), url: "https://example.test/terms"}
+
+      base_ctx = %{
+        bot_token: @bot_token,
+        max_age_s: 900,
+        user_ref_fn: fn user_id -> "ref-" <> Integer.to_string(user_id) end,
+        keeper: keeper_spy,
+        pinned: %{chain_id: 84_532, token: @token, router: @router, version: "0.2.0"}
+      }
+
+      base_params = %{
+        "v" => base_ctx.pinned.version,
+        "init_data" => init_data(),
+        "order_ref" => "wb11-collision",
+        "authorization" => auth_env()
+      }
+
+      stale_invalid =
+        base_params
+        |> Map.put("v", "0.0.9")
+        |> put_in(["authorization", "v"], "0.0.9")
+        |> Map.put("init_data", "bad")
+
+      invalid_auth = Map.put(base_params, "init_data", "bad")
+      stale_limiter = Rate.start(60)
+      auth_control_limiter = Rate.start(60)
+
+      stale_ctx =
+        base_ctx
+        |> Map.put(:rate, {stale_limiter, 1})
+        |> Map.put(:compliance, %{
+          geo_block: ["CU"],
+          terms: terms,
+          store: {TermsTouchSpy, {self(), :stale_invalid}}
+        })
+
+      auth_control_ctx =
+        base_ctx
+        |> Map.put(:rate, {auth_control_limiter, 1})
+        |> Map.put(:compliance, %{
+          geo_block: ["CU"],
+          terms: terms,
+          store: {TermsTouchSpy, {self(), :auth_control}}
+        })
+
+      stale_response =
+        assert_authorization_parity(stale_invalid, %{country: "US"}, stale_ctx)
+
+      auth_response =
+        assert_authorization_parity(invalid_auth, %{country: "US"}, auth_control_ctx)
+
+      assert stale_response == auth_response
+      assert :sys.get_state(stale_limiter).buckets == %{}
+      assert :sys.get_state(auth_control_limiter).buckets == %{}
+      refute_received {:terms_touched, :stale_invalid, _, _}
+      refute_received {:terms_touched, :auth_control, _, _}
+      refute_received {:keeper_touched, _}
+
+      stale =
+        base_params
+        |> Map.put("v", "0.0.9")
+        |> put_in(["authorization", "v"], "0.0.9")
+
+      geo_limiter = Rate.start(60)
+      geo_control_limiter = Rate.start(60)
+
+      geo_ctx = %{
+        compliance: %{geo_block: ["XX"]},
+        keeper: keeper_spy,
+        pinned: base_ctx.pinned,
+        rate: {geo_limiter, 100}
+      }
+
+      geo_control_ctx = %{geo_ctx | rate: {geo_control_limiter, 100}}
+
+      geo_stale_response =
+        assert_authorization_parity(stale, %{country: "XX"}, geo_ctx)
+
+      geo_response =
+        assert_authorization_parity(base_params, %{country: "XX"}, geo_control_ctx)
+
+      assert geo_stale_response == geo_response
+      refute Map.has_key?(:sys.get_state(geo_limiter).buckets, user_ref)
+      refute Map.has_key?(:sys.get_state(geo_control_limiter).buckets, user_ref)
+      refute_received {:keeper_touched, _}
+
+      exhausted_limiter = Rate.start(60)
+      rate_control_limiter = Rate.start(60)
+
+      exhausted_ctx =
+        base_ctx
+        |> Map.put(:rate, {exhausted_limiter, 0})
+        |> Map.put(:compliance, %{
+          geo_block: ["CU"],
+          terms: terms,
+          store: {TermsTouchSpy, {self(), :rate_exhausted}}
+        })
+
+      rate_control_ctx = Map.put(base_ctx, :rate, {rate_control_limiter, 0})
+
+      exhausted_response =
+        assert_authorization_parity(base_params, %{country: "US"}, exhausted_ctx)
+
+      rate_response =
+        assert_authorization_parity(base_params, %{country: "US"}, rate_control_ctx)
+
+      assert exhausted_response == rate_response
+      refute_received {:terms_touched, :rate_exhausted, _, _}
+      refute_received {:keeper_touched, _}
     end
 
     test "WB7: submitted accepts both user-sent kinds and records tx_submitted" do

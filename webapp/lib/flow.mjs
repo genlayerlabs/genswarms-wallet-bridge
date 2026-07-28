@@ -501,7 +501,9 @@ async function signSelfAuthorization(deps, { orderRef, order, account }) {
 /**
  * Self-submit EIP-3009: fetch → connect → reject code-bearing accounts →
  * sign → ask the keeper for verified calldata → send from the payer wallet →
- * report the transaction hash as a best-effort watcher hint.
+ * report the transaction hash as a watcher hint. A reporting failure happens
+ * after the wallet broadcast and therefore returns a warning, never a payment
+ * failure that could invite a duplicate send.
  */
 export async function runSelfAuthorizationFlow(deps, orderRef, fetched = null) {
   fetched ??= await fetchOrder(deps, orderRef);
@@ -546,13 +548,27 @@ export async function runSelfAuthorizationFlow(deps, orderRef, fetched = null) {
     return { ok: false, reason: "send_failed" };
   }
 
+  let reportFailed = false;
   try {
-    await deps.fetchFn(`${deps.config.intakeUrl}/orders/submitted`, {
+    const res = await deps.fetchFn(`${deps.config.intakeUrl}/orders/submitted`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: authBody(deps, { order_ref: orderRef, tx_hash: tx }),
     });
-  } catch (_) {}
+
+    let body = {};
+    try {
+      body = (await res.json()) || {};
+    } catch (_) {}
+
+    if (res.status < 200 || res.status >= 300 || body.status !== "noted")
+      reportFailed = true;
+  } catch (_) {
+    reportFailed = true;
+  }
+
+  if (reportFailed)
+    return { ok: true, warning: "submitted_report_failed", tx, order: fetched.order };
 
   return { ok: true, tx, order: fetched.order };
 }

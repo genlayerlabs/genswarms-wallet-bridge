@@ -9,8 +9,8 @@ import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, run
 
 const $ = (id) => document.getElementById(id);
 
-// Theme seam, state half: terminal outcomes stamp data-state="error" or
-// "success" on the element they write to, so a theme can color them
+// Theme seam, state half: terminal outcomes stamp data-state="error",
+// "warning", or "success" on the element they write to, so a theme can color them
 // (#status[data-state="error"] { ... }); progress text carries no stamp.
 // The neutral default theme leaves every state unstyled and copy never
 // changes — without a themed selector this is visually inert.
@@ -482,7 +482,13 @@ export async function setupSelfAuthorization(deps, order, orderRef, tg, get = $)
     paintStatus(get("status"), "Connecting wallet…");
     const result = await runSelfAuthorizationFlow(deps, orderRef, fetched);
 
-    if (result.ok) {
+    if (result.warning === "submitted_report_failed") {
+      paintStatus(
+        get("status"),
+        `Transaction sent, but reporting failed. Do not send it again. Transaction hash: ${result.tx}. You can return to the chat.`,
+        "warning",
+      );
+    } else if (result.ok) {
       paintStatus(get("status"), "Transaction sent ✓ — you can return to the chat.", "success");
       scheduleReturn(tg, get);
     } else if (result.reason === "wrong_wallet") {
