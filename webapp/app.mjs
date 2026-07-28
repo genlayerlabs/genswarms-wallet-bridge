@@ -5,7 +5,7 @@
 import { applyProductName, productName } from "./lib/brand.mjs";
 import { authorizationBrief, briefLines } from "./lib/signing-brief.mjs";
 import { discoverProviders, needsChoice } from "./lib/providers.mjs";
-import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, runAuthorizationFlow, runBindFlow, runPermitFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
+import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, runAuthorizationFlow, runBindFlow, runPermitFlow, runSelfAuthorizationFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -42,6 +42,10 @@ export const MESSAGES = {
   geo_blocked: "This service isn't available in your region.",
   terms_stale: "The terms were updated — please review and accept the new version.",
   authorization_unavailable: "This payment link isn't active — please ask for a new one.",
+  wallet_has_code:
+    "Your wallet has an active delegation/contract code; EOA-style signing will be rejected by USDC — use the deposit option or remove the delegation.",
+  code_check_failed:
+    "We couldn't verify whether this wallet can use EOA-style signing. Try again, or use the deposit option.",
 };
 
 // How long a finished payment stays on screen before the page returns the
@@ -259,6 +263,7 @@ async function main() {
 
   if (fetched.order.kind === "user_tx") return setupUserTx(deps, fetched.order, orderRef, tg);
   if (fetched.order.kind === "bind") return setupBind(deps, fetched.order, orderRef, tg);
+  if (fetched.order.kind === "authorization_self") return setupSelfAuthorization(deps, fetched.order, orderRef, tg);
   if (fetched.order.kind === "authorization") return setupAuthorization(deps, fetched.order, orderRef, tg);
   setupPermit(deps, fetched.order, orderRef, tg);
 }
@@ -455,6 +460,53 @@ export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
       enterGeoDeadState(get("status"), get);
     } else {
       paintStatus(get("status"), MESSAGES[result.reason] || `Payment failed (${result.reason}). Nothing was charged — reopen this page from the chat button to retry.`, "error");
+      get("pay").disabled = false;
+    }
+  };
+  get("pay").onclick = () => run();
+}
+
+export async function setupSelfAuthorization(deps, order, orderRef, tg, get = $) {
+  if (authorizationEnrichmentMissing(order)) {
+    get("pay").hidden = true;
+    paintStatus(get("summary"), MESSAGES.authorization_unavailable, "error");
+    return;
+  }
+
+  renderAuthorizationScreen(deps, order, get);
+  if (!(await enforceOwnerAtLoad(deps, order, get))) return;
+  get("pay").disabled = false;
+
+  const run = async (fetched) => {
+    get("pay").disabled = true;
+    paintStatus(get("status"), "Connecting wallet…");
+    const result = await runSelfAuthorizationFlow(deps, orderRef, fetched);
+
+    if (result.ok) {
+      paintStatus(get("status"), "Transaction sent ✓ — you can return to the chat.", "success");
+      scheduleReturn(tg, get);
+    } else if (result.reason === "wrong_wallet") {
+      blockWrongWallet(result.expected, get);
+    } else if (result.reason === "terms_required") {
+      showTermsPrompt(
+        deps,
+        {
+          account: result.account,
+          terms: result.terms,
+          ref: orderRef,
+          retry: run,
+          renderSummary: (refreshedOrder) => renderAuthorizationScreen(deps, refreshedOrder, get),
+        },
+        get,
+      );
+    } else if (result.reason === "geo_blocked") {
+      enterGeoDeadState(get("status"), get);
+    } else {
+      paintStatus(
+        get("status"),
+        MESSAGES[result.reason] || `Payment failed (${result.reason}).`,
+        "error",
+      );
       get("pay").disabled = false;
     }
   };

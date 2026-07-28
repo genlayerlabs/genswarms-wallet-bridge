@@ -4,7 +4,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { configDrift, runAuthorizationFlow, termsRequired } from "../lib/flow.mjs";
+import {
+  configDrift,
+  hasAccountCode,
+  runAuthorizationFlow,
+  runSelfAuthorizationFlow,
+  termsRequired,
+} from "../lib/flow.mjs";
 import { buildAuthorizationEnvelope, buildAuthorizationTypedData } from "../lib/authorization.mjs";
 
 const CONFIG = {
@@ -43,6 +49,15 @@ const ORDER = {
   display: {},
 };
 
+const SELF_ORDER = { ...ORDER, order_ref: "oref-self-1", kind: "authorization_self" };
+const SELF_TX = {
+  to: CONFIG.token,
+  data: "0xcf092995" + "00".repeat(224),
+  chain_id: CONFIG.chainId,
+  valid_before: SELF_ORDER.valid_before,
+};
+const TX_HASH = "0x" + "ef".repeat(32);
+
 function mockProvider(overrides = {}) {
   const calls = [];
   return {
@@ -55,6 +70,8 @@ function mockProvider(overrides = {}) {
           return [ACCOUNT];
         case "eth_chainId":
           return "0x14a34"; // 84532
+        case "eth_getCode":
+          return "0x";
         case "eth_signTypedData_v4":
           return SIG;
         default:
@@ -69,7 +86,14 @@ function mockFetch(routes) {
   const fn = async (url, opts) => {
     const body = JSON.parse(opts.body);
     posts.push({ url, body });
-    const route = url.endsWith("/orders") ? routes.orders : routes.authorization;
+    const route =
+      url.endsWith("/orders/submitted")
+        ? routes.submitted
+        : url.endsWith("/orders")
+          ? routes.orders
+          : url.endsWith("/authorization/self")
+            ? routes.selfAuthorization
+            : routes.authorization;
     const { status, json } = route(body);
     return { status, json: async () => json };
   };
@@ -260,4 +284,129 @@ test("a non-200 authorization response maps the body's reason/error, or falls ba
   const result = await runAuthorizationFlow({ provider, fetchFn, config: CONFIG, initData: "x" }, "oref-a1");
   assert.equal(result.ok, false);
   assert.equal(result.reason, "expired");
+});
+
+test("self-submit: sign → verified calldata → wallet send → submitted report", async () => {
+  const sent = [];
+  const provider = mockProvider({
+    eth_sendTransaction: ({ params }) => {
+      sent.push(params[0]);
+      return TX_HASH;
+    },
+  });
+  const fetchFn = mockFetch({
+    orders: () => ({ status: 200, json: SELF_ORDER }),
+    selfAuthorization: () => ({ status: 200, json: SELF_TX }),
+    submitted: () => ({ status: 200, json: { status: "noted" } }),
+  });
+
+  const result = await runSelfAuthorizationFlow(
+    { provider, fetchFn, config: CONFIG, initData: "id-blob" },
+    SELF_ORDER.order_ref,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.tx, TX_HASH);
+  assert.deepEqual(sent, [
+    {
+      from: ACCOUNT,
+      to: SELF_TX.to,
+      data: SELF_TX.data,
+      chainId: "0x14a34",
+    },
+  ]);
+
+  const buildPost = fetchFn.posts.find((post) => post.url.endsWith("/authorization/self"));
+  assert.deepEqual(
+    buildPost.body.authorization,
+    buildAuthorizationEnvelope({
+      version: CONFIG.version,
+      chainId: CONFIG.chainId,
+      token: SELF_ORDER.token,
+      from: ACCOUNT,
+      value: SELF_ORDER.value,
+      validAfter: SELF_ORDER.valid_after,
+      validBefore: SELF_ORDER.valid_before,
+      signature: SIG,
+    }),
+  );
+
+  const report = fetchFn.posts.find((post) => post.url.endsWith("/orders/submitted"));
+  assert.equal(report.body.order_ref, SELF_ORDER.order_ref);
+  assert.equal(report.body.tx_hash, TX_HASH);
+  assert.equal(report.body.v, CONFIG.version);
+
+  const methods = provider.calls.map((call) => call.method);
+  assert.ok(methods.indexOf("eth_getCode") < methods.indexOf("eth_signTypedData_v4"));
+  assert.ok(methods.indexOf("eth_signTypedData_v4") < methods.indexOf("eth_sendTransaction"));
+});
+
+test("WB12: code-bearing payer is rejected before any signature or transaction", async () => {
+  const provider = mockProvider({
+    eth_getCode: () => "0xef0100" + "12".repeat(20),
+    eth_signTypedData_v4: () => {
+      throw new Error("must not ask a delegated account for the EOA-style signature");
+    },
+    eth_sendTransaction: () => {
+      throw new Error("must not send");
+    },
+  });
+  const fetchFn = mockFetch({
+    orders: () => ({
+      status: 200,
+      json: {
+        ...SELF_ORDER,
+        terms: {
+          required: true,
+          v_hash: "0x" + "11".repeat(32),
+          url: "https://example.test/terms",
+        },
+      },
+    }),
+    selfAuthorization: () => {
+      throw new Error("must not expose a signed envelope");
+    },
+  });
+
+  assert.deepEqual(
+    await runSelfAuthorizationFlow(
+      { provider, fetchFn, config: CONFIG, initData: "x" },
+      SELF_ORDER.order_ref,
+    ),
+    { ok: false, reason: "wallet_has_code" },
+  );
+
+  assert.ok(provider.calls.some((call) => call.method === "eth_getCode"));
+  assert.ok(!provider.calls.some((call) => call.method === "eth_signTypedData_v4"));
+  assert.ok(!provider.calls.some((call) => call.method === "eth_sendTransaction"));
+  assert.ok(!fetchFn.posts.some((post) => post.url.endsWith("/authorization/self")));
+});
+
+test("eth_getCode classification accepts empty/zero EOAs and detects real bytecode", () => {
+  for (const code of ["0x", "0x0", "0x00", "0x0000"]) assert.equal(hasAccountCode(code), false);
+  for (const code of ["0x01", "0xef0100"]) assert.equal(hasAccountCode(code), true);
+  for (const malformed of [null, "", "0xzz"]) assert.equal(hasAccountCode(malformed), null);
+});
+
+test("a failed eth_getCode check fails closed before signing", async () => {
+  const provider = mockProvider({
+    eth_getCode: () => {
+      throw new Error("RPC unavailable");
+    },
+  });
+  const fetchFn = mockFetch({
+    orders: () => ({ status: 200, json: SELF_ORDER }),
+    selfAuthorization: () => {
+      throw new Error("must not submit");
+    },
+  });
+
+  assert.deepEqual(
+    await runSelfAuthorizationFlow(
+      { provider, fetchFn, config: CONFIG, initData: "x" },
+      SELF_ORDER.order_ref,
+    ),
+    { ok: false, reason: "code_check_failed" },
+  );
+  assert.ok(!provider.calls.some((call) => call.method === "eth_signTypedData_v4"));
 });

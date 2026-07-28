@@ -71,6 +71,7 @@ export function authorizationBrief(order, config = {}, now = new Date()) {
   const token = config.tokenName || order.domain?.name || "tokens";
 
   return {
+    ...(order.kind === "authorization_self" ? { mode: "self_submit" } : {}),
     amount: formatUnits(order.value, decimals),
     token,
     destination: order.to,
@@ -101,13 +102,21 @@ export function briefLines(brief, productName) {
       key: "destination",
       text: brief.destination,
     },
-    {
-      key: "nature",
-      text:
-        `This is a signature, not a payment. It authorizes exactly this amount, ` +
-        `once. It cannot be reused and cannot take more. We submit it and pay the ` +
-        `network fee.`,
-    },
+    brief.mode === "self_submit"
+      ? {
+          key: "nature",
+          text:
+            `This signature authorizes exactly this amount, once. It cannot be ` +
+            `reused and cannot take more. The payment happens only when you send ` +
+            `the transaction from your wallet.`,
+        }
+      : {
+          key: "nature",
+          text:
+            `This is a signature, not a payment. It authorizes exactly this amount, ` +
+            `once. It cannot be reused and cannot take more. We submit it and pay the ` +
+            `network fee.`,
+        },
     {
       key: "raw",
       text:
@@ -119,7 +128,14 @@ export function briefLines(brief, productName) {
 
   if (brief.expiry) lines.push({ key: "expiry", text: `This authorization ${brief.expiry.label}.` });
 
-  if (brief.steps) {
+  if (brief.mode === "self_submit") {
+    lines.unshift({
+      key: "steps",
+      text:
+        "3 steps — 1. Sign the USDC authorization. 2. Send the transaction " +
+        "from your wallet and pay the network fee. 3. Return to the chat for confirmation.",
+    });
+  } else if (brief.steps) {
     lines.unshift({
       key: "steps",
       text: `Step ${brief.steps.current} of ${brief.steps.total} — accept the terms first, then the payment signature.`,
@@ -130,12 +146,21 @@ export function briefLines(brief, productName) {
   // seconds, the balance follows once the chain settles. Promising one minute
   // for the balance was simply untrue — it takes two to three — and a promise
   // the product misses reads as a failure even when everything worked.
-  lines.push({
-    key: "next",
-    text:
-      "After you sign we submit it straight away and confirm in the chat. " +
-      "Your balance updates there once the network settles, usually a couple of minutes.",
-  });
+  lines.push(
+    brief.mode === "self_submit"
+      ? {
+          key: "next",
+          text:
+            "After you send the transaction, confirmation appears in the chat. " +
+            "Your balance updates there once the network settles, usually a couple of minutes.",
+        }
+      : {
+          key: "next",
+          text:
+            "After you sign we submit it straight away and confirm in the chat. " +
+            "Your balance updates there once the network settles, usually a couple of minutes.",
+        },
+  );
 
   return lines;
 }

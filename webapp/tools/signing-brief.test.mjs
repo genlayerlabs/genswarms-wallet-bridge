@@ -59,6 +59,39 @@ test("the brief says a signature is not a payment, and what happens after", () =
   assert.match(next, /couple of minutes/, "the balance takes 2-3 minutes; promising one is a miss the user reads as failure");
 });
 
+test("WB10: self-submit shows the real three steps and never claims sponsored gas", () => {
+  const self = authorizationBrief(order({ kind: "authorization_self" }), CONFIG, NOW);
+  const text = briefLines(self, "Wingston")
+    .map((line) => line.text)
+    .join(" ");
+
+  assert.match(text, /3 steps/);
+  assert.match(text, /1\. Sign the USDC authorization/);
+  assert.match(text, /2\. Send the transaction from your wallet and pay the network fee/);
+  assert.match(text, /3\. Return to the chat for confirmation/);
+  assert.doesNotMatch(text, /We submit it/i);
+  assert.doesNotMatch(text, /operator pays/i);
+  assert.doesNotMatch(text, /gasless/i);
+});
+
+test("WB10: sponsored authorization keeps its existing gasless submission copy", () => {
+  const sponsored = authorizationBrief(order({ kind: "authorization" }), CONFIG, NOW);
+  const lines = briefLines(sponsored, "Wingston");
+  const nature = lines.find((line) => line.key === "nature").text;
+  const next = lines.find((line) => line.key === "next").text;
+
+  assert.equal(
+    nature,
+    "This is a signature, not a payment. It authorizes exactly this amount, once. " +
+      "It cannot be reused and cannot take more. We submit it and pay the network fee.",
+  );
+  assert.equal(
+    next,
+    "After you sign we submit it straight away and confirm in the chat. " +
+      "Your balance updates there once the network settles, usually a couple of minutes.",
+  );
+});
+
 test("a terms-gated order announces that TWO signatures are coming", () => {
   const gated = authorizationBrief(order({ terms: { required: true } }), CONFIG, NOW);
   assert.deepEqual(gated.steps, { current: 1, total: 2 });
