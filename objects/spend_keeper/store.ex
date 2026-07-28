@@ -75,6 +75,7 @@ defmodule DelegatedSpend.Keeper.Store do
               prune_before :: integer
             ) :: :ok
   @callback gas_spent_since(ref :: term, since :: integer) :: non_neg_integer
+  @optional_callbacks record_gas_spend: 4, gas_spent_since: 2
 
   @callback put_order(ref :: term, order) :: :ok
   @callback get_order(ref :: term, order_id :: String.t()) :: order | nil
