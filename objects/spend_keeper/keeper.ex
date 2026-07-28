@@ -24,8 +24,9 @@ defmodule DelegatedSpend.Keeper do
   Typed failure reasons: `no_grant | expired | reverted | rpc_timeout |
   not_found | suspended | wrong_kind | permit_lane_disabled`, plus
   `authorization_lane_disabled | not_yet_valid` on the EIP-3009 lane, plus
-  `gas_too_expensive | budget_exhausted | below_minimum` (Task 3b's economic
-  brakes, `GasPolicy.admit/2`, EIP-3009 lane only — see `gas_policy_admit/2`).
+  `below_minimum` on both authorization lanes. Sponsored authorization also
+  applies the sponsor-only `gas_too_expensive | budget_exhausted` brakes
+  through `GasPolicy.admit/2` — see `gas_policy_admit/2`.
   `suspended` is the §5.2.1 revert backoff — a grant that produced
   `max_consecutive_reverts` reverts is frozen until `reset_backoff/2` (the
   wallet dapp re-enable).
@@ -61,6 +62,7 @@ defmodule DelegatedSpend.Keeper do
   @max_json_safe_integer 9_007_199_254_740_991
   @uint256_max Integer.pow(2, 256) - 1
   @secp256k1_order 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+  @secp256k1_half_order div(@secp256k1_order, 2)
 
   # Optional :name registers the server (supervision-friendly: a restarted
   # keeper is reachable at the same name, so app ctx never holds a stale pid).
@@ -265,6 +267,7 @@ defmodule DelegatedSpend.Keeper do
   def handle_call({:register_order, source, req}, _from, state) do
     with true <- MapSet.member?(state.allowlist, source) || {:error, {:unknown_source, source}},
          %{user_ref: user_ref, amount: amount, action_args: args} = req,
+         true <- valid_order_amount?(amount) || {:error, :bad_amount},
          {:ok, kind} <- order_kind(req, state),
          {:ok, order_ref} <- order_ref(state, req, user_ref) do
       order = %{
@@ -401,7 +404,7 @@ defmodule DelegatedSpend.Keeper do
               not valid_authorization_fields?(auth) ->
                 {:reply, {:failed, :no_grant}, state}
 
-              auth.value != order.amount ->
+              auth.value !== order.amount ->
                 {:reply, {:failed, :no_grant}, state}
 
               # The SAME fail-closed owner binding the permit lane enforces
@@ -458,7 +461,7 @@ defmodule DelegatedSpend.Keeper do
             not valid_authorization_fields?(auth) ->
               {:error, :no_grant}
 
-            auth.value != order.amount ->
+            auth.value !== order.amount ->
               {:error, :no_grant}
 
             not owner_binding_ok?(order, auth.from, state) ->
@@ -747,39 +750,41 @@ defmodule DelegatedSpend.Keeper do
     )
   end
 
-  # The minimum applies to both authorization lanes. Only sponsored execution
-  # proceeds to the dynamic gas-price and rolling-budget brakes.
+  # Sponsored execution preserves the original all-or-nothing dynamic-read
+  # behavior: configuring ANY economic brake (including only the minimum)
+  # fetches the gas price and accounting readings before GasPolicy.admit/2.
+  # Self-submit calls GasPolicy.minimum/2 directly and never reaches here.
   defp gas_policy_admit(order_units, state) do
     config = state.gas_policy
 
-    with :ok <- GasPolicy.minimum(order_units, config) do
-      if sponsor_gas_policy_empty?(config) do
-        :ok
-      else
-        case current_gas_price(state) do
-          {:error, reason} ->
-            {:reject, reason}
+    if gas_policy_config_empty?(config) do
+      :ok
+    else
+      case current_gas_price(state) do
+        {:error, reason} ->
+          {:reject, reason}
 
-          price ->
-            GasPolicy.sponsor_admit(
-              %{
-                gas_price_wei: price,
-                spent_today_wei: gas_spent_today(state)
-              },
-              config
-            )
-        end
+        price ->
+          GasPolicy.admit(
+            %{
+              gas_price_wei: price,
+              spent_today_wei: gas_spent_today(state),
+              order_units: order_units
+            },
+            config
+          )
       end
     end
   end
 
-  defp sponsor_gas_policy_empty?(%{
+  defp gas_policy_config_empty?(%{
          max_gas_wei: nil,
-         daily_gas_budget_wei: nil
+         daily_gas_budget_wei: nil,
+         min_order_units: nil
        }),
        do: true
 
-  defp sponsor_gas_policy_empty?(_config), do: false
+  defp gas_policy_config_empty?(_config), do: false
 
   # `Rpc.gas_price/1` (eth_gasPrice) — the SAME typed wrapper `evm/rpc.ex`
   # already exposes, reused as-is rather than inventing a new RPC helper.
@@ -1209,6 +1214,7 @@ defmodule DelegatedSpend.Keeper do
            normalize_authorization_signature(auth.signature),
          true <- valid_signature_scalar?(r),
          true <- valid_signature_scalar?(s),
+         true <- low_signature_scalar?(s),
          digest <-
            Eip3009.authorization_digest(
              state.domain_separator,
@@ -1249,6 +1255,12 @@ defmodule DelegatedSpend.Keeper do
     scalar = :binary.decode_unsigned(bytes)
     scalar > 0 and scalar < @secp256k1_order
   end
+
+  defp low_signature_scalar?(bytes),
+    do: :binary.decode_unsigned(bytes) <= @secp256k1_half_order
+
+  defp valid_order_amount?(amount),
+    do: is_integer(amount) and amount >= 0 and amount <= @uint256_max
 
   defp error_result(:ok), do: :ok
   defp error_result({:reject, reason}), do: {:error, reason}
