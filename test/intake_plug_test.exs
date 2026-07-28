@@ -662,11 +662,12 @@ defmodule DelegatedSpend.Intake.PlugTest do
       assert post_json("/spend/wallet", "{}", ctx.opts).status == 404
     end
 
-    test "the authorization lane IS routed here (unlike grants/wallet)", ctx do
+    test "both authorization lanes are routed here (unlike grants/wallet)", ctx do
       # No router/action ABI and no host wallet_fn needed for this lane, so
       # (unlike /grants and /wallet above) it fits this plug's deployment
       # shape — it reaches the handler (never a 404 router miss).
       refute post_json("/spend/authorization", "{}", ctx.opts).status == 404
+      refute post_json("/spend/authorization/self", "{}", ctx.opts).status == 404
     end
 
     test "unknown POST routes and non-GET/POST methods are 404", ctx do

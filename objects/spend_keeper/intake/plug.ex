@@ -27,10 +27,12 @@ if Code.ensure_loaded?(Plug.Conn) do
         (`/Config.json`, `/./config.json`) can reach the package's static
         stale-pin file on a case-insensitive filesystem,
       * `POST <intakeUrl>/orders`, `POST <intakeUrl>/orders/submitted`,
-        `POST <intakeUrl>/terms` and `POST <intakeUrl>/authorization` (every
-        route the dapp's `user_tx` and EIP-3009 authorization flows call) —
-        thin JSON adapters over `DelegatedSpend.Intake.handle_order/3`,
-        `handle_submitted/3`, `handle_terms/3` and `handle_authorization/3`
+        `POST <intakeUrl>/terms`, `POST <intakeUrl>/authorization` and
+        `POST <intakeUrl>/authorization/self` (every route the dapp's
+        `user_tx` and EIP-3009 authorization flows call) — thin JSON adapters
+        over `DelegatedSpend.Intake.handle_order/3`, `handle_submitted/3`,
+        `handle_terms/3`, `handle_authorization/3` and
+        `handle_self_authorization/3`
         with trusted request metadata and the host `:ctx`. Bodies are read
         raw and capped (413 oversize, 400 bad JSON — never a crash);
         requests without a usable credential shape are refused 401 before
@@ -163,6 +165,13 @@ if Code.ensure_loaded?(Plug.Conn) do
         # this is transport only (see the moduledoc's "authority" note).
         conn.method == "POST" and conn.path_info == opts.intake ++ ["authorization"] ->
           handle_intake(conn, &DelegatedSpend.Intake.handle_authorization/3, opts)
+
+        # Self-submit validates the signed EIP-3009 envelope server-side, then
+        # returns calldata for the payer's wallet. Like the sponsored sibling,
+        # it needs no host router/action ABI or wallet callback.
+        conn.method == "POST" and
+            conn.path_info == opts.intake ++ ["authorization", "self"] ->
+          handle_intake(conn, &DelegatedSpend.Intake.handle_self_authorization/3, opts)
 
         conn.method == "GET" ->
           serve_webapp(conn, Enum.join(conn.path_info, "/"), opts)

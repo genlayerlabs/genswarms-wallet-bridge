@@ -49,7 +49,7 @@ defmodule DelegatedSpend.Intake do
          {:ok, terms} <- terms_state(ctx, user_ref) do
       case Keeper.fetch_order(ctx.keeper, order_ref, user_ref) do
         {:ok, view} ->
-          if expired_user_tx?(view) do
+          if expired_wallet_order?(view) do
             {410, %{"error" => "expired"}}
           else
             terms_required? = terms != nil && terms["required"] == true
@@ -95,7 +95,7 @@ defmodule DelegatedSpend.Intake do
                 "bind" ->
                   Map.put(base, "current_wallet", wallet_view(ctx, user_ref))
 
-                "authorization" ->
+                kind when kind in ["authorization", "authorization_self"] ->
                   # Same withholding rule as "tx" above: nonce/to/domain are
                   # exactly what is needed to sign and submit a valid
                   # TransferWithAuthorization, so they are as executable as
@@ -245,6 +245,54 @@ defmodule DelegatedSpend.Intake do
     end
   end
 
+  @doc """
+  POST /authorization/self — validate a self-submit EIP-3009 envelope and
+  return the token transaction for the payer's own wallet to broadcast.
+
+  The five authority gates intentionally match the other intake mutations,
+  in the same order. Calldata remains unavailable until every gate and the
+  keeper's signature/order cross-check succeeds.
+  """
+  def handle_self_authorization(params, ctx) when is_map(params) do
+    warn_missing_meta(ctx, "handle_self_authorization")
+    handle_self_authorization(params, %{}, ctx)
+  end
+
+  def handle_self_authorization(params, meta, ctx) when is_map(params) do
+    order_ref = to_string(params["order_ref"] || "")
+
+    with :ok <- geofence(meta, ctx),
+         :ok <- pin_version(params, ctx),
+         {:ok, user_ref} <- authenticate(params, ctx, order_ref),
+         :ok <- allow(ctx, user_ref),
+         :ok <- require_terms(ctx, user_ref) do
+      case GrantValidation.validate_authorization(params["authorization"] || %{}, ctx.pinned) do
+        {:error, {:pinned_mismatch, :version}} ->
+          {409, %{"error" => "version mismatch"}}
+
+        {:error, {:pinned_mismatch, field}} ->
+          {422, %{"error" => "pinned mismatch", "field" => to_string(field)}}
+
+        {:error, {:invalid, field}} ->
+          {422, %{"error" => "invalid", "field" => to_string(field)}}
+
+        {:ok, auth} ->
+          case Keeper.build_self_authorization(ctx.keeper, order_ref, user_ref, auth) do
+            {:ok, tx} ->
+              {200, stringify(tx)}
+
+            {:error, :not_found} ->
+              {404, %{"error" => "not found"}}
+
+            {:error, reason} ->
+              {422, %{"status" => "failed", "reason" => to_string(reason)}}
+          end
+      end
+    else
+      {:error, status, body} -> {status, body}
+    end
+  end
+
   @doc "POST /wallet — bind a connected wallet address through a bind order."
   def handle_wallet(params, ctx) when is_map(params) do
     warn_missing_meta(ctx, "handle_wallet")
@@ -279,7 +327,10 @@ defmodule DelegatedSpend.Intake do
     end
   end
 
-  @doc "POST /orders/submitted — best-effort user_tx hash report; watcher hint only."
+  @doc """
+  POST /orders/submitted — best-effort user-sent transaction hash report for
+  `user_tx` and `authorization_self` orders; watcher hint only.
+  """
   def handle_submitted(params, ctx) when is_map(params) do
     warn_missing_meta(ctx, "handle_submitted")
     handle_submitted(params, %{}, ctx)
@@ -294,7 +345,8 @@ defmodule DelegatedSpend.Intake do
          :ok <- allow(ctx, user_ref),
          :ok <- require_terms(ctx, user_ref),
          {:ok, tx_hash} <- tx_hash(params["tx_hash"]),
-         {:ok, order} <- fetch_kind(ctx, order_ref, user_ref, "user_tx") do
+         {:ok, order} <-
+           fetch_kind(ctx, order_ref, user_ref, ["user_tx", "authorization_self"]) do
       case Map.get(ctx, :submitted_fn) do
         fun when is_function(fun, 2) -> safe_submitted(fun, order.order_id, tx_hash)
         _ -> :ok
@@ -596,8 +648,11 @@ defmodule DelegatedSpend.Intake do
 
   defp canonical_terms(_terms), do: @unavailable
 
-  defp expired_user_tx?(%{kind: "user_tx", expires_at: exp}), do: System.os_time(:second) > exp
-  defp expired_user_tx?(_view), do: false
+  defp expired_wallet_order?(%{kind: kind, expires_at: exp})
+       when kind in ["user_tx", "authorization_self"],
+       do: System.os_time(:second) > exp
+
+  defp expired_wallet_order?(_view), do: false
 
   defp fetch_fn(ctx, key, arity) do
     case Map.get(ctx, key) do
@@ -606,18 +661,25 @@ defmodule DelegatedSpend.Intake do
     end
   end
 
-  defp fetch_kind(ctx, ref, user_ref, kind) do
+  defp fetch_kind(ctx, ref, user_ref, kind) when is_binary(kind),
+    do: fetch_kind(ctx, ref, user_ref, [kind])
+
+  defp fetch_kind(ctx, ref, user_ref, kinds) when is_list(kinds) do
     case Keeper.fetch_order_full(ctx.keeper, ref, user_ref) do
       {:error, :not_found} ->
         {:error, 404, %{"error" => "not found"}}
 
-      {:ok, %{kind: ^kind} = order} ->
-        if System.os_time(:second) > order.expires_at,
-          do: {:error, 410, %{"error" => "expired"}},
-          else: {:ok, order}
+      {:ok, order} ->
+        cond do
+          order.kind not in kinds ->
+            {:error, 422, %{"error" => "invalid", "field" => "kind"}}
 
-      {:ok, _wrong_kind} ->
-        {:error, 422, %{"error" => "invalid", "field" => "kind"}}
+          System.os_time(:second) > order.expires_at ->
+            {:error, 410, %{"error" => "expired"}}
+
+          true ->
+            {:ok, order}
+        end
     end
   end
 

@@ -122,9 +122,10 @@ defmodule DelegatedSpend.Keeper do
   def authorization_domain(keeper), do: GenServer.call(keeper, :authorization_domain)
 
   @doc """
-  Shared enrichment for every view of an `"authorization"`-kind order — the
-  registration ack (`DelegatedSpend.Keeper.Object`) and the wallet dapp's
-  order view (`DelegatedSpend.Intake.handle_order/3`) both need the SAME
+  Shared enrichment for every `"authorization"` or
+  `"authorization_self"` order view — the registration ack
+  (`DelegatedSpend.Keeper.Object`) and the wallet dapp's order view
+  (`DelegatedSpend.Intake.handle_order/3`) both need the SAME
   nonce/destination/domain fields, computed from the SAME boot-verified
   `authorization_domain/1`; this is the one place that does it (review M7 —
   the two call sites merge into a differently-shaped `base` map and disagree

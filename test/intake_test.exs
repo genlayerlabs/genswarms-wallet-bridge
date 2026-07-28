@@ -4,11 +4,12 @@ defmodule DelegatedSpend.IntakeTest do
   @moduletag :capture_log
 
   alias DelegatedSpend.Compliance.MemoryStore, as: ComplianceStore
+  alias DelegatedSpend.Evm.{Address, Secp256k1}
   alias DelegatedSpend.FakeRpc
   alias DelegatedSpend.Intake
   alias DelegatedSpend.Intake.Rate
   alias DelegatedSpend.Keeper
-  alias DelegatedSpend.Keeper.{MemoryStore, Signer}
+  alias DelegatedSpend.Keeper.{Eip3009, MemoryStore, Signer}
 
   @anvil0 Base.decode16!("AC0974BEC39A17E36BA4A6B4D238FF944BACB478CBED5EFCAE784D7BF4F2FF80")
   @bot_token "1234567:TEST-fake-bot-token-for-vectors"
@@ -1385,6 +1386,18 @@ defmodule DelegatedSpend.IntakeTest do
     ref
   end
 
+  defp register_self_authorization_order(keeper, user_id, amount \\ 1_000_000) do
+    {:ok, %{order_ref: ref}} =
+      Keeper.register_order(keeper, "market_phase", %{
+        user_ref: "ref-" <> Integer.to_string(user_id),
+        amount: amount,
+        action_args: [],
+        kind: "authorization_self"
+      })
+
+    ref
+  end
+
   defp auth_env(overrides \\ %{}) do
     Map.merge(
       %{
@@ -1401,35 +1414,75 @@ defmodule DelegatedSpend.IntakeTest do
     )
   end
 
+  defp signed_auth_env(order_ref, overrides \\ %{}) do
+    from = Address.from_private_key(@anvil0)
+
+    fields =
+      Map.merge(
+        %{from: from, value: 1_000_000, valid_after: 0, valid_before: 4_000_000_000},
+        overrides
+      )
+
+    domain = Eip3009.domain_separator("USDC", "2", 84_532, @token)
+
+    digest =
+      Eip3009.authorization_digest(
+        domain,
+        fields.from,
+        @treasury,
+        fields.value,
+        fields.valid_after,
+        fields.valid_before,
+        DelegatedSpend.Orders.authorization_nonce(order_ref)
+      )
+
+    {r, s, recid} = Secp256k1.sign(digest, @anvil0)
+
+    auth_env(%{
+      "from" => fields.from,
+      "value" => fields.value,
+      "valid_after" => fields.valid_after,
+      "valid_before" => fields.valid_before,
+      "signature" => "0x" <> Base.encode16(r <> s <> <<recid + 27>>, case: :lower)
+    })
+  end
+
   describe "handle_order/3 for an authorization-kind order" do
-    test "serves nonce/to/domain — everything the dapp needs to compose the EIP-712 payload" do
+    test "serves nonce/to/domain for both authorization kinds, but never calldata" do
       %{ctx: ctx, keeper: keeper} = start_authorization_stack()
-      ref = register_authorization_order(keeper, @user_id, 2_000_000)
 
-      assert {200, body} =
-               Intake.handle_order(
-                 order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}),
-                 ctx
-               )
+      for {kind, register} <- [
+            {"authorization", &register_authorization_order/3},
+            {"authorization_self", &register_self_authorization_order/3}
+          ] do
+        ref = register.(keeper, @user_id, 2_000_000)
 
-      assert body["kind"] == "authorization"
-      assert body["value"] == 2_000_000
-      assert body["to"] == @treasury
-      assert body["token"] == @token
-      assert body["valid_after"] == 0
-      assert body["valid_before"] == body["expires_at"]
+        assert {200, body} =
+                 Intake.handle_order(
+                   order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}),
+                   ctx
+                 )
 
-      expected_nonce =
-        "0x" <> Base.encode16(DelegatedSpend.Orders.authorization_nonce(ref), case: :lower)
+        assert body["kind"] == kind
+        assert body["value"] == 2_000_000
+        assert body["to"] == @treasury
+        assert body["token"] == @token
+        assert body["valid_after"] == 0
+        assert body["valid_before"] == body["expires_at"]
+        refute Map.has_key?(body, "data")
 
-      assert body["nonce"] == expected_nonce
+        expected_nonce =
+          "0x" <> Base.encode16(DelegatedSpend.Orders.authorization_nonce(ref), case: :lower)
 
-      assert body["domain"] == %{
-               "name" => "USDC",
-               "version" => "2",
-               "chainId" => 84_532,
-               "verifyingContract" => @token
-             }
+        assert body["nonce"] == expected_nonce
+
+        assert body["domain"] == %{
+                 "name" => "USDC",
+                 "version" => "2",
+                 "chainId" => 84_532,
+                 "verifyingContract" => @token
+               }
+      end
     end
 
     test "withholds nonce/to/domain until current terms are accepted, exactly like user_tx's tx" do
@@ -1455,6 +1508,180 @@ defmodule DelegatedSpend.IntakeTest do
       refute Map.has_key?(body, "nonce")
       refute Map.has_key?(body, "to")
       refute Map.has_key?(body, "domain")
+    end
+
+    test "WB8: an expired self-submit order is neither buildable nor served" do
+      %{ctx: ctx, keeper: keeper, store: store} = start_authorization_stack()
+      ref = String.duplicate("e8", 32)
+
+      :ok =
+        MemoryStore.put_order(store, %{
+          order_id: "0x" <> String.duplicate("18", 32),
+          order_ref: ref,
+          user_ref: "ref-#{@user_id}",
+          amount: 1_000_000,
+          action_args: [],
+          kind: "authorization_self",
+          tx: nil,
+          display: %{},
+          expected_owner: nil,
+          expires_at: System.os_time(:second) - 1
+        })
+
+      envelope = signed_auth_env(ref)
+
+      auth = %{
+        from: envelope["from"],
+        value: envelope["value"],
+        valid_after: envelope["valid_after"],
+        valid_before: envelope["valid_before"],
+        signature:
+          envelope["signature"]
+          |> String.replace_prefix("0x", "")
+          |> Base.decode16!(case: :mixed)
+      }
+
+      assert {:error, :expired} =
+               Keeper.build_self_authorization(keeper, ref, "ref-#{@user_id}", auth)
+
+      assert {410, %{"error" => "expired"}} =
+               Intake.handle_order(
+                 order_params(ctx, %{"init_data" => init_data(), "order_ref" => ref}),
+                 ctx
+               )
+    end
+  end
+
+  describe "handle_self_authorization/3" do
+    test "returns only the keeper-built transaction after signature verification" do
+      %{ctx: ctx, keeper: keeper} = start_authorization_stack()
+      ref = register_self_authorization_order(keeper, @user_id)
+
+      params = %{
+        "v" => ctx.pinned.version,
+        "init_data" => init_data(),
+        "order_ref" => ref,
+        "authorization" => signed_auth_env(ref)
+      }
+
+      assert {200,
+              %{
+                "to" => @token,
+                "data" => "0x" <> _,
+                "chain_id" => 84_532,
+                "valid_before" => 4_000_000_000
+              }} = Intake.handle_self_authorization(params, %{}, ctx)
+    end
+
+    test "WB11: every gate and validation response stays in parity with the sponsored sibling" do
+      cases = [
+        {:geofence, {451, "geo_blocked"}},
+        {:pin_version, {409, "version mismatch"}},
+        {:authenticate, {401, "unauthorized"}},
+        {:allow, {429, "rate limited"}},
+        {:require_terms, {428, "terms_required"}},
+        {:validate, {422, "invalid"}}
+      ]
+
+      for {gate, {expected_status, expected_error}} <- cases,
+          handler <- [:handle_authorization, :handle_self_authorization] do
+        %{ctx: base_ctx, keeper: keeper} = start_authorization_stack()
+
+        ref =
+          if handler == :handle_authorization,
+            do: register_authorization_order(keeper, @user_id),
+            else: register_self_authorization_order(keeper, @user_id)
+
+        params = %{
+          "v" => base_ctx.pinned.version,
+          "init_data" => init_data(),
+          "order_ref" => ref,
+          "authorization" => signed_auth_env(ref)
+        }
+
+        {params, meta, ctx} =
+          case gate do
+            :geofence ->
+              {params, %{country: "XX"}, Map.put(base_ctx, :compliance, %{geo_block: ["XX"]})}
+
+            :pin_version ->
+              stale =
+                params
+                |> Map.put("v", "0.0.9")
+                |> put_in(["authorization", "v"], "0.0.9")
+
+              {stale, %{}, base_ctx}
+
+            :authenticate ->
+              {Map.put(params, "init_data", "bad"), %{}, base_ctx}
+
+            :allow ->
+              {params, %{}, Map.put(base_ctx, :rate, {Rate.start(60), 0})}
+
+            :require_terms ->
+              compliance_store = ComplianceStore.start()
+
+              ctx =
+                Map.put(base_ctx, :compliance, %{
+                  geo_block: ["CU"],
+                  terms: %{
+                    hash: "0x" <> String.duplicate("11", 32),
+                    url: "https://example.test/terms"
+                  },
+                  store: {ComplianceStore, compliance_store}
+                })
+
+              {params, %{country: "US"}, ctx}
+
+            :validate ->
+              {put_in(params, ["authorization", "signature"], ""), %{}, base_ctx}
+          end
+
+        assert {status, body} = apply(Intake, handler, [params, meta, ctx])
+        assert status == expected_status, "#{handler} diverged at #{gate}: #{inspect(body)}"
+
+        assert body["error"] == expected_error,
+               "#{handler} diverged at #{gate}: #{inspect(body)}"
+      end
+    end
+
+    test "WB7: submitted accepts both user-sent kinds and records tx_submitted" do
+      %{ctx: base_ctx, keeper: keeper} = start_authorization_stack()
+      {ctx, event_store} = with_compliance(base_ctx)
+      tx_hash = "0x" <> String.duplicate("ef", 32)
+
+      for kind <- ["user_tx", "authorization_self"] do
+        {:ok, %{order_ref: ref}} =
+          Keeper.register_order(keeper, "market_phase", %{
+            user_ref: "ref-#{@user_id}",
+            amount: if(kind == "user_tx", do: 0, else: 1_000_000),
+            action_args: [],
+            kind: kind,
+            tx:
+              if(kind == "user_tx",
+                do: %{to: "0x" <> String.duplicate("11", 20), data: "0x", value: 0}
+              )
+          })
+
+        assert {200, %{"status" => "noted"}} =
+                 Intake.handle_submitted(
+                   %{
+                     "v" => ctx.pinned.version,
+                     "init_data" => init_data(),
+                     "order_ref" => ref,
+                     "tx_hash" => tx_hash
+                   },
+                   audit_meta(),
+                   ctx
+                 )
+      end
+
+      assert [
+               %{kind: "tx_submitted", order_ref: first},
+               %{kind: "tx_submitted", order_ref: second}
+             ] = ComplianceStore.events_for(event_store, "ref-#{@user_id}")
+
+      refute first == second
     end
   end
 
