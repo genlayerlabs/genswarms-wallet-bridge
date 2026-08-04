@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { MESSAGES, RETURN_DELAY_S, askWhichWallet, entryRef, paintStatus, renderAuthorizationScreen, renderBrief, scheduleReturn, setupAuthorization, setupSelfAuthorization, showTermsPrompt } from "../app.mjs";
+import { MESSAGES, RETURN_DELAY_S, askWhichWallet, entryRef, paintStatus, renderAuthorizationScreen, renderBrief, scheduleReturn, setupAuthorization, setupSelfAuthorization, setupUserTx, showTermsPrompt } from "../app.mjs";
 
 const ACCOUNT = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 const TREASURY = "0x000000000000000000000000000000000000cccc";
@@ -14,6 +14,9 @@ function fakeDom() {
     "terms-link": { href: "" },
     "terms-accept": { disabled: false, onclick: null },
     pay: { hidden: false, disabled: false, onclick: null },
+    "funds-actions": { hidden: true },
+    "funds-recheck": { disabled: false, onclick: null },
+    "funds-sign-anyway": { disabled: false, onclick: null },
     manual: { hidden: false },
     "manual-address": { textContent: "" },
     "manual-amount": { textContent: "" },
@@ -242,6 +245,143 @@ test("terms controls are hidden and accessible with a safely opened link", async
   assert.match(html, /<div id="terms" hidden>/);
   assert.match(html, /<a id="terms-link" target="_blank" rel="noopener noreferrer">[^<]+<\/a>/);
   assert.match(html, /<button id="terms-accept"[^>]*>[^<]+<\/button>/);
+});
+
+test("funds warning actions are present and initially hidden", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  assert.match(html, /<div id="funds-actions" hidden>/);
+  assert.match(html, /<button id="funds-recheck"[^>]*>Re-check<\/button>/);
+  assert.match(html, /<button id="funds-sign-anyway"[^>]*>Sign anyway<\/button>/);
+});
+
+test("user transaction Re-check clears a token warning without opening the wallet", async () => {
+  const { elements, get } = fakeDom();
+  const order = {
+    order_ref: "r1",
+    kind: "user_tx",
+    amount: 1_000_000,
+    expires_at: 9_999_999_999,
+    chain_id: 84_532,
+    tx: { to: TREASURY, data: "0x", value: 0 },
+    display: {},
+  };
+  let tokenBalance = "0x7a120";
+  let sends = 0;
+  const deps = {
+    provider: mockAuthProvider({
+      eth_call: () => tokenBalance,
+      eth_getBalance: () => "0x9184e72a000",
+      eth_sendTransaction: () => {
+        sends += 1;
+        return HASH;
+      },
+    }),
+    config: {
+      intakeUrl: "/spend",
+      version: "0.10.0",
+      chainId: 84_532,
+      token: TREASURY,
+      tokenName: "USDC",
+    },
+    fetchFn: async () => ({ status: 200, json: async () => order }),
+  };
+
+  await setupUserTx(deps, order, "r1", null, get);
+  await elements.pay.onclick();
+
+  assert.equal(elements.pay.hidden, true);
+  assert.equal(elements["funds-actions"].hidden, false);
+  assert.match(elements.status.textContent, /0\.50 USDC.*1\.00 USDC/);
+  assert.equal(elements.status.dataset.state, "warning");
+  assert.equal(sends, 0);
+
+  tokenBalance = "0xf4240";
+  await elements["funds-recheck"].onclick();
+
+  assert.equal(elements["funds-actions"].hidden, true);
+  assert.equal(elements.pay.hidden, false);
+  assert.equal(elements.pay.disabled, false);
+  assert.equal(elements.status.dataset.state, undefined);
+  assert.equal(sends, 0);
+});
+
+test("user transaction gas warning renders before wallet send", async () => {
+  const { elements, get } = fakeDom();
+  const order = {
+    order_ref: "r1",
+    kind: "user_tx",
+    amount: 0,
+    expires_at: 9_999_999_999,
+    chain_id: 84_532,
+    tx: { to: TREASURY, data: "0x", value: 0 },
+    display: {},
+  };
+  let sends = 0;
+  const deps = {
+    provider: mockAuthProvider({
+      eth_getBalance: () => "0x0",
+      eth_sendTransaction: () => {
+        sends += 1;
+        return HASH;
+      },
+    }),
+    config: { intakeUrl: "/spend", version: "0.10.0", chainId: 84_532, token: TREASURY },
+    fetchFn: async () => ({ status: 200, json: async () => order }),
+  };
+
+  await setupUserTx(deps, order, "r1", null, get);
+  await elements.pay.onclick();
+
+  assert.equal(elements["funds-actions"].hidden, false);
+  assert.match(elements.status.textContent, /too little ETH for gas/);
+  assert.equal(elements.status.dataset.state, "warning");
+  assert.equal(sends, 0);
+});
+
+test("user transaction Sign anyway performs one bypassed send", async () => {
+  const { elements, get } = fakeDom();
+  const order = {
+    order_ref: "r1",
+    kind: "user_tx",
+    amount: 1_000_000,
+    expires_at: 9_999_999_999,
+    chain_id: 84_532,
+    tx: { to: TREASURY, data: "0x", value: 0 },
+    display: {},
+  };
+  let reads = 0;
+  let sends = 0;
+  const deps = {
+    provider: mockAuthProvider({
+      eth_call: () => {
+        reads += 1;
+        return "0x0";
+      },
+      eth_getBalance: () => "0x0",
+      eth_sendTransaction: () => {
+        sends += 1;
+        return HASH;
+      },
+    }),
+    config: {
+      intakeUrl: "/spend",
+      version: "0.10.0",
+      chainId: 84_532,
+      token: TREASURY,
+      tokenName: "USDC",
+    },
+    fetchFn: async () => ({ status: 200, json: async () => order }),
+  };
+
+  await setupUserTx(deps, order, "r1", null, get);
+  await elements.pay.onclick();
+  await elements["funds-sign-anyway"].onclick();
+
+  assert.equal(reads, 1);
+  assert.equal(sends, 1);
+  assert.equal(elements["funds-actions"].hidden, true);
+  assert.match(elements.status.textContent, /^Transaction sent/);
+  assert.equal(elements.status.dataset.state, "success");
 });
 
 test("terms prompt wires URL/hash/ref/account and retries the original action after confirmed acceptance", async () => {
