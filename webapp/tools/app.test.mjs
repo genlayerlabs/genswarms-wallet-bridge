@@ -254,7 +254,7 @@ test("funds warning actions are present and initially hidden", async () => {
   assert.match(html, /<button id="funds-sign-anyway"[^>]*>Sign anyway<\/button>/);
 });
 
-test("user transaction warning preserves precision and Re-check stays non-assertive", async () => {
+test("a funded Re-check clears the precise token warning without opening the wallet", async () => {
   const { elements, get } = fakeDom();
   const order = {
     order_ref: "r1",
@@ -295,7 +295,7 @@ test("user transaction warning preserves precision and Re-check stays non-assert
   assert.equal(elements.status.dataset.state, "warning");
   assert.equal(sends, 0);
 
-  tokenBalance = null;
+  tokenBalance = "0xf4240";
   await elements["funds-recheck"].onclick();
 
   assert.equal(elements["funds-actions"].hidden, true);
@@ -342,8 +342,10 @@ test("user transaction gas warning renders before wallet send", async () => {
   assert.equal(sends, 0);
 });
 
-test("user transaction Sign anyway performs one bypassed send", async () => {
+test("user transaction Sign anyway completes through the injected DOM", async (t) => {
   const { elements, get } = fakeDom();
+  const clock = manualClock();
+  t.mock.method(globalThis, "setTimeout", clock.setTimeoutFn);
   const order = {
     order_ref: "r1",
     kind: "user_tx",
@@ -376,13 +378,16 @@ test("user transaction Sign anyway performs one bypassed send", async () => {
     },
     fetchFn: async () => ({ status: 200, json: async () => order }),
   };
+  let closed = 0;
 
-  await setupUserTx(deps, order, "r1", null, get);
+  await setupUserTx(deps, order, "r1", { close: () => (closed += 1) }, get);
   await elements.pay.onclick();
   await elements["funds-sign-anyway"].onclick();
+  clock.runAll();
 
   assert.equal(reads, 1);
   assert.equal(sends, 1);
+  assert.equal(closed, 1);
   assert.equal(elements["funds-actions"].hidden, true);
   assert.match(elements.status.textContent, /^Transaction sent/);
   assert.equal(elements.status.dataset.state, "success");

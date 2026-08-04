@@ -570,7 +570,7 @@ export async function setupUserTx(deps, order, orderRef, tg, get = $) {
     const result = await runUserTxFlow(deps, orderRef, fetched, options);
     if (result.ok) {
       paintStatus(get("status"), "Transaction sent ✓ — you can return to the chat.", "success");
-      scheduleReturn(tg);
+      scheduleReturn(tg, get);
     } else if (result.reason === "insufficient_token" || result.reason === "insufficient_gas") {
       showFundsWarning(result);
     } else if (result.reason === "wrong_wallet") {
