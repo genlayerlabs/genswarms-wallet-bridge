@@ -329,6 +329,26 @@ test("preflightFunds: read failures are independently fail-soft", async () => {
   );
 });
 
+test("preflightFunds: an unsafe numeric amount skips the inexact token check", async () => {
+  let tokenReads = 0;
+  const provider = mockProvider({
+    eth_call: () => {
+      tokenReads += 1;
+      return "0x0";
+    },
+    eth_getBalance: () => "0x9184e72a000",
+  });
+
+  assert.deepEqual(
+    await preflightFunds(
+      { provider, config: CONFIG },
+      { order: { amount: Number.MAX_SAFE_INTEGER + 1 }, account: ACCOUNT },
+    ),
+    { ok: true },
+  );
+  assert.equal(tokenReads, 0);
+});
+
 test("runUserTxFlow blocks a short token balance before wallet send", async () => {
   const order = {
     order_ref: "r1",

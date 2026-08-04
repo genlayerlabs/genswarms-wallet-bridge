@@ -582,7 +582,9 @@ function rpcQuantity(value) {
 }
 
 export async function preflightFunds({ provider, config }, { order, account }) {
-  const needed = BigInt(order.amount);
+  // ponytail: JSON numbers above 2^53 are inexact; skip this warning until
+  // order amounts ship as decimal strings instead of changing the schema here.
+  const needed = Number.isSafeInteger(order.amount) ? BigInt(order.amount) : 0n;
   if (needed > 0n) {
     try {
       const data = "0x70a08231" + account.replace(/^0x/, "").toLowerCase().padStart(64, "0");
