@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { acceptTerms, addChainParams, configDrift, fetchOrder, ownerMismatch, runBindFlow, runPermitFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "../lib/flow.mjs";
+import { acceptTerms, addChainParams, configDrift, fetchOrder, ownerMismatch, preflightFunds, runBindFlow, runPermitFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "../lib/flow.mjs";
 import { buildGrantEnvelope } from "../lib/permit.mjs";
 import { buildTermsEnvelope, buildTermsTypedData } from "../lib/terms.mjs";
 
@@ -245,6 +245,165 @@ test("walletDappLink strips the scheme and prefixes the universal link", () => {
   const parsed = new URL(custom);
   assert.equal(parsed.searchParams.get("token"), null);
   assert.equal(parsed.searchParams.get("cb_url"), "x.example/i.html?a=1&token=t");
+});
+
+test("preflightFunds: short token balance wins before the gas read", async () => {
+  const order = { amount: 1_000_000 };
+  const provider = mockProvider({
+    eth_call: () => "0x7a120", // 500_000
+    eth_getBalance: () => {
+      throw new Error("token shortage must return first");
+    },
+  });
+
+  assert.deepEqual(
+    await preflightFunds({ provider, config: CONFIG }, { order, account: ACCOUNT }),
+    { ok: false, reason: "insufficient_token", balance: 500_000n, needed: 1_000_000n },
+  );
+  assert.deepEqual(provider.calls[0], {
+    method: "eth_call",
+    params: [{
+      to: CONFIG.token,
+      data: "0x70a08231" + ACCOUNT.slice(2).toLowerCase().padStart(64, "0"),
+    }, "latest"],
+  });
+});
+
+test("preflightFunds: funded token and gas balances proceed", async () => {
+  const provider = mockProvider({
+    eth_call: () => "0xf4240",
+    eth_getBalance: () => "0x9184e72a000",
+  });
+
+  assert.deepEqual(
+    await preflightFunds(
+      { provider, config: CONFIG },
+      { order: { amount: 1_000_000 }, account: ACCOUNT },
+    ),
+    { ok: true },
+  );
+});
+
+test("preflightFunds: amount zero skips token and still warns on gas", async () => {
+  const provider = mockProvider({
+    eth_call: () => {
+      throw new Error("must not call token");
+    },
+    eth_getBalance: () => "0x0",
+  });
+
+  assert.deepEqual(
+    await preflightFunds({ provider, config: CONFIG }, { order: { amount: 0 }, account: ACCOUNT }),
+    { ok: false, reason: "insufficient_gas", balance: 0n },
+  );
+  assert.ok(!provider.calls.some(({ method }) => method === "eth_call"));
+});
+
+test("preflightFunds: read failures are independently fail-soft", async () => {
+  const tokenError = mockProvider({
+    eth_call: () => {
+      throw new Error("offline");
+    },
+    eth_getBalance: () => "0x0",
+  });
+  assert.deepEqual(
+    await preflightFunds(
+      { provider: tokenError, config: CONFIG },
+      { order: { amount: 1 }, account: ACCOUNT },
+    ),
+    { ok: false, reason: "insufficient_gas", balance: 0n },
+  );
+
+  const gasError = mockProvider({
+    eth_call: () => "0x1",
+    eth_getBalance: () => {
+      throw new Error("offline");
+    },
+  });
+  assert.deepEqual(
+    await preflightFunds(
+      { provider: gasError, config: CONFIG },
+      { order: { amount: 1 }, account: ACCOUNT },
+    ),
+    { ok: true },
+  );
+});
+
+test("runUserTxFlow blocks a short token balance before wallet send", async () => {
+  const order = {
+    order_ref: "r1",
+    kind: "user_tx",
+    amount: 1_000_000,
+    expires_at: 9_999_999_999,
+    chain_id: CONFIG.chainId,
+    tx: { to: "0x" + "11".repeat(20), data: "0x", value: 0 },
+    display: {},
+  };
+  let sends = 0;
+  const provider = mockProvider({
+    eth_call: () => "0x0",
+    eth_sendTransaction: () => {
+      sends += 1;
+      return "0x" + "ef".repeat(32);
+    },
+  });
+  const fetchFn = mockFetch({
+    orders: () => ({ status: 200, json: order }),
+    submitted: () => ({ status: 200, json: { status: "noted" } }),
+  });
+
+  assert.deepEqual(
+    await runUserTxFlow({ provider, fetchFn, config: CONFIG, initData: "" }, "r1"),
+    {
+      ok: false,
+      reason: "insufficient_token",
+      balance: 0n,
+      needed: 1_000_000n,
+      account: ACCOUNT,
+      order,
+    },
+  );
+  assert.equal(sends, 0);
+  assert.equal(fetchFn.posts.filter(({ url }) => url.endsWith("/orders/submitted")).length, 0);
+});
+
+test("runUserTxFlow skipPreflight bypasses balance reads once", async () => {
+  const order = {
+    order_ref: "r1",
+    kind: "user_tx",
+    amount: 1_000_000,
+    expires_at: 9_999_999_999,
+    chain_id: CONFIG.chainId,
+    tx: { to: "0x" + "11".repeat(20), data: "0x", value: 0 },
+    display: {},
+  };
+  let sends = 0;
+  const tx = "0x" + "ef".repeat(32);
+  const provider = mockProvider({
+    eth_call: () => "0x0",
+    eth_getBalance: () => "0x0",
+    eth_sendTransaction: () => {
+      sends += 1;
+      return tx;
+    },
+  });
+  const fetchFn = mockFetch({
+    orders: () => ({ status: 200, json: order }),
+    submitted: () => ({ status: 200, json: { status: "noted" } }),
+  });
+
+  assert.deepEqual(
+    await runUserTxFlow(
+      { provider, fetchFn, config: CONFIG, initData: "" },
+      "r1",
+      null,
+      { skipPreflight: true },
+    ),
+    { ok: true, tx, order },
+  );
+  assert.equal(sends, 1);
+  assert.ok(!provider.calls.some(({ method }) =>
+    method === "eth_call" || method === "eth_getBalance"));
 });
 
 test("runUserTxFlow: connect → fetch → eth_sendTransaction → submitted report", async () => {
