@@ -535,7 +535,7 @@ export async function setupUserTx(deps, order, orderRef, tg, get = $) {
     const decimals = Number.isInteger(deps.config.tokenDecimals) ? deps.config.tokenDecimals : 6;
     const token = deps.config.tokenName || "tokens";
     const message = result.reason === "insufficient_token"
-      ? `This wallet holds ${formatUnits(result.balance, decimals)} ${token} — this order needs ${formatUnits(result.needed, decimals)} ${token}. Top it up, then re-check.`
+      ? `This wallet holds ${formatUnits(result.balance, decimals, decimals)} ${token} — this order needs ${formatUnits(result.needed, decimals, decimals)} ${token}. Top it up, then re-check.`
       : "This wallet has too little ETH for gas — the transaction is likely to fail.";
 
     pay.hidden = true;
@@ -558,7 +558,7 @@ export async function setupUserTx(deps, order, orderRef, tg, get = $) {
       actions.hidden = true;
       pay.hidden = false;
       pay.disabled = false;
-      paintStatus(get("status"), "Funds available — review and sign when ready.");
+      paintStatus(get("status"), "You can review and sign when ready; balances will be checked again first.");
     };
     signAnyway.onclick = () => run(undefined, { skipPreflight: true });
   }

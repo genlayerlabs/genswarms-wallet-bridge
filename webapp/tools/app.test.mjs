@@ -254,7 +254,7 @@ test("funds warning actions are present and initially hidden", async () => {
   assert.match(html, /<button id="funds-sign-anyway"[^>]*>Sign anyway<\/button>/);
 });
 
-test("user transaction Re-check clears a token warning without opening the wallet", async () => {
+test("user transaction warning preserves precision and Re-check stays non-assertive", async () => {
   const { elements, get } = fakeDom();
   const order = {
     order_ref: "r1",
@@ -265,7 +265,7 @@ test("user transaction Re-check clears a token warning without opening the walle
     tx: { to: TREASURY, data: "0x", value: 0 },
     display: {},
   };
-  let tokenBalance = "0x7a120";
+  let tokenBalance = "0xf423f";
   let sends = 0;
   const deps = {
     provider: mockAuthProvider({
@@ -291,16 +291,20 @@ test("user transaction Re-check clears a token warning without opening the walle
 
   assert.equal(elements.pay.hidden, true);
   assert.equal(elements["funds-actions"].hidden, false);
-  assert.match(elements.status.textContent, /0\.50 USDC.*1\.00 USDC/);
+  assert.match(elements.status.textContent, /0\.999999 USDC.*1\.000000 USDC/);
   assert.equal(elements.status.dataset.state, "warning");
   assert.equal(sends, 0);
 
-  tokenBalance = "0xf4240";
+  tokenBalance = null;
   await elements["funds-recheck"].onclick();
 
   assert.equal(elements["funds-actions"].hidden, true);
   assert.equal(elements.pay.hidden, false);
   assert.equal(elements.pay.disabled, false);
+  assert.equal(
+    elements.status.textContent,
+    "You can review and sign when ready; balances will be checked again first.",
+  );
   assert.equal(elements.status.dataset.state, undefined);
   assert.equal(sends, 0);
 });

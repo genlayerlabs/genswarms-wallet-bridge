@@ -9,11 +9,12 @@ a hard payment gate.
 ## Flow
 
 Add a DOM-free `preflightFunds(deps, { order, account })` to
-`webapp/lib/flow.mjs`. It uses the connected EIP-1193 provider and `BigInt`
-quantities throughout.
+`webapp/lib/flow.mjs`. It uses the connected EIP-1193 provider, parses RPC
+quantities as `BigInt`, and converts only safely represented integer order
+amounts to `BigInt`.
 
-For orders with `amount > 0`, it first calls the configured ERC-20 token's
-`balanceOf(account)`. A short balance returns:
+For orders with a positive safe-integer `amount`, it first calls the configured
+ERC-20 token's `balanceOf(account)`. A short balance returns:
 
 ```js
 { ok: false, reason: "insufficient_token", balance, needed }
@@ -29,7 +30,10 @@ It then calls `eth_getBalance` and compares the native balance with a fixed
 Each read fails soft independently: a failed or malformed token read skips the
 token warning but still permits the gas read; a failed or malformed gas read
 skips the gas warning. Token shortage takes precedence when both balances are
-short. Orders with `amount: 0` never issue the token call.
+short. Orders with `amount: 0` never issue the token call. Because the current
+transport schema encodes amounts as JSON numbers, amounts above
+`Number.MAX_SAFE_INTEGER` also skip the token check rather than compare an
+inexact value; changing the schema to decimal strings would remove this limit.
 
 `runUserTxFlow` calls the preflight after chain, owner, and terms gates and
 before `eth_sendTransaction`. Insufficient-funds results also carry the checked
