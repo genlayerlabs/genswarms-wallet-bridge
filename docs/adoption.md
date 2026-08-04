@@ -528,22 +528,25 @@ Money-lane bookkeeping should not be in-memory-only in production —
     wallet_fn: fn user_ref, address, bind_ref -> ... end,        # optional bind
     wallet_view_fn: fn user_ref -> current_wallet_or_nil end,    # optional bind view
     submitted_fn: fn order_id, tx_hash -> ... end,               # optional watcher nudge
+    requote_fn: fn user_ref, order_ref, account -> ... end,      # optional wallet switching
     pinned: %{chain_id: id, token: token, router: router, version: version},
     rate: {DelegatedSpend.Intake.Rate.start(60), 30}}   # optional
   ```
 
   The wallet dapp POSTs `{intakeUrl}/orders`, `{intakeUrl}/grants`,
   `{intakeUrl}/authorization`, `{intakeUrl}/authorization/self`,
-  `{intakeUrl}/wallet`,
-  `{intakeUrl}/orders/submitted`, and, when compliance is enabled,
+  `{intakeUrl}/wallet`, `{intakeUrl}/orders/submitted`,
+  `{intakeUrl}/orders/requote` (0.11.0 — only meaningful with `requote_fn`
+  wired and orders registered `switchable: true`; without it the route is a
+  fail-closed 503), and, when compliance is enabled,
   `{intakeUrl}/terms`, with either `token` or `init_data` plus `v` in the
   body. A ~60-line Plug over Bandit is all the serving glue takes: route
   first, cap the body (64 kB → 413), decode-error → 400 — auth still happens
   inside the handlers. `DelegatedSpend.Intake.Plug` (§0.3) routes
   `/orders`, `/orders/submitted`, `/terms`, `/authorization` and
-  `/authorization/self` itself; the permit grant lane's `/grants` and
-  `/wallet` need a keeper with a router and action ABI plus a host
-  `wallet_fn`, so they stay a host-mounted route.
+  `/authorization/self` itself; the permit grant lane's `/grants`,
+  `/wallet`, and `/orders/requote` need keeper/host wiring (`wallet_fn`,
+  `requote_fn`), so they stay host-mounted routes.
 
 - **Keeper key provisioned.** The keeper signs with its OWN key
   (`SPEND_KEEPER_PRIVATE_KEY` in the template) — **never** the app's

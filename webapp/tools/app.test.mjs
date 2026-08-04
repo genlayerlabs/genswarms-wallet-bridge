@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { MESSAGES, RETURN_DELAY_S, askWhichWallet, entryRef, paintStatus, renderAuthorizationScreen, renderBrief, scheduleReturn, setupAuthorization, setupSelfAuthorization, setupUserTx, showTermsPrompt } from "../app.mjs";
+import { MESSAGES, RETURN_DELAY_S, askWhichWallet, entryRef, paintStatus, renderAuthorizationScreen, renderBrief, scheduleReturn, setupAuthorization, setupSelfAuthorization, setupUserTx, showTermsPrompt, switchRefusalMessage, trySwitch } from "../app.mjs";
 
 const ACCOUNT = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 const TREASURY = "0x000000000000000000000000000000000000cccc";
@@ -960,4 +960,125 @@ test("authorization_self orders dispatch to the self-submit page flow", async ()
     src,
     /kind === "authorization_self"\) return setupSelfAuthorization\(deps, fetched\.order, orderRef, tg\)/,
   );
+});
+
+// ── "connect = switch" wiring (0.11.0) ───────────────────────────────────────
+
+const BOUND = "0x000000000000000000000000000000000000dEaD";
+
+function switchDeps(requoteResult, fetchResult) {
+  const calls = { requote: [], fetch: [] };
+  return {
+    calls,
+    requoteFn: async (_deps, ref, account) => {
+      calls.requote.push({ ref, account });
+      return requoteResult;
+    },
+    fetchFn: async (_deps, ref) => {
+      calls.fetch.push(ref);
+      return fetchResult;
+    },
+  };
+}
+
+test("trySwitch swaps ref + token and adopts the re-fetched order", async () => {
+  const newOrder = { order_ref: "oref-2", kind: "user_tx", expected_owner: ACCOUNT, switchable: true };
+  const { calls, requoteFn, fetchFn } = switchDeps(
+    { ok: true, orderRef: "oref-2", token: "tok-2" },
+    { ok: true, order: newOrder }
+  );
+  const deps = { token: "tok-1" };
+  const ctx = { ref: "oref-1", order: { expected_owner: BOUND, switchable: true } };
+
+  assert.deepEqual(await trySwitch(deps, ctx, ACCOUNT, fetchFn, requoteFn), { ok: true, order: newOrder });
+  assert.equal(deps.token, "tok-2");
+  assert.equal(ctx.ref, "oref-2");
+  assert.equal(ctx.order, newOrder);
+  assert.deepEqual(calls.requote, [{ ref: "oref-1", account: ACCOUNT }]);
+  // the re-fetch reads the NEW ref, never the retired one
+  assert.deepEqual(calls.fetch, ["oref-2"]);
+});
+
+test("trySwitch never asks the server about a non-switchable order or a missing account", async () => {
+  const { calls, requoteFn, fetchFn } = switchDeps({ ok: true, orderRef: "x", token: "y" }, { ok: true, order: {} });
+
+  for (const [ctx, account] of [
+    [{ ref: "r", order: { expected_owner: BOUND } }, ACCOUNT],
+    [{ ref: "r", order: { expected_owner: BOUND, switchable: "true" } }, ACCOUNT],
+    [{ ref: "r", order: null }, ACCOUNT],
+    [{ ref: "r", order: { switchable: true } }, undefined],
+  ]) {
+    assert.deepEqual(await trySwitch({}, ctx, account, fetchFn, requoteFn), { ok: false, reason: "wrong_wallet" });
+  }
+
+  assert.deepEqual(calls.requote, []);
+  assert.deepEqual(calls.fetch, []);
+});
+
+test("a refused requote leaves the session credentials untouched", async () => {
+  const { calls, requoteFn, fetchFn } = switchDeps({ ok: false, reason: "market_bound" }, { ok: true, order: {} });
+  const deps = { token: "tok-1" };
+  const ctx = { ref: "oref-1", order: { expected_owner: BOUND, switchable: true } };
+
+  assert.deepEqual(await trySwitch(deps, ctx, ACCOUNT, fetchFn, requoteFn), { ok: false, reason: "market_bound" });
+  assert.equal(deps.token, "tok-1");
+  assert.equal(ctx.ref, "oref-1");
+  assert.deepEqual(calls.fetch, []);
+});
+
+test("a failed re-fetch after a successful requote is a typed failure, not a stale order", async () => {
+  const { requoteFn, fetchFn } = switchDeps(
+    { ok: true, orderRef: "oref-2", token: "tok-2" },
+    { ok: false, reason: "order_not_found" }
+  );
+  const deps = { token: "tok-1" };
+  const old = { expected_owner: BOUND, switchable: true };
+  const ctx = { ref: "oref-1", order: old };
+
+  assert.deepEqual(await trySwitch(deps, ctx, ACCOUNT, fetchFn, requoteFn), { ok: false, reason: "order_not_found" });
+  // the old order is gone server-side, so the swap stands; the caller blocks
+  assert.equal(ctx.order, old);
+  assert.equal(ctx.ref, "oref-2");
+});
+
+test("a successful switch re-renders the summary — the replacement can be a different action", () => {
+  const approveOrder = { order_ref: "oref-2", kind: "user_tx", display: { summary_lines: ["Approve USDC once"] } };
+  const { requoteFn, fetchFn } = switchDeps(
+    { ok: true, orderRef: "oref-2", token: "tok-2" },
+    { ok: true, order: approveOrder }
+  );
+
+  const rendered = [];
+  const ctx = {
+    ref: "oref-1",
+    order: { expected_owner: BOUND, switchable: true },
+    render: (o) => rendered.push(o),
+  };
+
+  return trySwitch({ token: "tok-1" }, ctx, ACCOUNT, fetchFn, requoteFn).then((res) => {
+    assert.equal(res.ok, true);
+    // Rendered with the REPLACEMENT, so the page cannot say "Commit" while the
+    // wallet is about to sign an approval.
+    assert.deepEqual(rendered, [approveOrder]);
+  });
+});
+
+test("a refused switch never re-renders — the page keeps describing the live order", async () => {
+  const { requoteFn, fetchFn } = switchDeps({ ok: false, reason: "market_bound" }, { ok: true, order: {} });
+  const rendered = [];
+  const ctx = { ref: "oref-1", order: { expected_owner: BOUND, switchable: true }, render: (o) => rendered.push(o) };
+
+  await trySwitch({ token: "tok-1" }, ctx, ACCOUNT, fetchFn, requoteFn);
+  assert.deepEqual(rendered, []);
+});
+
+test("switch refusals name the wallet the order stays bound to", () => {
+  assert.equal(
+    switchRefusalMessage("market_bound", BOUND),
+    "This market is bound to your other wallet — connect 0x0000…dEaD to continue."
+  );
+  assert.equal(switchRefusalMessage("wallet_in_use", BOUND), "That wallet is already linked to another account.");
+  assert.equal(switchRefusalMessage("expired", BOUND), MESSAGES.expired);
+  // an unnamed reason falls back to the pre-0.7.0 wrong-wallet instruction
+  assert.match(switchRefusalMessage("wrong_wallet", BOUND), /^Wrong wallet connected\. Switch to 0x0000…dEaD/);
 });

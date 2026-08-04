@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { acceptTerms, addChainParams, configDrift, fetchOrder, ownerMismatch, preflightFunds, runBindFlow, runPermitFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "../lib/flow.mjs";
+import { acceptTerms, addChainParams, configDrift, fetchOrder, ownerMismatch, preflightFunds, requoteOrder, runBindFlow, runPermitFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "../lib/flow.mjs";
 import { buildGrantEnvelope } from "../lib/permit.mjs";
 import { buildTermsEnvelope, buildTermsTypedData } from "../lib/terms.mjs";
 
@@ -557,7 +557,7 @@ test("owner-bound permit order + wrong connected wallet → wrong_wallet, nothin
   });
 
   const result = await runPermitFlow({ provider, fetchFn, config: CONFIG, initData: "x" }, "oref-1");
-  assert.deepEqual(result, { ok: false, reason: "wrong_wallet", expected: bound });
+  assert.deepEqual(result, { ok: false, reason: "wrong_wallet", expected: bound, account: ACCOUNT });
   assert.ok(!provider.calls.some((c) => c.method === "eth_signTypedData_v4"));
   assert.equal(fetchFn.posts.filter((p) => p.url.endsWith("/grants")).length, 0);
 });
@@ -587,7 +587,7 @@ test("owner-bound user_tx order + wrong connected wallet → wrong_wallet, nothi
   });
 
   const res = await runUserTxFlow({ provider, fetchFn, config: CONFIG, initData: "", token: "t" }, "r1");
-  assert.deepEqual(res, { ok: false, reason: "wrong_wallet", expected: bound });
+  assert.deepEqual(res, { ok: false, reason: "wrong_wallet", expected: bound, account: ACCOUNT });
   assert.equal(sendCalls, 0);
   assert.equal(fetchFn.posts.filter((p) => p.url.endsWith("/orders/submitted")).length, 0);
 });
@@ -640,6 +640,22 @@ test("runBindFlow: stale build 409 → version_mismatch; 410 → expired", async
   assert.deepEqual(
     await runBindFlow({ provider, fetchFn: gone, config: CONFIG, initData: "", token: "t" }, "b1"),
     { ok: false, reason: "expired" }
+  );
+
+  // /wallet answers 409 for TWO things now. Collapsing both into "reload the
+  // page" would send a user whose wallet belongs to another account round a
+  // loop that can never succeed.
+  const taken = mockFetch({ orders: bindOrders, wallet: () => ({ status: 409, json: { error: "wallet_in_use" } }) });
+  assert.deepEqual(
+    await runBindFlow({ provider, fetchFn: taken, config: CONFIG, initData: "", token: "t" }, "b1"),
+    { ok: false, reason: "wallet_in_use" }
+  );
+
+  // An unreadable 409 body stays the stale-build reading (fail-closed default).
+  const broken = mockFetch({ orders: bindOrders, wallet: () => ({ status: 409, json: null }) });
+  assert.deepEqual(
+    await runBindFlow({ provider, fetchFn: broken, config: CONFIG, initData: "", token: "t" }, "b1"),
+    { ok: false, reason: "version_mismatch" }
   );
 });
 
@@ -871,7 +887,7 @@ test("required terms do not outrank wrong-chain or wrong-wallet failures", async
   });
   assert.deepEqual(
     await runPermitFlow({ provider: wrongWalletProvider, fetchFn: wrongWalletFetch, config: CONFIG, initData: "x" }, "oref-1"),
-    { ok: false, reason: "wrong_wallet", expected: bound }
+    { ok: false, reason: "wrong_wallet", expected: bound, account: ACCOUNT }
   );
 });
 
@@ -1331,4 +1347,96 @@ test("addChainParams: chain id derives from the top-level pin; non-https URLs ar
 
   const noExplorer = addChainParams({ ...CONFIG, chain: { name: "X", rpcUrls: ["https://ok"], explorerUrl: "http://nope" } });
   assert.equal(noExplorer.blockExplorerUrls, undefined);
+});
+
+// ── requoteOrder — "connect = switch" (0.7.0) ───────────────────────────────
+
+function requoteFetch(route) {
+  const posts = [];
+  const fn = async (url, opts) => {
+    posts.push({ url, body: JSON.parse(opts.body) });
+    const { status, json, throws } = route();
+    if (throws) throw new Error("offline");
+    return { status, json: async () => json };
+  };
+  fn.posts = posts;
+  return fn;
+}
+
+test("requoteOrder POSTs the auth envelope + account and returns the NEW ref and token", async () => {
+  const fetchFn = requoteFetch(() => ({ status: 200, json: { order_ref: "oref-2", token: "tok-2" } }));
+  const deps = { fetchFn, config: CONFIG, initData: "", token: "tok-1" };
+
+  assert.deepEqual(await requoteOrder(deps, "oref-1", ACCOUNT), {
+    ok: true,
+    orderRef: "oref-2",
+    token: "tok-2",
+  });
+
+  assert.deepEqual(fetchFn.posts, [
+    {
+      url: `${CONFIG.intakeUrl}/orders/requote`,
+      // the OLD token authenticates the OLD ref — the new token is the answer
+      body: { v: CONFIG.version, token: "tok-1", order_ref: "oref-1", account: ACCOUNT },
+    },
+  ]);
+});
+
+test("requoteOrder surfaces server refusals as typed reasons and never falls back to the old order", async () => {
+  const cases = [
+    [409, { error: "wallet_in_use" }, "wallet_in_use"],
+    [409, { error: "market_bound" }, "market_bound"],
+    [410, { error: "expired" }, "expired"],
+    [422, { error: "not_switchable" }, "not_switchable"],
+    [503, { error: "unavailable" }, "unavailable"],
+    [401, {}, "unauthorized"],
+    [451, {}, "geo_blocked"],
+    [500, {}, "http_500"],
+  ];
+
+  for (const [status, json, reason] of cases) {
+    const deps = { fetchFn: requoteFetch(() => ({ status, json })), config: CONFIG, initData: "x" };
+    assert.deepEqual(await requoteOrder(deps, "oref-1", ACCOUNT), { ok: false, reason });
+  }
+
+  const offline = { fetchFn: requoteFetch(() => ({ throws: true })), config: CONFIG, initData: "x" };
+  assert.deepEqual(await requoteOrder(offline, "oref-1", ACCOUNT), { ok: false, reason: "request_failed" });
+});
+
+test("requoteOrder rejects a 200 that does not carry BOTH a ref and a token", async () => {
+  const bodies = [
+    {},
+    { order_ref: "oref-2" },
+    { token: "tok-2" },
+    { order_ref: "", token: "tok-2" },
+    { order_ref: "oref-2", token: "" },
+    { order_ref: 7, token: "tok-2" },
+    { order_ref: "oref-2", token: { toString: () => "tok-2" } },
+    null,
+  ];
+
+  for (const json of bodies) {
+    const deps = { fetchFn: requoteFetch(() => ({ status: 200, json })), config: CONFIG, initData: "x" };
+    assert.deepEqual(await requoteOrder(deps, "oref-1", ACCOUNT), { ok: false, reason: "invalid_response" });
+  }
+});
+
+test("requoteOrder reads own properties only — a prototype-polluted body is invalid, not credentials", async () => {
+  // Object.create leaves order_ref/token reachable ONLY through the prototype:
+  // a plain `body.order_ref` read would happily adopt a ref the server never
+  // sent and re-fetch under it.
+  const inherited = Object.create({ order_ref: "attacker-ref", token: "attacker-token" });
+  const deps = { fetchFn: requoteFetch(() => ({ status: 200, json: inherited })), config: CONFIG, initData: "x" };
+  assert.deepEqual(await requoteOrder(deps, "oref-1", ACCOUNT), { ok: false, reason: "invalid_response" });
+
+  // Same for the error path: an inherited `error` must not name the refusal.
+  const inheritedErr = Object.create({ error: "market_bound" });
+  const errDeps = { fetchFn: requoteFetch(() => ({ status: 409, json: inheritedErr })), config: CONFIG, initData: "x" };
+  assert.deepEqual(await requoteOrder(errDeps, "oref-1", ACCOUNT), { ok: false, reason: "http_409" });
+});
+
+test("requoteOrder treats an unparseable body as a refusal, never a success", async () => {
+  const fn = async () => ({ status: 200, json: async () => { throw new Error("not json"); } });
+  const deps = { fetchFn: fn, config: CONFIG, initData: "x" };
+  assert.deepEqual(await requoteOrder(deps, "oref-1", ACCOUNT), { ok: false, reason: "invalid_response" });
 });

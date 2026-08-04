@@ -285,6 +285,14 @@ defmodule DelegatedSpend.Keeper do
         # addresses derived from a wallet-on-file NEED this — set it to
         # that wallet).
         expected_owner: Map.get(req, :expected_owner),
+        # Opt-in "connect = switch": this order may be RE-QUOTED for a
+        # different connected wallet (`Intake.handle_requote/3`), which mints a
+        # replacement order bound to that wallet. Absent ⇒ false ⇒ the old hard
+        # wrong-wallet refusal. An order whose destination or authority DERIVES
+        # from the owner (CREATE2-salted deploys, ownership transfer/accept, a
+        # sell against a wallet-bound position) must never set it — switching
+        # would point the transaction at a different contract or revert.
+        switchable: Map.get(req, :switchable, false) == true,
         expires_at: now_s() + order_ttl(req, state)
       }
 
@@ -1159,6 +1167,11 @@ defmodule DelegatedSpend.Keeper do
         nil -> base
         owner -> Map.put(base, :expected_owner, owner)
       end
+
+    # Exposed only when true, so every existing view keeps its exact sanitized
+    # shape and a dapp reading a missing key gets the fail-closed answer.
+    base =
+      if Map.get(order, :switchable) == true, do: Map.put(base, :switchable, true), else: base
 
     if base.kind == "user_tx", do: Map.put(base, :tx, order.tx), else: base
   end

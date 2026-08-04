@@ -478,6 +478,30 @@ defmodule DelegatedSpend.KeeperTest do
              [:amount, :chain_id, :display, :expected_owner, :expires_at, :kind, :order_ref]
 
     assert bview.expected_owner == bound
+
+    # "connect = switch" (0.7.0): the switchable flag is opt-in and appears in
+    # the view ONLY when set, so an order that never asked for it keeps its
+    # exact sanitized shape and a dapp reading a missing key fails closed.
+    refute Map.has_key?(bview, :switchable)
+
+    for absent <- [%{}, %{switchable: false}, %{switchable: "true"}, %{switchable: nil}] do
+      {:ok, %{order_ref: ref}} =
+        Keeper.register_order(keeper, "market_phase", Map.merge(order_req(), absent))
+
+      assert {:ok, view} = Keeper.fetch_order(keeper, ref, "u-a")
+      refute Map.has_key?(view, :switchable)
+    end
+
+    {:ok, %{order_ref: sref}} =
+      Keeper.register_order(
+        keeper,
+        "market_phase",
+        order_req() |> Map.put(:expected_owner, bound) |> Map.put(:switchable, true)
+      )
+
+    assert {:ok, sview} = Keeper.fetch_order(keeper, sref, "u-a")
+    assert sview.switchable == true
+    assert sview.expected_owner == bound
   end
 
   test "happy path: submit → sweep → mined result + spend recorded" do
