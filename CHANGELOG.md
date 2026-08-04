@@ -9,6 +9,14 @@ The package version is stamped in `VERSION`, `vectors/VERSION`, `mix.exs`, and
 package releases can ship zero contract bytecode changes. `scripts/check-version.sh`
 (run in CI) fails on divergence.
 
+## [0.10.0] - 2026-08-04
+
+### Added
+
+- The `user_tx` wallet flow now checks token and native gas balances before
+  opening the transaction sheet, shows typed shortfall warnings with Re-check
+  and Sign anyway actions, and fails soft when wallet RPC reads are unavailable.
+
 ## [0.9.0] - 2026-07-28
 
 ### Added
