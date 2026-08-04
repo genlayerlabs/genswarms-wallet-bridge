@@ -573,7 +573,43 @@ export async function runSelfAuthorizationFlow(deps, orderRef, fetched = null) {
   return { ok: true, tx, order: fetched.order };
 }
 
-export async function runUserTxFlow(deps, orderRef, fetched = null) {
+const GAS_DUST_WEI = 10_000_000_000_000n;
+
+function rpcQuantity(value) {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]+$/.test(value))
+    throw new Error("bad quantity");
+  return BigInt(value);
+}
+
+export async function preflightFunds({ provider, config }, { order, account }) {
+  // ponytail: JSON numbers above 2^53 are inexact; skip this warning until
+  // order amounts ship as decimal strings instead of changing the schema here.
+  const needed = Number.isSafeInteger(order.amount) ? BigInt(order.amount) : 0n;
+  if (needed > 0n) {
+    try {
+      const data = "0x70a08231" + account.replace(/^0x/, "").toLowerCase().padStart(64, "0");
+      const balance = rpcQuantity(await provider.request({
+        method: "eth_call",
+        params: [{ to: config.token, data }, "latest"],
+      }));
+      if (balance < needed)
+        return { ok: false, reason: "insufficient_token", balance, needed };
+    } catch (_) {}
+  }
+
+  try {
+    const balance = rpcQuantity(await provider.request({
+      method: "eth_getBalance",
+      params: [account, "latest"],
+    }));
+    if (balance < GAS_DUST_WEI)
+      return { ok: false, reason: "insufficient_gas", balance };
+  } catch (_) {}
+
+  return { ok: true };
+}
+
+export async function runUserTxFlow(deps, orderRef, fetched = null, { skipPreflight = false } = {}) {
   // Fetch-before-connect, same as runPermitFlow: config drift must block
   // before the wallet is ever touched.
   fetched ??= await fetchOrder(deps, orderRef);
@@ -592,6 +628,11 @@ export async function runUserTxFlow(deps, orderRef, fetched = null) {
     return { ok: false, reason: "wrong_wallet", expected: fetched.order.expected_owner };
   if (termsRequired(fetched.order))
     return { ok: false, reason: "terms_required", terms: fetched.order.terms, account: conn.account };
+
+  if (!skipPreflight) {
+    const funds = await preflightFunds(deps, { order: fetched.order, account: conn.account });
+    if (!funds.ok) return { ...funds, account: conn.account, order: fetched.order };
+  }
 
   let tx;
   try {

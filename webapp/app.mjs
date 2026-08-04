@@ -3,9 +3,9 @@
 // the injected EIP-1193 provider, and the DOM elements.
 
 import { applyProductName, productName } from "./lib/brand.mjs";
-import { authorizationBrief, briefLines } from "./lib/signing-brief.mjs";
+import { authorizationBrief, briefLines, formatUnits } from "./lib/signing-brief.mjs";
 import { discoverProviders, needsChoice } from "./lib/providers.mjs";
-import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, runAuthorizationFlow, runBindFlow, runPermitFlow, runSelfAuthorizationFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
+import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, preflightFunds, runAuthorizationFlow, runBindFlow, runPermitFlow, runSelfAuthorizationFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -519,30 +519,77 @@ export async function setupSelfAuthorization(deps, order, orderRef, tg, get = $)
   get("pay").onclick = () => run();
 }
 
-async function setupUserTx(deps, order, orderRef, tg) {
-  $("summary").textContent = summaryLines(order);
-  $("pay").textContent = "Review & sign in wallet";
-  if (!(await enforceOwnerAtLoad(deps, order))) return;
-  $("pay").disabled = false;
-  const run = async (fetched) => {
-    $("pay").disabled = true;
-    paintStatus($("status"), "Opening wallet…");
-    const result = await runUserTxFlow(deps, orderRef, fetched);
+export async function setupUserTx(deps, order, orderRef, tg, get = $) {
+  const pay = get("pay");
+  const actions = get("funds-actions");
+  const recheck = get("funds-recheck");
+  const signAnyway = get("funds-sign-anyway");
+
+  get("summary").textContent = summaryLines(order);
+  pay.textContent = "Review & sign in wallet";
+  actions.hidden = true;
+  if (!(await enforceOwnerAtLoad(deps, order, get))) return;
+  pay.disabled = false;
+
+  function showFundsWarning(result) {
+    const decimals = Number.isInteger(deps.config.tokenDecimals) ? deps.config.tokenDecimals : 6;
+    const token = deps.config.tokenName || "tokens";
+    const message = result.reason === "insufficient_token"
+      ? `This wallet holds ${formatUnits(result.balance, decimals, decimals)} ${token} — this order needs ${formatUnits(result.needed, decimals, decimals)} ${token}. Top it up, then re-check.`
+      : "This wallet has too little ETH for gas — the transaction is likely to fail.";
+
+    pay.hidden = true;
+    actions.hidden = false;
+    recheck.disabled = false;
+    signAnyway.disabled = false;
+    paintStatus(get("status"), message, "warning");
+
+    recheck.onclick = async () => {
+      recheck.disabled = true;
+      signAnyway.disabled = true;
+      paintStatus(get("status"), "Checking balances…");
+      const checked = await preflightFunds(deps, {
+        order: result.order,
+        account: result.account,
+      });
+      if (!checked.ok)
+        return showFundsWarning({ ...checked, order: result.order, account: result.account });
+
+      actions.hidden = true;
+      pay.hidden = false;
+      pay.disabled = false;
+      paintStatus(get("status"), "You can review and sign when ready; balances will be checked again first.");
+    };
+    signAnyway.onclick = () => run(undefined, { skipPreflight: true });
+  }
+
+  const run = async (fetched, options = {}) => {
+    pay.disabled = true;
+    actions.hidden = true;
+    paintStatus(get("status"), "Opening wallet…");
+    const result = await runUserTxFlow(deps, orderRef, fetched, options);
     if (result.ok) {
-      paintStatus($("status"), "Transaction sent ✓ — you can return to the chat.", "success");
-      scheduleReturn(tg);
+      paintStatus(get("status"), "Transaction sent ✓ — you can return to the chat.", "success");
+      scheduleReturn(tg, get);
+    } else if (result.reason === "insufficient_token" || result.reason === "insufficient_gas") {
+      showFundsWarning(result);
     } else if (result.reason === "wrong_wallet") {
-      blockWrongWallet(result.expected);
+      blockWrongWallet(result.expected, get);
     } else if (result.reason === "terms_required") {
-      showTermsPrompt(deps, { account: result.account, terms: result.terms, ref: orderRef, retry: run });
+      showTermsPrompt(
+        deps,
+        { account: result.account, terms: result.terms, ref: orderRef, retry: run },
+        get,
+      );
     } else if (result.reason === "geo_blocked") {
-      enterGeoDeadState($("status"));
+      enterGeoDeadState(get("status"), get);
     } else {
-      paintStatus($("status"), MESSAGES[result.reason] || `Transaction failed (${result.reason}).`, "error");
-      $("pay").disabled = false;
+      paintStatus(get("status"), MESSAGES[result.reason] || `Transaction failed (${result.reason}).`, "error");
+      pay.hidden = false;
+      pay.disabled = false;
     }
   };
-  $("pay").onclick = () => run();
+  pay.onclick = () => run();
 }
 
 function setupBind(deps, order, bindRef, tg) {
