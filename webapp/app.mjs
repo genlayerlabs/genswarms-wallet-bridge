@@ -5,7 +5,7 @@
 import { applyProductName, productName } from "./lib/brand.mjs";
 import { authorizationBrief, briefLines, formatUnits } from "./lib/signing-brief.mjs";
 import { discoverProviders, needsChoice } from "./lib/providers.mjs";
-import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, preflightFunds, runAuthorizationFlow, runBindFlow, runPermitFlow, runSelfAuthorizationFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
+import { acceptTerms, configDrift, connectWallet, fetchOrder, ownerMismatch, preflightFunds, requoteOrder, runAuthorizationFlow, runBindFlow, runPermitFlow, runSelfAuthorizationFlow, runUserTxFlow, shortAddress, termsRequired, walletDappLink, wrongWalletMessage } from "./lib/flow.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -46,7 +46,17 @@ export const MESSAGES = {
     "Your wallet has an active delegation/contract code; EOA-style signing will be rejected by USDC — use the deposit option or remove the delegation.",
   code_check_failed:
     "We couldn't verify whether this wallet can use EOA-style signing. Try again, or use the deposit option.",
+  wallet_in_use: "That wallet is already linked to another account.",
 };
+
+// Switch refusals name the wallet the order stays bound to, so "connect a
+// different wallet" is an instruction the user can actually follow.
+export function switchRefusalMessage(reason, expected) {
+  if (reason === "market_bound")
+    return `This market is bound to your other wallet — connect ${shortAddress(expected)} to continue.`;
+  if (reason === "wallet_in_use") return MESSAGES.wallet_in_use;
+  return MESSAGES[reason] || wrongWalletMessage(expected);
+}
 
 // How long a finished payment stays on screen before the page returns the
 // user to the chat. Long enough to READ the confirmation — the previous 1.5s
@@ -278,46 +288,93 @@ async function main() {
 // `get` defaults to the real DOM accessor (M9: threaded through so lanes that
 // pass their own `get` — e.g. setupAuthorization's fake-DOM tests — can reach
 // this branch too; production is unaffected since every existing caller keeps
-// the default).
-function blockWrongWallet(expected, get = $) {
+// the default). `reason` (0.11.0) selects the switch-refusal copy when the
+// wallet asked to switch and the server said no.
+function blockWrongWallet(expected, reason, get = $) {
   get("pay").hidden = true;
-  paintStatus(get("status"), wrongWalletMessage(expected), "error");
+  paintStatus(get("status"), reason ? switchRefusalMessage(reason, expected) : wrongWalletMessage(expected), "error");
 }
 
-async function enforceOwnerAtLoad(deps, order, get = $) {
-  if (!order.expected_owner) return true;
+/**
+ * "Connect = switch" (0.11.0): a switchable order is re-minted server-side for
+ * whatever wallet is connected, so the user never has to go find the wallet the
+ * order happens to name. Every rule — wallet uniqueness, whether this market
+ * already credited them under another wallet, the phase window — is decided by
+ * the server; the dapp only swaps to the ref+token it is handed and re-reads the
+ * order. `ctx` is the mutable {ref, order} the surrounding pay path reads, so
+ * the swap is visible to the retry without rebuilding the page.
+ *
+ * A non-switchable order, or any refusal, keeps the old hard block.
+ */
+export async function trySwitch(deps, ctx, account, fetchFn = fetchOrder, requoteFn = requoteOrder) {
+  if (!ctx.order || ctx.order.switchable !== true || !account)
+    return { ok: false, reason: "wrong_wallet" };
+
+  const requoted = await requoteFn(deps, ctx.ref, account);
+  if (!requoted.ok) return requoted;
+
+  // The old order is gone server-side the moment the replacement is minted, so
+  // there is nothing to roll back to: adopt the new credentials, then re-read.
+  deps.token = requoted.token;
+  ctx.ref = requoted.orderRef;
+  const fetched = await fetchFn(deps, ctx.ref);
+  if (!fetched.ok) return fetched;
+  ctx.order = fetched.order;
+  // The replacement can be a DIFFERENT action than the one on screen — a
+  // wallet that has not approved yet gets the approve step back where the old
+  // order was a bet. Re-render from ctx here so every switch path is covered
+  // by construction, instead of remembering to repaint at each call site.
+  if (typeof ctx.render === "function") ctx.render(fetched.order);
+  return { ok: true, order: fetched.order };
+}
+
+async function enforceOwnerAtLoad(deps, ctx, get = $) {
+  if (!ctx.order.expected_owner) return true;
   if (typeof deps.provider.on === "function") {
-    deps.provider.on("accountsChanged", (accounts) => {
-      if (ownerMismatch(order, accounts && accounts[0])) blockWrongWallet(order.expected_owner, get);
+    deps.provider.on("accountsChanged", async (accounts) => {
+      const account = accounts && accounts[0];
+      if (!ownerMismatch(ctx.order, account)) return;
+      const switched = await trySwitch(deps, ctx, account);
+      if (!switched.ok) blockWrongWallet(ctx.order.expected_owner, switched.reason, get);
     });
   }
   const conn = await connectWallet(deps).catch(() => ({ ok: false }));
-  if (conn.ok && ownerMismatch(order, conn.account)) {
-    blockWrongWallet(order.expected_owner, get);
+  if (conn.ok && ownerMismatch(ctx.order, conn.account)) {
+    const switched = await trySwitch(deps, ctx, conn.account);
+    if (switched.ok) return true;
+    blockWrongWallet(ctx.order.expected_owner, switched.reason, get);
     return false;
   }
   return true; // connect refusals stay non-fatal — the pay path re-checks
 }
 
 async function setupPermit(deps, order, orderRef, tg) {
-  const amount = (order.amount / 1_000_000).toFixed(2);
-  $("summary").textContent = `${deps.config.actionLabel}: ${amount} USDC (gasless — the operator pays network fees).`;
+  const render = (o) => {
+    const amount = (o.amount / 1_000_000).toFixed(2);
+    $("summary").textContent = `${deps.config.actionLabel}: ${amount} USDC (gasless — the operator pays network fees).`;
+  };
+  render(order);
   showManual(order);
-  if (!(await enforceOwnerAtLoad(deps, order))) return;
+  const ctx = { ref: orderRef, order, render };
+  if (!(await enforceOwnerAtLoad(deps, ctx))) return;
   $("pay").disabled = false;
 
-  const run = async (fetched) => {
+  const run = async (fetched, switched = false) => {
     $("pay").disabled = true;
     paintStatus($("status"), "Connecting wallet…");
-    const result = await runPermitFlow(deps, orderRef, fetched);
+    const result = await runPermitFlow(deps, ctx.ref, fetched);
 
     if (result.ok) {
       paintStatus($("status"), "Payment submitted ✓ — you can return to the chat.", "success");
       scheduleReturn(tg);
     } else if (result.reason === "wrong_wallet") {
-      blockWrongWallet(result.expected);
+      // One switch attempt per tap: a wallet that keeps changing under us must
+      // not spin the requote endpoint.
+      const s = switched ? { ok: false } : await trySwitch(deps, ctx, result.account);
+      if (s.ok) return run({ ok: true, order: s.order }, true);
+      blockWrongWallet(result.expected, s.reason);
     } else if (result.reason === "terms_required") {
-      showTermsPrompt(deps, { account: result.account, terms: result.terms, ref: orderRef, retry: run });
+      showTermsPrompt(deps, { account: result.account, terms: result.terms, ref: ctx.ref, retry: run });
     } else if (result.reason === "geo_blocked") {
       enterGeoDeadState($("status"));
     } else {
@@ -429,7 +486,9 @@ export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
   }
 
   renderAuthorizationScreen(deps, order, get);
-  if (!(await enforceOwnerAtLoad(deps, order, get))) return;
+  // The authorization lane is never switchable — wrap the order in a ctx so
+  // the shared owner gate keeps one shape; trySwitch no-ops without the flag.
+  if (!(await enforceOwnerAtLoad(deps, { ref: orderRef, order }, get))) return;
   get("pay").disabled = false;
 
   const run = async (fetched) => {
@@ -441,7 +500,7 @@ export async function setupAuthorization(deps, order, orderRef, tg, get = $) {
       paintStatus(get("status"), "Payment submitted ✓ — you can return to the chat.", "success");
       scheduleReturn(tg, get);
     } else if (result.reason === "wrong_wallet") {
-      blockWrongWallet(result.expected, get);
+      blockWrongWallet(result.expected, undefined, get);
     } else if (result.reason === "terms_required") {
       showTermsPrompt(
         deps,
@@ -474,7 +533,7 @@ export async function setupSelfAuthorization(deps, order, orderRef, tg, get = $)
   }
 
   renderAuthorizationScreen(deps, order, get);
-  if (!(await enforceOwnerAtLoad(deps, order, get))) return;
+  if (!(await enforceOwnerAtLoad(deps, { ref: orderRef, order }, get))) return;
   get("pay").disabled = false;
 
   const run = async (fetched) => {
@@ -492,7 +551,7 @@ export async function setupSelfAuthorization(deps, order, orderRef, tg, get = $)
       paintStatus(get("status"), "Transaction sent ✓ — you can return to the chat.", "success");
       scheduleReturn(tg, get);
     } else if (result.reason === "wrong_wallet") {
-      blockWrongWallet(result.expected, get);
+      blockWrongWallet(result.expected, undefined, get);
     } else if (result.reason === "terms_required") {
       showTermsPrompt(
         deps,
@@ -525,10 +584,11 @@ export async function setupUserTx(deps, order, orderRef, tg, get = $) {
   const recheck = get("funds-recheck");
   const signAnyway = get("funds-sign-anyway");
 
-  get("summary").textContent = summaryLines(order);
+  const ctx = { ref: orderRef, order, render: (o) => (get("summary").textContent = summaryLines(o)) };
+  ctx.render(order);
   pay.textContent = "Review & sign in wallet";
   actions.hidden = true;
-  if (!(await enforceOwnerAtLoad(deps, order, get))) return;
+  if (!(await enforceOwnerAtLoad(deps, ctx, get))) return;
   pay.disabled = false;
 
   function showFundsWarning(result) {
@@ -567,18 +627,22 @@ export async function setupUserTx(deps, order, orderRef, tg, get = $) {
     pay.disabled = true;
     actions.hidden = true;
     paintStatus(get("status"), "Opening wallet…");
-    const result = await runUserTxFlow(deps, orderRef, fetched, options);
+    const result = await runUserTxFlow(deps, ctx.ref, fetched, options);
     if (result.ok) {
       paintStatus(get("status"), "Transaction sent ✓ — you can return to the chat.", "success");
       scheduleReturn(tg, get);
     } else if (result.reason === "insufficient_token" || result.reason === "insufficient_gas") {
       showFundsWarning(result);
     } else if (result.reason === "wrong_wallet") {
-      blockWrongWallet(result.expected, get);
+      // One switch attempt per tap: a wallet that keeps changing under us must
+      // not spin the requote endpoint.
+      const s = options.switched ? { ok: false } : await trySwitch(deps, ctx, result.account);
+      if (s.ok) return run({ ok: true, order: s.order }, { switched: true });
+      blockWrongWallet(result.expected, s.reason, get);
     } else if (result.reason === "terms_required") {
       showTermsPrompt(
         deps,
-        { account: result.account, terms: result.terms, ref: orderRef, retry: run },
+        { account: result.account, terms: result.terms, ref: ctx.ref, retry: run },
         get,
       );
     } else if (result.reason === "geo_blocked") {

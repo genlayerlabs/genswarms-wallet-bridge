@@ -1,5 +1,5 @@
 {
-  "version": "0.10.0",
+  "version": "0.11.0",
   "account_state": "eoa",
   "domain": {
     "name": "genswarms-wallet-bridge/terms",
@@ -18,7 +18,7 @@
     "s": "0x78b1267e19ac04f22fb3237ef954b3ee99455a9938b030550371d731954ddd93"
   },
   "envelope": {
-    "v": "0.10.0",
+    "v": "0.11.0",
     "chain_id": 31337,
     "v_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
     "account": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",

@@ -161,7 +161,13 @@ defmodule DelegatedSpend.IntakeTest do
     test "blocks every handler before version pinning or authentication" do
       ctx = %{compliance: %{geo_block: ["CU"]}}
 
-      for handler <- [:handle_order, :handle_grant, :handle_wallet, :handle_submitted] do
+      for handler <- [
+            :handle_order,
+            :handle_grant,
+            :handle_wallet,
+            :handle_submitted,
+            :handle_requote
+          ] do
         assert {451, %{"error" => "geo_blocked"}} =
                  apply(Intake, handler, [%{"country" => "US"}, %{country: "CU"}, ctx])
       end
@@ -213,7 +219,13 @@ defmodule DelegatedSpend.IntakeTest do
     test "configured two-arity handlers deny because their metadata is empty" do
       ctx = %{compliance: %{geo_block: ["CU"]}}
 
-      for handler <- [:handle_order, :handle_grant, :handle_wallet, :handle_submitted] do
+      for handler <- [
+            :handle_order,
+            :handle_grant,
+            :handle_wallet,
+            :handle_submitted,
+            :handle_requote
+          ] do
         assert {451, %{"error" => "geo_blocked"}} = apply(Intake, handler, [%{}, ctx])
       end
     end
@@ -997,6 +1009,35 @@ defmodule DelegatedSpend.IntakeTest do
       reject_ctx =
         Map.put(ctx, :wallet_fn, fn _user_ref, _address, _bind_ref -> {:error, :nope} end)
 
+      # A wallet already linked to another account is its OWN refusal (409):
+      # there is nothing to retry with that wallet, so the dapp must not offer.
+      in_use_ctx =
+        Map.put(ctx, :wallet_fn, fn _user_ref, _address, _bind_ref ->
+          {:error, :wallet_in_use}
+        end)
+
+      {:ok, %{order_ref: in_use_ref}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 0,
+          action_args: [],
+          kind: "bind"
+        })
+
+      in_use_token =
+        DelegatedSpend.Intake.Token.mint("tsecret", in_use_ref, "ref-#{@user_id}", future())
+
+      assert {409, %{"error" => "wallet_in_use"}} =
+               Intake.handle_wallet(
+                 %{
+                   "bind_ref" => in_use_ref,
+                   "token" => in_use_token,
+                   "address" => "0x8ba1f109551bd432803012645ac136ddd64dba72",
+                   "v" => v
+                 },
+                 in_use_ctx
+               )
+
       assert {422, %{"error" => "bind rejected"}} =
                Intake.handle_wallet(
                  %{
@@ -1335,6 +1376,177 @@ defmodule DelegatedSpend.IntakeTest do
     assert Rate.allow?(pid, "u", 1, 120)
     refute Rate.allow?(pid, "u", 1, 121)
     assert Rate.allow?(pid, "u", 1, 180)
+  end
+
+  # ── /orders/requote — "connect = switch" (0.7.0) ──────────────────────────
+  describe "requote" do
+    setup do
+      %{ctx: ctx} = c = start_stack()
+      me = self()
+
+      ctx =
+        ctx
+        |> Map.put(:token_secret, "tsecret")
+        |> Map.put(:requote_fn, fn user_ref, order_ref, account ->
+          send(me, {:requoted, user_ref, order_ref, account})
+
+          case account do
+            "0x" <> <<"dd", _::binary>> -> {:error, :wallet_in_use}
+            "0x" <> <<"cc", _::binary>> -> {:error, :market_bound}
+            "0x" <> <<"ee", _::binary>> -> {:error, :expired}
+            "0x" <> <<"ff", _::binary>> -> {:error, :something_nobody_named}
+            _ -> {:ok, %{order_ref: "new-ref", token: "new-token"}}
+          end
+        end)
+
+      {:ok, Map.put(c, :ctx, ctx)}
+    end
+
+    defp switchable_order(ctx, opts \\ []) do
+      {:ok, %{order_ref: ref}} =
+        Keeper.register_order(ctx.keeper, "market_phase", %{
+          user_ref: "ref-#{@user_id}",
+          amount: 1_000_000,
+          action_args: [],
+          kind: "user_tx",
+          tx: %{to: "0x" <> String.duplicate("11", 20), data: "0xdeadbeef", value: 0},
+          expected_owner: "0x8ba1f109551bD432803012645Ac136ddd64DBA72",
+          switchable: Keyword.get(opts, :switchable, true)
+        })
+
+      {ref, DelegatedSpend.Intake.Token.mint("tsecret", ref, "ref-#{@user_id}", future())}
+    end
+
+    defp requote(ctx, ref, token, account),
+      do:
+        Intake.handle_requote(
+          %{
+            "order_ref" => ref,
+            "token" => token,
+            "account" => account,
+            "v" => ctx.pinned.version
+          },
+          ctx
+        )
+
+    defp addr(prefix), do: "0x" <> prefix <> String.duplicate("11", 19)
+
+    test "a switchable order re-quotes into a fresh ref + token", %{ctx: ctx} do
+      {ref, token} = switchable_order(ctx)
+      account = addr("ab")
+
+      assert {200, %{"order_ref" => "new-ref", "token" => "new-token"}} =
+               requote(ctx, ref, token, account)
+
+      user_ref = "ref-#{@user_id}"
+      # The account reaches requote_fn CHECKSUMMED, never as typed.
+      checksummed =
+        DelegatedSpend.Evm.Address.checksum(DelegatedSpend.Evm.Address.to_bytes(account))
+
+      assert_received {:requoted, ^user_ref, ^ref, ^checksummed}
+    end
+
+    # The order flag is the opt-in. Without it the wrong-wallet refusal stands,
+    # and requote_fn is never even consulted — a treasury deploy or a sell must
+    # not be re-pointed at another wallet by a client request.
+    test "a non-switchable order is refused without reaching requote_fn", %{ctx: ctx} do
+      {ref, token} = switchable_order(ctx, switchable: false)
+
+      assert {422, %{"error" => "not_switchable"}} = requote(ctx, ref, token, addr("ab"))
+      refute_received {:requoted, _, _, _}
+    end
+
+    test "unknown ref is 404, another user's token is 401, expired order is 410", %{ctx: ctx} do
+      {ref, token} = switchable_order(ctx)
+      v = ctx.pinned.version
+
+      unknown = String.duplicate("ab", 32)
+
+      unknown_token =
+        DelegatedSpend.Intake.Token.mint("tsecret", unknown, "ref-#{@user_id}", future())
+
+      assert {404, _} = requote(ctx, unknown, unknown_token, addr("ab"))
+
+      # A token minted for a DIFFERENT ref never authenticates this one.
+      assert {401, %{"error" => "unauthorized"}} = requote(ctx, ref, unknown_token, addr("ab"))
+
+      # Stale dapp build: the version pin rejects before any store read.
+      assert {409, %{"error" => "version mismatch"}} =
+               Intake.handle_requote(
+                 %{"order_ref" => ref, "token" => token, "account" => addr("ab"), "v" => "0.0.1"},
+                 ctx
+               )
+
+      %{ctx: short_ctx} = start_stack(100, 0)
+      short_ctx = Map.merge(short_ctx, Map.take(ctx, [:token_secret, :requote_fn]))
+      {short_ref, short_token} = switchable_order(short_ctx)
+      Process.sleep(1100)
+
+      assert {410, %{"error" => "expired"}} =
+               requote(short_ctx, short_ref, short_token, addr("ab"))
+
+      assert v == ctx.pinned.version
+      refute_received {:requoted, _, _, _}
+    end
+
+    test "a malformed or zero account never reaches requote_fn", %{ctx: ctx} do
+      {ref, token} = switchable_order(ctx)
+
+      for bad <- ["nonsense", 42, "0x" <> String.duplicate("00", 20), nil] do
+        assert {422, %{"field" => "address"}} = requote(ctx, ref, token, bad)
+      end
+
+      refute_received {:requoted, _, _, _}
+    end
+
+    test "consumer refusals surface as machine-readable reasons", %{ctx: ctx} do
+      for {prefix, expected} <- [
+            {"dd", {409, %{"error" => "wallet_in_use"}}},
+            {"cc", {409, %{"error" => "market_bound"}}},
+            {"ee", {410, %{"error" => "expired"}}},
+            # Anything the consumer did not name is an outage, never a success.
+            {"ff", {503, %{"error" => "unavailable"}}}
+          ] do
+        {ref, token} = switchable_order(ctx)
+        assert requote(ctx, ref, token, addr(prefix)) == expected
+      end
+    end
+
+    test "a crashing or nonsense requote_fn fails closed, and a missing one is 503", %{ctx: ctx} do
+      {ref, token} = switchable_order(ctx)
+
+      assert {503, %{"error" => "unavailable"}} =
+               requote(Map.delete(ctx, :requote_fn), ref, token, addr("ab"))
+
+      # Wrong arity is the same as absent — the route must not half-work.
+      assert {503, %{"error" => "unavailable"}} =
+               requote(Map.put(ctx, :requote_fn, fn _a, _b -> :ok end), ref, token, addr("ab"))
+
+      for bad <- [
+            fn _u, _o, _a -> raise("requote blew up") end,
+            fn _u, _o, _a -> exit(:down) end,
+            fn _u, _o, _a -> :ok end,
+            fn _u, _o, _a -> {:ok, %{order_ref: "r", token: ""}} end,
+            fn _u, _o, _a -> {:ok, %{order_ref: nil, token: "t"}} end
+          ] do
+        assert {503, %{"error" => "unavailable"}} =
+                 requote(Map.put(ctx, :requote_fn, bad), ref, token, addr("ab"))
+      end
+    end
+
+    # A refused switch must leave the ORIGINAL order payable — the user can
+    # still connect the wallet the order names.
+    test "a refused requote does not consume the original order", %{ctx: ctx} do
+      {ref, token} = switchable_order(ctx)
+
+      assert {409, %{"error" => "market_bound"}} = requote(ctx, ref, token, addr("cc"))
+
+      assert {200, %{"order_ref" => ^ref}} =
+               Intake.handle_order(
+                 %{"order_ref" => ref, "token" => token, "v" => ctx.pinned.version},
+                 ctx
+               )
+    end
   end
 
   test "expired order surfaces as the typed 422 failure contract on handle_grant" do

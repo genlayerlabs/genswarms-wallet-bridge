@@ -46,7 +46,8 @@ defmodule DelegatedSpend.Keeper.Store do
           optional(:kind) => String.t(),
           optional(:tx) => map | nil,
           optional(:display) => map,
-          optional(:expected_owner) => String.t() | nil
+          optional(:expected_owner) => String.t() | nil,
+          optional(:switchable) => boolean
         }
 
   @callback put_grant(ref :: term, grant_ref :: String.t(), user_ref, grant :: map) :: :ok

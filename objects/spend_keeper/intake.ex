@@ -17,6 +17,9 @@ defmodule DelegatedSpend.Intake do
   Callback authority:
     * `wallet_fn` is consumer-owned, request-critical wallet persistence.
     * `wallet_view_fn` is the consumer-owned wallet lookup.
+    * `requote_fn` is consumer-owned authority over wallet switching: it, not
+      this module, decides whether an order may be re-minted for another
+      wallet. Absent ⇒ `POST /orders/requote` is 503.
     * `submitted_fn` is an untrusted, best-effort transaction hint with no
       product-credit authority.
 
@@ -290,12 +293,86 @@ defmodule DelegatedSpend.Intake do
           record_event(ctx, user_ref, "wallet_bound", address, bind_ref, meta)
           {200, %{"status" => "bound", "address" => address}}
 
+        # A wallet belongs to at most one account. Distinct from a generic
+        # rejection: there is nothing to retry with THIS wallet, so the dapp
+        # must say so rather than invite another attempt.
+        {:error, :wallet_in_use} ->
+          {409, %{"error" => "wallet_in_use"}}
+
         _ ->
           {422, %{"error" => "bind rejected"}}
       end
     else
       {:error, status, body} -> {status, body}
     end
+  end
+
+  @doc """
+  POST /orders/requote — re-mint a switchable order for a DIFFERENT connected
+  wallet ("connect = switch").
+
+  Orders are immutable and single-consume, and the URL token's HMAC is bound to
+  the order ref, so a switch is a NEW order plus a NEW token — never an edit.
+  Every rule that decides whether the switch is allowed (wallet uniqueness,
+  whether the user is already committed under another wallet, the phase window)
+  lives behind `requote_fn` in the consuming app; this route only authenticates,
+  proves the order opted in, and passes a checksummed account through.
+
+  Retiring or reserving the old order is `requote_fn`'s job, not this route's:
+  only the consumer knows whether the replacement's state has been committed,
+  and consuming here would burn the order even when the consumer is absent.
+  """
+  def handle_requote(params, ctx) when is_map(params) do
+    warn_missing_meta(ctx, "handle_requote")
+    handle_requote(params, %{}, ctx)
+  end
+
+  def handle_requote(params, meta, ctx) when is_map(params) do
+    order_ref = to_string(params["order_ref"] || "")
+
+    with :ok <- geofence(meta, ctx),
+         :ok <- pin_version(params, ctx),
+         {:ok, user_ref} <- authenticate(params, ctx, order_ref),
+         :ok <- allow(ctx, user_ref),
+         :ok <- require_terms(ctx, user_ref),
+         # Absent requote_fn ⇒ the route behaves as if it does not exist.
+         {:ok, requote_fn} <- fetch_fn(ctx, :requote_fn, 3),
+         {:ok, account} <- checksum_address(params["account"]),
+         {:ok, order} <- fetch_kind(ctx, order_ref, user_ref, "user_tx"),
+         :ok <- switchable(order) do
+      case safe_requote(requote_fn, user_ref, order_ref, account) do
+        {:ok, %{order_ref: new_ref, token: new_token}}
+        when is_binary(new_ref) and new_ref != "" and is_binary(new_token) and new_token != "" ->
+          record_event(ctx, user_ref, "order_requoted", account, new_ref, meta)
+          {200, %{"order_ref" => new_ref, "token" => new_token}}
+
+        {:error, reason} ->
+          requote_error(reason)
+
+        _ ->
+          {503, %{"error" => "unavailable"}}
+      end
+    else
+      {:error, status, body} -> {status, body}
+    end
+  end
+
+  defp switchable(%{switchable: true}), do: :ok
+  defp switchable(_order), do: {:error, 422, %{"error" => "not_switchable"}}
+
+  # Machine-readable reasons; anything the consumer did not name is an outage,
+  # never a silent success.
+  defp requote_error(:wallet_in_use), do: {409, %{"error" => "wallet_in_use"}}
+  defp requote_error(:market_bound), do: {409, %{"error" => "market_bound"}}
+  defp requote_error(:expired), do: {410, %{"error" => "expired"}}
+  defp requote_error(_reason), do: {503, %{"error" => "unavailable"}}
+
+  defp safe_requote(fun, user_ref, order_ref, account) do
+    fun.(user_ref, order_ref, account)
+  rescue
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
   end
 
   @doc """

@@ -9,6 +9,41 @@ The package version is stamped in `VERSION`, `vectors/VERSION`, `mix.exs`, and
 package releases can ship zero contract bytecode changes. `scripts/check-version.sh`
 (run in CI) fails on divergence.
 
+## [0.11.0] - 2026-08-04
+
+Dynamic wallet switching ("connect = switch"). No Solidity bytes changed;
+`CONTRACT_VERSION` remains `0.2.0`.
+
+Before this release an owner-bound order could only be paid by the exact wallet
+it named — the dapp hid the pay button and told the user to go switch wallets in
+their own app. That is the wrong default for a chat product where people hold
+several wallets: the wallet in your hand should be able to pay.
+
+### Added
+
+- **`switchable: true` on a registered order** (`Keeper.register_order/3`),
+  surfaced in the order view only when set. Absent ⇒ false ⇒ exactly the old
+  hard refusal. Orders whose destination or authority DERIVES from the owner
+  (CREATE2-salted deploys, ownership transfer/accept, sells against a
+  wallet-bound position) must never set it.
+- **`POST /orders/requote`** (`Intake.handle_requote/3`): given a switchable
+  order and a connected account, the consumer-owned `requote_fn` mints a
+  replacement order bound to that account. Orders are immutable and
+  single-consume and the URL token is HMAC-bound to the ref, so the answer is a
+  NEW `order_ref` + NEW `token`, never an edit. Missing `requote_fn` ⇒ 503, so
+  a consumer that has not opted in behaves as if the route does not exist.
+  Refusals are machine-readable: `wallet_in_use` / `market_bound` (409),
+  `expired` (410), `not_switchable` (422), `unavailable` (503). Retiring or
+  reserving the old order is the consumer's call, not this route's.
+- **`requoteOrder(deps, orderRef, account)`** in `webapp/lib/flow.mjs`
+  (DOM-free), and `trySwitch` in `app.mjs` wiring it into all three wrong-wallet
+  branches (load time, `accountsChanged`, per-tap). One switch attempt per tap.
+- **`wallet_in_use` (409) on `POST /wallet`**: binding a wallet the consumer
+  says belongs to another account is now distinct from a generic bind
+  rejection — there is nothing to retry with that wallet. `runBindFlow` reads
+  the 409 BODY to tell it apart from the version pin's 409, so the dapp stops
+  telling that user to reload a page that can never succeed.
+
 ## [0.10.0] - 2026-08-04
 
 ### Added

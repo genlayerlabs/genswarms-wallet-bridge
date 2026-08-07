@@ -221,6 +221,52 @@ export async function fetchOrder(deps, orderRef) {
   return { ok: true, order: await res.json() };
 }
 
+/**
+ * Re-quote a switchable order for a DIFFERENT connected account
+ * ("connect = switch", 0.11.0). Orders are immutable and single-consume and the
+ * URL token is bound to the order ref, so the server answers with a NEW ref and
+ * a NEW token; the caller must swap BOTH before touching the order again.
+ *
+ * Every refusal is a typed reason (`market_bound`, `wallet_in_use`, `expired`,
+ * `not_switchable`, …) — falling back to the previous order would sign for a
+ * wallet the server just declined.
+ */
+export async function requoteOrder(deps, orderRef, account) {
+  let res;
+  try {
+    res = await deps.fetchFn(`${deps.config.intakeUrl}/orders/requote`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: authBody(deps, { order_ref: orderRef, account }),
+    });
+  } catch (_) {
+    return { ok: false, reason: "request_failed" };
+  }
+  if (res.status === 401) return { ok: false, reason: "unauthorized" };
+  if (res.status === 451) return { ok: false, reason: "geo_blocked" };
+
+  let body = {};
+  try {
+    body = (await res.json()) || {};
+  } catch (_) {}
+
+  if (res.status !== 200) return { ok: false, reason: ownString(body, "error") || `http_${res.status}` };
+
+  // Own-property reads only: a body like {"__proto__": {...}} must not reach
+  // through the prototype chain into a truthy ref/token and make the dapp
+  // re-fetch under credentials the server never issued.
+  const ref = ownString(body, "order_ref");
+  const token = ownString(body, "token");
+  if (!ref || !token) return { ok: false, reason: "invalid_response" };
+  return { ok: true, orderRef: ref, token };
+}
+
+function ownString(obj, key) {
+  if (!obj || !Object.prototype.hasOwnProperty.call(obj, key)) return null;
+  const value = obj[key];
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
 /** Read the token nonce for the owner straight from the chain (eth_call). */
 export async function fetchPermitNonce({ provider, config }, owner) {
   // nonces(address) selector 0x7ecebe00
@@ -303,7 +349,7 @@ export async function runPermitFlow(deps, orderRef, fetched = null) {
   conn = await ensureChain(deps, conn);
   if (!conn.ok) return conn;
   if (ownerMismatch(fetched.order, conn.account))
-    return { ok: false, reason: "wrong_wallet", expected: fetched.order.expected_owner };
+    return { ok: false, reason: "wrong_wallet", expected: fetched.order.expected_owner, account: conn.account };
   if (termsRequired(fetched.order))
     return { ok: false, reason: "terms_required", terms: fetched.order.terms, account: conn.account };
 
@@ -625,7 +671,7 @@ export async function runUserTxFlow(deps, orderRef, fetched = null, { skipPrefli
   // different account debits that account while payouts go to the bound
   // wallet (and sells revert on-chain). Refuse before the wallet ever opens.
   if (ownerMismatch(fetched.order, conn.account))
-    return { ok: false, reason: "wrong_wallet", expected: fetched.order.expected_owner };
+    return { ok: false, reason: "wrong_wallet", expected: fetched.order.expected_owner, account: conn.account };
   if (termsRequired(fetched.order))
     return { ok: false, reason: "terms_required", terms: fetched.order.terms, account: conn.account };
 
@@ -685,10 +731,20 @@ export async function runBindFlow(deps, bindRef, fetched = null) {
     body: authBody(deps, { bind_ref: bindRef, address: conn.account }),
   });
   if (res.status === 401) return { ok: false, reason: "unauthorized" };
-  if (res.status === 409) return { ok: false, reason: "version_mismatch" };
   if (res.status === 410) return { ok: false, reason: "expired" };
   if (res.status === 451) return { ok: false, reason: "geo_blocked" };
-  const body = await res.json();
+
+  let body = {};
+  try {
+    body = (await res.json()) || {};
+  } catch (_) {}
+
+  // /wallet now answers 409 for TWO different things: a stale dapp build
+  // (version pin) and a wallet already linked to another account. Reading the
+  // body decides which — collapsing both into "reload the page" would send the
+  // user round a loop that can never succeed.
+  if (res.status === 409)
+    return { ok: false, reason: body.error === "wallet_in_use" ? "wallet_in_use" : "version_mismatch" };
   if (res.status === 428)
     return { ok: false, reason: "terms_required", terms: body.terms, account: conn.account };
   if (res.status !== 200) return { ok: false, reason: body.error || `http_${res.status}` };
