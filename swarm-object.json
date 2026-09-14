@@ -10,6 +10,8 @@
     "objects/spend_keeper/evm/artifacts.ex",
     "objects/spend_keeper/store.ex",
     "objects/spend_keeper/signer.ex",
+    "objects/spend_keeper/gas_policy.ex",
+    "objects/spend_keeper/eip3009.ex",
     "objects/spend_keeper/permit_lane.ex",
     "objects/spend_keeper/keeper.ex",
     "objects/spend_keeper/compliance/store.ex",
